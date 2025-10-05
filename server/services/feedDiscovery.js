@@ -1,0 +1,571 @@
+const axios = require('axios');
+const cheerio = require('cheerio');
+
+class FeedDiscovery {
+  constructor() {
+    // Comprehensive list of common RSS feed paths
+    this.commonFeedPaths = [
+      '/feed',
+      '/feed.xml',
+      '/rss',
+      '/rss.xml',
+      '/atom.xml',
+      '/feeds/all.xml',
+      '/feeds/posts/default',
+      '/index.xml',
+      '/feed.rss',
+      '/rss2.xml',
+      '/feed/',
+      '/feeds/',
+      '/blog/feed',
+      '/blog/rss',
+      '/news/feed',
+      '/news/rss',
+      '/posts/feed',
+      '/posts/rss',
+      '/articles/feed',
+      '/articles/rss',
+      '/updates/feed',
+      '/updates/rss',
+      '/content/feed',
+      '/content/rss',
+      '/latest/feed',
+      '/latest/rss',
+      '/feed.rdf',
+      '/feed.atom',
+      '/sitemap.xml',
+      '/feed/index.xml',
+      '/rss/index.xml',
+      '/atom/index.xml'
+    ];
+    
+    // Cache to avoid re-detecting the same URLs
+    this.detectionCache = new Map();
+    this.cacheTimeout = 30 * 60 * 1000; // 30 minutes
+    
+    // Rate limiting tracking
+    this.requestDelays = new Map(); // Track delays per domain
+  }
+
+  async discoverFeedUrl(websiteUrl) {
+    try {
+      console.log(`🔍 Discovering RSS feed for: ${websiteUrl}`);
+      
+      // Clean up the URL
+      const baseUrl = this.normalizeUrl(websiteUrl);
+      
+      // Check cache first
+      const cacheKey = baseUrl;
+      const cached = this.detectionCache.get(cacheKey);
+      if (cached && (Date.now() - cached.timestamp) < this.cacheTimeout) {
+        console.log(`📋 Using cached result for: ${baseUrl}`);
+        return cached.result;
+      }
+      
+      // Optimize detection order based on URL patterns
+      const detectionMethods = this.getOptimizedDetectionMethods(baseUrl);
+      
+      for (const method of detectionMethods) {
+        try {
+          const feeds = await method.func(baseUrl);
+          if (feeds && feeds.length > 0) {
+            console.log(`✅ Found ${feeds.length} ${method.name} feed(s):`, feeds);
+            const result = feeds[0];
+            this.detectionCache.set(cacheKey, { result, timestamp: Date.now() });
+            return result;
+          }
+        } catch (error) {
+          console.log(`⚠️ ${method.name} detection failed:`, error.message);
+          // Continue to next method
+        }
+      }
+      
+      console.log(`❌ No RSS feed found for: ${websiteUrl}`);
+      // Cache negative result too
+      this.detectionCache.set(cacheKey, { result: null, timestamp: Date.now() });
+      return null;
+      
+    } catch (error) {
+      console.error(`❌ Error discovering feed for ${websiteUrl}:`, error.message);
+      return null;
+    }
+  }
+
+  // Optimize detection methods based on URL patterns
+  getOptimizedDetectionMethods(baseUrl) {
+    const methods = [];
+    
+    // Always try HTML parsing first (most reliable)
+    methods.push({ name: 'HTML', func: this.parseHtmlForFeeds.bind(this) });
+    
+    // Check for platform-specific patterns first
+    if (baseUrl.includes('substack.com')) {
+      methods.push({ name: 'Substack', func: this.checkSubstackFeeds.bind(this) });
+    } else if (baseUrl.includes('medium.com')) {
+      methods.push({ name: 'Medium', func: this.checkMediumFeeds.bind(this) });
+    } else if (baseUrl.includes('youtube.com') || baseUrl.includes('reddit.com') || baseUrl.includes('github.com')) {
+      methods.push({ name: 'Platform-specific', func: this.checkPlatformSpecificFeeds.bind(this) });
+    }
+    
+    // Check for WordPress patterns
+    if (baseUrl.includes('wordpress.com') || baseUrl.includes('wp-content') || baseUrl.includes('wp-json')) {
+      methods.push({ name: 'WordPress', func: this.checkWordPressFeeds.bind(this) });
+    }
+    
+    // Always try common paths (but after platform-specific)
+    methods.push({ name: 'Common paths', func: this.checkCommonFeedPaths.bind(this) });
+    
+    // Add remaining platform checks if not already added
+    if (!baseUrl.includes('substack.com')) {
+      methods.push({ name: 'Substack', func: this.checkSubstackFeeds.bind(this) });
+    }
+    if (!baseUrl.includes('medium.com')) {
+      methods.push({ name: 'Medium', func: this.checkMediumFeeds.bind(this) });
+    }
+    if (!baseUrl.includes('youtube.com') && !baseUrl.includes('reddit.com') && !baseUrl.includes('github.com')) {
+      methods.push({ name: 'Platform-specific', func: this.checkPlatformSpecificFeeds.bind(this) });
+    }
+    if (!baseUrl.includes('wordpress.com') && !baseUrl.includes('wp-content') && !baseUrl.includes('wp-json')) {
+      methods.push({ name: 'WordPress', func: this.checkWordPressFeeds.bind(this) });
+    }
+    
+    return methods;
+  }
+
+  normalizeUrl(url) {
+    // Add protocol if missing
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      url = 'https://' + url;
+    }
+    
+    // Remove trailing slash
+    return url.replace(/\/$/, '');
+  }
+
+  async checkCommonFeedPaths(baseUrl) {
+    const workingFeeds = [];
+    
+    // Prioritize most common paths first
+    const prioritizedPaths = [
+      '/feed',           // Most common
+      '/rss',            // Very common
+      '/feed.xml',       // Common
+      '/rss.xml',        // Common
+      '/atom.xml',       // Common
+      '/feeds/all.xml',  // Common
+      ...this.commonFeedPaths.filter(p => !['/feed', '/rss', '/feed.xml', '/rss.xml', '/atom.xml', '/feeds/all.xml'].includes(p))
+    ];
+    
+    for (const path of prioritizedPaths) {
+      try {
+        const feedUrl = baseUrl + path;
+        const response = await this.makeRequestWithRetry(feedUrl);
+        
+        if (response && response.status === 200 && this.isValidFeed(response.data)) {
+          workingFeeds.push(feedUrl);
+          console.log(`✅ Found working feed at: ${feedUrl}`);
+          // Stop after finding first working feed to avoid rate limiting
+          break;
+        }
+      } catch (error) {
+        // Continue to next path
+      }
+    }
+    
+    return workingFeeds;
+  }
+
+  async parseHtmlForFeeds(baseUrl) {
+    try {
+      const response = await this.makeRequestWithRetry(baseUrl, { timeout: 10000 });
+      if (!response) return [];
+      
+      const $ = cheerio.load(response.data);
+      const feeds = [];
+      
+      // Look for RSS/Atom feed links with comprehensive selectors
+      const feedSelectors = [
+        'link[type="application/rss+xml"]',
+        'link[type="application/atom+xml"]',
+        'link[type="application/xml"]',
+        'link[rel="alternate"][type*="xml"]',
+        'link[rel="alternate"][type*="rss"]',
+        'link[rel="alternate"][type*="atom"]',
+        'link[rel="feed"]',
+        'link[rel="syndication"]'
+      ];
+      
+      feedSelectors.forEach(selector => {
+        $(selector).each((i, elem) => {
+          const href = $(elem).attr('href');
+          const title = $(elem).attr('title');
+          const type = $(elem).attr('type');
+          
+          if (href) {
+            const feedUrl = this.resolveUrl(baseUrl, href);
+            feeds.push({
+              url: feedUrl,
+              title: title || 'RSS Feed',
+              type: type || 'unknown'
+            });
+          }
+        });
+      });
+      
+      // Also look for any links that might be feeds (heuristic approach)
+      $('a[href*="feed"], a[href*="rss"], a[href*="atom"]').each((i, elem) => {
+        const href = $(elem).attr('href');
+        const text = $(elem).text().toLowerCase();
+        
+        if (href && (text.includes('rss') || text.includes('feed') || text.includes('syndication'))) {
+          const feedUrl = this.resolveUrl(baseUrl, href);
+          feeds.push({
+            url: feedUrl,
+            title: $(elem).text() || 'RSS Feed',
+            type: 'heuristic'
+          });
+        }
+      });
+      
+      // Check if any of these feeds actually work
+      const workingFeeds = [];
+      for (const feed of feeds) {
+        try {
+          const feedResponse = await this.makeRequestWithRetry(feed.url);
+          if (feedResponse && feedResponse.status === 200 && this.isValidFeed(feedResponse.data)) {
+            workingFeeds.push(feed.url);
+            break; // Stop after finding first working feed
+          }
+        } catch (error) {
+          // Continue to next feed
+        }
+      }
+      
+      return workingFeeds;
+    } catch (error) {
+      return [];
+    }
+  }
+
+  async checkWordPressFeeds(baseUrl) {
+    const wpPaths = [
+      '/feed/',
+      '/rdf/',
+      '/rss/',
+      '/atom/',
+      '/feed/rss/',
+      '/feed/rss2/',
+      '/feed/atom/',
+      '/wp-feed.php',
+      '/?feed=rss',
+      '/?feed=rss2',
+      '/?feed=atom',
+      '/category/uncategorized/feed/',
+      '/tag/feed/'
+    ];
+    
+    const workingFeeds = [];
+    
+    for (const path of wpPaths) {
+      try {
+        const feedUrl = baseUrl + path;
+        const response = await this.makeRequestWithRetry(feedUrl);
+        
+        if (response && response.status === 200 && this.isValidFeed(response.data)) {
+          workingFeeds.push(feedUrl);
+          break; // Stop after finding first working feed
+        }
+      } catch (error) {
+        // Continue to next path
+      }
+    }
+    
+    return workingFeeds;
+  }
+
+  async checkSubstackFeeds(baseUrl) {
+    try {
+      // Check if it's a Substack URL
+      if (baseUrl.includes('substack.com')) {
+        const substackFeed = baseUrl + '/feed';
+        const response = await this.makeRequestWithRetry(substackFeed);
+        
+        if (response && response.status === 200 && this.isValidFeed(response.data)) {
+          return [substackFeed];
+        }
+      }
+      
+      return [];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  async checkMediumFeeds(baseUrl) {
+    try {
+      // Check if it's a Medium URL
+      if (baseUrl.includes('medium.com')) {
+        const mediumFeed = baseUrl + '/feed';
+        const response = await this.makeRequestWithRetry(mediumFeed);
+        
+        if (response && response.status === 200 && this.isValidFeed(response.data)) {
+          return [mediumFeed];
+        }
+      }
+      
+      return [];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  async checkPlatformSpecificFeeds(baseUrl) {
+    const workingFeeds = [];
+    
+    try {
+      // YouTube Channel feeds
+      if (baseUrl.includes('youtube.com/channel/') || baseUrl.includes('youtube.com/c/') || baseUrl.includes('youtube.com/user/')) {
+        const channelId = this.extractYouTubeChannelId(baseUrl);
+        if (channelId) {
+          const youtubeFeed = `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`;
+          const response = await this.makeRequestWithRetry(youtubeFeed);
+          if (response && response.status === 200 && this.isValidFeed(response.data)) {
+            workingFeeds.push(youtubeFeed);
+          }
+        }
+      }
+      
+      // Reddit feeds
+      if (baseUrl.includes('reddit.com/r/')) {
+        const subredditMatch = baseUrl.match(/reddit\.com\/r\/([^\/]+)/);
+        if (subredditMatch) {
+          const subreddit = subredditMatch[1];
+          const redditFeed = `https://www.reddit.com/r/${subreddit}.rss`;
+          const response = await this.makeRequestWithRetry(redditFeed);
+          if (response && response.status === 200 && this.isValidFeed(response.data)) {
+            workingFeeds.push(redditFeed);
+          }
+        }
+      }
+      
+      // GitHub feeds
+      if (baseUrl.includes('github.com/')) {
+        const githubFeed = baseUrl + '.atom';
+        const response = await this.makeRequestWithRetry(githubFeed);
+        if (response && response.status === 200 && this.isValidFeed(response.data)) {
+          workingFeeds.push(githubFeed);
+        }
+      }
+      
+      // Blogger feeds
+      if (baseUrl.includes('blogspot.com') || baseUrl.includes('blogger.com')) {
+        const bloggerFeed = baseUrl + '/feeds/posts/default';
+        const response = await this.makeRequestWithRetry(bloggerFeed);
+        if (response && response.status === 200 && this.isValidFeed(response.data)) {
+          workingFeeds.push(bloggerFeed);
+        }
+      }
+      
+      // Tumblr feeds
+      if (baseUrl.includes('tumblr.com')) {
+        const tumblrFeed = baseUrl + '/rss';
+        const response = await this.makeRequestWithRetry(tumblrFeed);
+        if (response && response.status === 200 && this.isValidFeed(response.data)) {
+          workingFeeds.push(tumblrFeed);
+        }
+      }
+      
+      // Mastodon feeds
+      if (baseUrl.includes('mastodon.') || baseUrl.includes('mstdn.') || baseUrl.includes('mastodon.social')) {
+        const mastodonFeed = baseUrl + '.rss';
+        const response = await this.makeRequestWithRetry(mastodonFeed);
+        if (response && response.status === 200 && this.isValidFeed(response.data)) {
+          workingFeeds.push(mastodonFeed);
+        }
+      }
+      
+    } catch (error) {
+      // Continue even if one platform check fails
+    }
+    
+    return workingFeeds;
+  }
+
+  extractYouTubeChannelId(url) {
+    try {
+      // Extract channel ID from various YouTube URL formats
+      const patterns = [
+        /youtube\.com\/channel\/([a-zA-Z0-9_-]+)/,
+        /youtube\.com\/c\/([a-zA-Z0-9_-]+)/,
+        /youtube\.com\/user\/([a-zA-Z0-9_-]+)/,
+        /youtube\.com\/@([a-zA-Z0-9_-]+)/
+      ];
+      
+      for (const pattern of patterns) {
+        const match = url.match(pattern);
+        if (match) {
+          return match[1];
+        }
+      }
+      
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  resolveUrl(baseUrl, href) {
+    if (href.startsWith('http://') || href.startsWith('https://')) {
+      return href;
+    }
+    
+    if (href.startsWith('//')) {
+      return 'https:' + href;
+    }
+    
+    if (href.startsWith('/')) {
+      return baseUrl + href;
+    }
+    
+    return baseUrl + '/' + href;
+  }
+
+  isValidFeed(content) {
+    if (!content || typeof content !== 'string') {
+      return false;
+    }
+    
+    const lowerContent = content.toLowerCase();
+    
+    // Check for RSS/Atom indicators
+    const feedIndicators = [
+      '<rss',
+      '<feed',
+      '<channel',
+      '<?xml',
+      '<atom:feed',
+      '<feed xmlns',
+      '<rdf:rdf',
+      '<rss version',
+      '<atom version',
+      'application/rss+xml',
+      'application/atom+xml',
+      'application/xml'
+    ];
+    
+    // Check if content contains feed indicators
+    for (const indicator of feedIndicators) {
+      if (lowerContent.includes(indicator)) {
+        // Additional validation: ensure it's not just a mention in HTML
+        if (!lowerContent.includes('<html') && !lowerContent.includes('<!doctype html')) {
+          return true;
+        }
+      }
+    }
+    
+    // Check for JSON Feed format
+    try {
+      const jsonContent = JSON.parse(content);
+      if (jsonContent.version && jsonContent.items) {
+        return true;
+      }
+    } catch (error) {
+      // Not JSON, continue with other checks
+    }
+    
+    return false;
+  }
+
+  async testFeed(feedUrl) {
+    try {
+      const response = await this.makeRequestWithRetry(feedUrl, { timeout: 10000 });
+      
+      if (response && response.status === 200 && this.isValidFeed(response.data)) {
+        return {
+          success: true,
+          status: response.status,
+          contentType: response.headers['content-type'],
+          size: response.data.length
+        };
+      } else {
+        return {
+          success: false,
+          status: response?.status || 'unknown',
+          error: 'Invalid feed content'
+        };
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message,
+        status: error.response?.status || 'unknown'
+      };
+    }
+  }
+
+  // New method: Make HTTP requests with retry logic and rate limiting
+  async makeRequestWithRetry(url, options = {}) {
+    const domain = new URL(url).hostname;
+    const maxRetries = 3;
+    const baseDelay = 1000; // 1 second base delay
+    
+    // Check if we need to delay for this domain
+    const lastRequest = this.requestDelays.get(domain);
+    if (lastRequest && (Date.now() - lastRequest) < 2000) {
+      // Wait at least 2 seconds between requests to same domain
+      await new Promise(resolve => setTimeout(resolve, 2000 - (Date.now() - lastRequest)));
+    }
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const response = await axios.get(url, {
+          timeout: options.timeout || 5000,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (compatible; RSS Feed Discovery Bot)',
+            ...options.headers
+          }
+        });
+        
+        // Update last request time
+        this.requestDelays.set(domain, Date.now());
+        return response;
+        
+      } catch (error) {
+        const status = error.response?.status;
+        
+        // Handle rate limiting (429) with exponential backoff
+        if (status === 429) {
+          const delay = baseDelay * Math.pow(2, attempt - 1); // Exponential backoff
+          console.log(`⏳ Rate limited (429), waiting ${delay}ms before retry ${attempt}/${maxRetries} for ${domain}`);
+          
+          if (attempt < maxRetries) {
+            await new Promise(resolve => setTimeout(resolve, delay));
+            continue;
+          }
+        }
+        
+        // Handle other errors
+        if (status >= 500 && attempt < maxRetries) {
+          // Server errors - retry with delay
+          const delay = baseDelay * attempt;
+          console.log(`⏳ Server error (${status}), waiting ${delay}ms before retry ${attempt}/${maxRetries} for ${domain}`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+        
+        // Don't retry for client errors (4xx except 429)
+        if (status >= 400 && status < 500 && status !== 429) {
+          throw error;
+        }
+        
+        // Last attempt or other errors
+        if (attempt === maxRetries) {
+          throw error;
+        }
+      }
+    }
+  }
+}
+
+module.exports = FeedDiscovery;
+
