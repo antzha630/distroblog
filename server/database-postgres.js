@@ -231,6 +231,183 @@ class Database {
     return 0;
   }
 
+  // Additional methods needed by the application
+  async getNewArticles() {
+    const result = await this.pool.query(`
+      SELECT a.*, s.name as source_name 
+      FROM articles a 
+      LEFT JOIN sources s ON a.source_id = s.id 
+      WHERE a.status = 'new' AND (a.seen = false OR a.seen IS NULL)
+      ORDER BY COALESCE(a.pub_date, a.created_at) DESC
+    `);
+    return result.rows;
+  }
+
+  async getSelectedArticles() {
+    const result = await this.pool.query(`
+      SELECT a.*, s.name as source_name 
+      FROM articles a 
+      LEFT JOIN sources s ON a.source_id = s.id 
+      WHERE a.status = 'selected'
+      ORDER BY COALESCE(a.pub_date, a.created_at) DESC
+    `);
+    return result.rows;
+  }
+
+  async getNewUnseenArticles() {
+    const result = await this.pool.query(`
+      SELECT a.*, s.name as source_name 
+      FROM articles a 
+      LEFT JOIN sources s ON a.source_id = s.id 
+      WHERE a.status = 'new' AND (a.viewed = false OR a.viewed IS NULL)
+      ORDER BY a.created_at DESC
+    `);
+    return result.rows;
+  }
+
+  async getLast5ArticlesPerSource() {
+    const result = await this.pool.query(`
+      SELECT DISTINCT ON (a.source_id) a.*, s.name as source_name
+      FROM articles a 
+      LEFT JOIN sources s ON a.source_id = s.id 
+      ORDER BY a.source_id, COALESCE(a.pub_date, a.created_at) DESC
+      LIMIT 5
+    `);
+    return result.rows;
+  }
+
+  async getArticlesByIds(ids) {
+    if (ids.length === 0) return [];
+    const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');
+    const result = await this.pool.query(`
+      SELECT a.*, s.name as source_name 
+      FROM articles a 
+      LEFT JOIN sources s ON a.source_id = s.id 
+      WHERE a.id IN (${placeholders})
+      ORDER BY COALESCE(a.pub_date, a.created_at) DESC
+    `, ids);
+    return result.rows;
+  }
+
+  async updateArticleContent(id, title, content, preview) {
+    const result = await this.pool.query(`
+      UPDATE articles 
+      SET title = $1, content = $2, preview = $3, updated_at = CURRENT_TIMESTAMP 
+      WHERE id = $4 
+      RETURNING *
+    `, [title, content, preview, id]);
+    return result.rows[0];
+  }
+
+  async updateArticleByLink(link, updates) {
+    const fields = [];
+    const values = [];
+    let paramCount = 1;
+
+    for (const [key, value] of Object.entries(updates)) {
+      if (value !== undefined) {
+        fields.push(`${key} = $${paramCount}`);
+        values.push(value);
+        paramCount++;
+      }
+    }
+
+    if (fields.length === 0) return null;
+
+    values.push(link);
+    const query = `UPDATE articles SET ${fields.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE link = $${paramCount} RETURNING *`;
+    
+    const result = await this.pool.query(query, values);
+    return result.rows[0];
+  }
+
+  async markArticlesAsViewed(ids) {
+    if (ids.length === 0) return 0;
+    const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');
+    const result = await this.pool.query(`
+      UPDATE articles 
+      SET viewed = true, updated_at = CURRENT_TIMESTAMP 
+      WHERE id IN (${placeholders})
+    `, ids);
+    return result.rowCount;
+  }
+
+  async dismissAllCurrentArticles() {
+    const result = await this.pool.query(`
+      UPDATE articles 
+      SET status = 'dismissed', updated_at = CURRENT_TIMESTAMP 
+      WHERE status = 'new'
+    `);
+    return result.rowCount;
+  }
+
+  async clearAllArticles() {
+    const result = await this.pool.query('DELETE FROM articles');
+    return result.rowCount;
+  }
+
+  async clearCurrentSession() {
+    const result = await this.pool.query(`
+      UPDATE articles 
+      SET status = 'dismissed', updated_at = CURRENT_TIMESTAMP 
+      WHERE status = 'new' AND (session_id IS NULL OR created_at < NOW() - INTERVAL '1 day')
+    `);
+    return result.rowCount;
+  }
+
+  async startNewSession() {
+    const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    await this.pool.query(`
+      UPDATE articles 
+      SET session_id = $1 
+      WHERE status = 'new' AND session_id IS NULL
+    `, [sessionId]);
+    return sessionId;
+  }
+
+  async markArticlesAsSeen(articleIds) {
+    if (articleIds.length === 0) return 0;
+    const placeholders = articleIds.map((_, i) => `$${i + 1}`).join(',');
+    const result = await this.pool.query(`
+      UPDATE articles 
+      SET seen = true, updated_at = CURRENT_TIMESTAMP 
+      WHERE id IN (${placeholders})
+    `, articleIds);
+    return result.rowCount;
+  }
+
+  async clearAllCurrentArticles() {
+    const result = await this.pool.query(`
+      UPDATE articles 
+      SET status = 'dismissed', updated_at = CURRENT_TIMESTAMP 
+      WHERE status = 'new'
+    `);
+    return result.rowCount;
+  }
+
+  async backfillArticleSourceNames() {
+    const result = await this.pool.query(`
+      UPDATE articles 
+      SET source_name = s.name
+      FROM sources s 
+      WHERE articles.source_id = s.id 
+      AND (articles.source_name IS NULL OR articles.source_name = '')
+    `);
+    return result.rowCount;
+  }
+
+  async backfillArticleSourcesByDomain() {
+    // This is a simplified version - in practice you'd want more sophisticated domain matching
+    const result = await this.pool.query(`
+      UPDATE articles 
+      SET source_id = s.id, source_name = s.name
+      FROM sources s 
+      WHERE articles.source_id IS NULL 
+      AND (articles.link LIKE '%' || REPLACE(REPLACE(s.url, 'https://', ''), 'http://', '') || '%')
+    `);
+    return result.rowCount;
+  }
+
   async close() {
     await this.pool.end();
   }
