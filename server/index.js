@@ -8,7 +8,7 @@ require('dotenv').config();
 const feedMonitor = require('./services/feedMonitor');
 const FeedDiscovery = require('./services/feedDiscovery');
 const llmService = require('./services/llmService');
-const database = require('./database');
+const database = require('./database-postgres');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
