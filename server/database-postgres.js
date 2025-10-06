@@ -162,7 +162,7 @@ class Database {
       article.is_manual || false,
       article.ai_summary
     ]);
-    return result.rows[0];
+    return result.rows[0].id;
   }
 
   async getArticleById(id) {
@@ -267,11 +267,18 @@ class Database {
 
   async getLast5ArticlesPerSource() {
     const result = await this.pool.query(`
-      SELECT DISTINCT ON (a.source_id) a.*, s.name as source_name
-      FROM articles a 
-      LEFT JOIN sources s ON a.source_id = s.id 
-      ORDER BY a.source_id, COALESCE(a.pub_date, a.created_at) DESC
-      LIMIT 5
+      WITH ranked AS (
+        SELECT 
+          a.*, 
+          s.name AS source_name,
+          ROW_NUMBER() OVER (PARTITION BY a.source_id ORDER BY COALESCE(a.pub_date, a.created_at) DESC) AS rn
+        FROM articles a
+        LEFT JOIN sources s ON a.source_id = s.id
+      )
+      SELECT *
+      FROM ranked
+      WHERE rn <= 5
+      ORDER BY COALESCE(pub_date, created_at) DESC
     `);
     return result.rows;
   }

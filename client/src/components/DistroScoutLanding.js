@@ -6,7 +6,7 @@ function DistroScoutLanding({ onArticlesSelected }) {
   const [loading, setLoading] = useState(true);
   const [selectedArticles, setSelectedArticles] = useState([]);
   const [error, setError] = useState(null);
-  const [timeFilter, setTimeFilter] = useState('2days'); // '2days' or '7days'
+  const [timeFilter, setTimeFilter] = useState('7days'); // '2days' | '7days' | 'all'
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [newUrl, setNewUrl] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
@@ -18,7 +18,12 @@ function DistroScoutLanding({ onArticlesSelected }) {
   const fetchArticles = async () => {
     try {
       setLoading(true);
-      const endpoint = timeFilter === '2days' ? '/api/articles/recent/2' : '/api/articles/recent/7';
+      const endpoint =
+        timeFilter === 'all'
+          ? '/api/articles/last5-per-source'
+          : timeFilter === '2days'
+            ? '/api/articles/recent/2'
+            : '/api/articles/recent/7';
       const response = await fetch(`${config.API_BASE_URL}${endpoint}`);
       if (!response.ok) {
         throw new Error('Failed to fetch articles');
@@ -38,7 +43,7 @@ function DistroScoutLanding({ onArticlesSelected }) {
     setIsRefreshing(true);
     try {
       // Trigger immediate feed check
-      const response = await fetch('http://localhost:3001/api/monitor/trigger', {
+      const response = await fetch(`${config.API_BASE_URL}/api/monitor/trigger`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -191,6 +196,13 @@ function DistroScoutLanding({ onArticlesSelected }) {
               onClick={() => setTimeFilter('7days')}
             >
               Past 7 Days
+            </button>
+            <button
+              type="button"
+              className={`mode-btn ${timeFilter === 'all' ? 'active' : ''}`}
+              onClick={() => setTimeFilter('all')}
+            >
+              Latest per Source
             </button>
           </div>
           <button 
