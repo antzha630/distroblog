@@ -175,6 +175,11 @@ class Database {
     return result.rows[0];
   }
 
+  async articleExists(link) {
+    const result = await this.pool.query('SELECT id FROM articles WHERE link = $1', [link]);
+    return result.rows.length > 0;
+  }
+
   async updateArticle(id, updates) {
     const fields = [];
     const values = [];

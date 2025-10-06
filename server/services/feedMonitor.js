@@ -1,7 +1,7 @@
 const Parser = require('rss-parser');
 const axios = require('axios');
 const cheerio = require('cheerio');
-const database = require('../database');
+const database = require('../database-postgres');
 const FeedDiscovery = require('./feedDiscovery');
 
 const parser = new Parser();
