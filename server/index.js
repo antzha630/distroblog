@@ -526,7 +526,6 @@ app.post('/api/maintenance/backfill-pubdates', async (req, res) => {
       try {
         const feed = await parser.parseURL(source.url);
         for (const item of feed.items) {
-          // Try multiple date fields
           const dateFields = [item.pubDate, item.isoDate, item.date, item.published, item['dc:date'], item['atom:published']];
           let parsed = null;
           for (const f of dateFields) {
@@ -536,8 +535,9 @@ app.post('/api/maintenance/backfill-pubdates', async (req, res) => {
             }
           }
           if (parsed) {
-            const updated = await database.updateArticleByLink(item.link, { pub_date: parsed });
-            if (updated) fixed += updated;
+            // approximate link match (ignoring query string) and only fill missing
+            const updatedCount = await database.updateArticlePubDateByApproxLink(item.link, parsed);
+            fixed += updatedCount;
           }
         }
       } catch (e) {

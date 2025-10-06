@@ -328,6 +328,18 @@ class Database {
     return result.rows[0];
   }
 
+  async updateArticlePubDateByApproxLink(link, pubDateIso) {
+    // Match exact link or same link without query params; only fill when missing
+    const result = await this.pool.query(`
+      UPDATE articles
+      SET pub_date = $1, updated_at = CURRENT_TIMESTAMP
+      WHERE (link = $2 OR split_part(link,'?',1) = split_part($2,'?',1))
+        AND (pub_date IS NULL)
+      RETURNING *
+    `, [pubDateIso, link]);
+    return result.rowCount;
+  }
+
   async markArticlesAsViewed(ids) {
     if (ids.length === 0) return 0;
     const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');
