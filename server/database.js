@@ -1,51 +1,70 @@
-const sqlite3 = require('sqlite3').verbose();
+const { Pool } = require('pg');
 const path = require('path');
 
 class Database {
   constructor() {
-    this.db = null;
+    this.pool = null;
   }
 
   init() {
-    const dbPath = path.join(__dirname, '../data/distroblog.db');
-    this.db = new sqlite3.Database(dbPath);
+    // Use PostgreSQL if DATABASE_URL is provided, otherwise fall back to SQLite
+    if (process.env.DATABASE_URL) {
+      this.pool = new Pool({
+        connectionString: process.env.DATABASE_URL,
+        ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+      });
+      console.log('PostgreSQL connected successfully');
+    } else {
+      // Fallback to SQLite for local development
+      const sqlite3 = require('sqlite3').verbose();
+      const dbPath = path.join(__dirname, '../data/distroblog.db');
+      this.db = new sqlite3.Database(dbPath);
+      console.log('SQLite database initialized');
+    }
     
     this.createTables();
-    console.log('Database initialized');
+    console.log('Database tables created/verified');
   }
 
-  createTables() {
+  async createTables() {
     const createSourcesTable = `
       CREATE TABLE IF NOT EXISTS sources (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         url TEXT UNIQUE NOT NULL,
         name TEXT NOT NULL,
         category TEXT,
-        last_checked DATETIME,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        last_checked TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `;
 
     const createArticlesTable = `
       CREATE TABLE IF NOT EXISTS articles (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         title TEXT NOT NULL,
         content TEXT,
         preview TEXT,
         link TEXT UNIQUE NOT NULL,
-        pub_date DATETIME,
+        pub_date TIMESTAMP,
         source_id INTEGER,
         source_name TEXT,
         category TEXT,
         status TEXT DEFAULT 'new',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (source_id) REFERENCES sources (id)
       )
     `;
 
-    this.db.run(createSourcesTable);
-    this.db.run(createArticlesTable);
+    if (this.pool) {
+      // PostgreSQL
+      await this.pool.query(createSourcesTable);
+      await this.pool.query(createArticlesTable);
+    } else {
+      // SQLite fallback
+      this.db.run(createSourcesTable);
+      this.db.run(createArticlesTable);
+    }
 
     // Attempt to add last_checked to existing sources table if missing
     this.db.run('ALTER TABLE sources ADD COLUMN last_checked DATETIME', (err) => {
@@ -64,12 +83,19 @@ class Database {
 
   // Source management
   async getSources() {
-    return new Promise((resolve, reject) => {
-      this.db.all('SELECT * FROM sources ORDER BY created_at DESC', (err, rows) => {
-        if (err) reject(err);
-        else resolve(rows);
+    if (this.pool) {
+      // PostgreSQL
+      const result = await this.pool.query('SELECT * FROM sources ORDER BY created_at DESC');
+      return result.rows;
+    } else {
+      // SQLite fallback
+      return new Promise((resolve, reject) => {
+        this.db.all('SELECT * FROM sources ORDER BY created_at DESC', (err, rows) => {
+          if (err) reject(err);
+          else resolve(rows);
+        });
       });
-    });
+    }
   }
 
   async getSourceById(id) {
