@@ -14,5 +14,6 @@ services:
           name: distroblog-db
           property: connectionString
 
-  - type: pserv
-    name: distroblog-db
+databases:
+  - name: distroblog-db
+    plan: free
