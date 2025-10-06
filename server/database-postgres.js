@@ -87,8 +87,24 @@ class Database {
     return result.rows[0];
   }
 
+  async getSourceById(id) {
+    const result = await this.pool.query('SELECT * FROM sources WHERE id = $1', [id]);
+    return result.rows[0];
+  }
+
   async removeSource(id) {
-    await this.pool.query('DELETE FROM sources WHERE id = $1', [id]);
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM articles WHERE source_id = $1', [id]);
+      await client.query('DELETE FROM sources WHERE id = $1', [id]);
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
   }
 
   async updateSourceLastChecked(id) {
