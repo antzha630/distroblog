@@ -2,7 +2,6 @@ services:
   - type: web
     name: distroblog
     env: node
-    plan: hobby
     buildCommand: npm install && npm run build
     startCommand: npm start
     envVars:
@@ -17,4 +16,4 @@ services:
 
   - type: pserv
     name: distroblog-db
-    plan: hobby
+    runtime: postgresql
