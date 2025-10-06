@@ -16,4 +16,3 @@ services:
 
   - type: pserv
     name: distroblog-db
-    runtime: postgresql
