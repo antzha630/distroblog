@@ -194,7 +194,7 @@ class FeedMonitor {
     }
 
     try {
-      const sources = await database.getSources();
+      const sources = await database.getAllSources();
       if (sources.length === 0) {
         console.log('No sources to check');
         return [];

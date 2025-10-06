@@ -28,7 +28,7 @@ app.get('/api/health', (req, res) => {
 // Get all monitored sources
 app.get('/api/sources', async (req, res) => {
   try {
-    const sources = await database.getSources();
+    const sources = await database.getAllSources();
     res.json(sources);
   } catch (error) {
     console.error('Error fetching sources:', error);
@@ -68,7 +68,8 @@ app.post('/api/sources', async (req, res) => {
       return res.status(400).json({ error: 'Invalid or inaccessible RSS feed' });
     }
 
-    const sourceId = await database.addSource(url, name, category);
+    const source = await database.addSource(name, url);
+    const sourceId = source.id;
     
     // Fetch 5 most recent articles from the new source
     try {

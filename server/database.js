@@ -6,7 +6,7 @@ class Database {
     this.pool = null;
   }
 
-  init() {
+  async init() {
     // Use PostgreSQL if DATABASE_URL is provided, otherwise fall back to SQLite
     if (process.env.DATABASE_URL) {
       this.pool = new Pool({
@@ -22,7 +22,7 @@ class Database {
       console.log('SQLite database initialized');
     }
     
-    this.createTables();
+    await this.createTables();
     console.log('Database tables created/verified');
   }
 
