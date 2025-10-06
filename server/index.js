@@ -29,7 +29,21 @@ app.get('/api/health', (req, res) => {
 app.get('/api/sources', async (req, res) => {
   try {
     const sources = await database.getAllSources();
-    res.json(sources);
+    // derive basic success/active metrics for UI
+    const { rows: counts } = await database.pool.query(`
+      SELECT source_id, COUNT(*)::int AS total,
+             SUM(CASE WHEN status = 'new' OR status = 'selected' OR status = 'sent' THEN 1 ELSE 0 END)::int AS successes
+      FROM articles
+      GROUP BY source_id
+    `);
+    const bySourceId = new Map(counts.map(r => [r.source_id, r]));
+    const enriched = sources.map(s => {
+      const c = bySourceId.get(s.id) || { total: 0, successes: 0 };
+      const success_rate = c.total > 0 ? c.successes / c.total : null;
+      const active = s.last_checked ? (Date.now() - new Date(s.last_checked).getTime()) < (60 * 60 * 1000) : false;
+      return { ...s, success_rate, active };
+    });
+    res.json(enriched);
   } catch (error) {
     console.error('Error fetching sources:', error);
     res.status(500).json({ error: 'Failed to fetch sources' });
@@ -503,7 +517,7 @@ app.post('/api/maintenance/backfill-source-domains', async (req, res) => {
 // Maintenance: backfill missing pub_date by re-parsing RSS items and matching by link
 app.post('/api/maintenance/backfill-pubdates', async (req, res) => {
   try {
-    const sources = await database.getSources();
+    const sources = await database.getAllSources();
     const Parser = require('rss-parser');
     const parser = new Parser();
     let fixed = 0;

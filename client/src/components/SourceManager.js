@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import config from '../config';
 
 function SourceManager({ onSourceAdded, onSourceRemoved }) {
   const [sources, setSources] = useState([]);

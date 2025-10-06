@@ -154,7 +154,7 @@ class Database {
       article.content,
       article.preview,
       article.link,
-      article.pub_date,
+      article.pub_date || article.pubDate || null,
       article.source_id || article.sourceId || null,
       article.source_name || article.sourceName || 'Unknown Source',
       article.category,

@@ -2,10 +2,8 @@ import React, { useState, useEffect } from 'react';
 import './App.css';
 import './DistroScout.css';
 import SourceManager from './components/SourceManager';
-import EditArticles from './components/EditArticles';
 import DistroScoutLanding from './components/DistroScoutLanding';
 import DistroScoutEditSend from './components/DistroScoutEditSend';
-import DistroScoutEditModal from './components/DistroScoutEditModal';
 import config from './config';
 
 function App() {
@@ -14,8 +12,7 @@ function App() {
   const [selectedArticles, setSelectedArticles] = useState([]);
   const [workflowStep, setWorkflowStep] = useState('review'); // 'review', 'edit', 'send'
   const [distroScoutStep, setDistroScoutStep] = useState('landing'); // 'landing', 'edit-send'
-  const [editingArticle, setEditingArticle] = useState(null);
-  const [showEditModal, setShowEditModal] = useState(false);
+  // inline editing only; no modal state
 
   useEffect(() => {
     fetchSources();
@@ -81,22 +78,13 @@ function App() {
     setSelectedArticles([]);
   };
 
-  const handleEditArticle = (article) => {
-    setEditingArticle(article);
-    setShowEditModal(true);
-  };
+  const handleEditArticle = () => {};
 
   const handleRemoveArticle = (articleId) => {
     setSelectedArticles(prev => prev.filter(article => article.id !== articleId));
   };
 
-  const handleSaveEditedArticle = (updatedArticle) => {
-    setSelectedArticles(prev => 
-      prev.map(article => 
-        article.id === updatedArticle.id ? updatedArticle : article
-      )
-    );
-  };
+  const handleSaveEditedArticle = () => {};
 
   const handleSendToDistro = async (articles) => {
     try {
@@ -144,7 +132,7 @@ function App() {
 
   const handleSendArticles = async () => {
     try {
-      const response = await fetch('http://localhost:3001/api/articles/send', {
+      const response = await fetch(`${config.API_BASE_URL}/api/articles/send`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -176,7 +164,7 @@ function App() {
   const handleCheckNow = async () => {
     try {
       // Trigger immediate feed check
-      const response = await fetch('http://localhost:3001/api/monitor/trigger', {
+      const response = await fetch(`${config.API_BASE_URL}/api/monitor/trigger`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
