@@ -296,12 +296,25 @@ app.post('/api/articles/send', async (req, res) => {
     const successCount = results.filter(r => r.success).length;
     const failureCount = results.filter(r => !r.success).length;
     
+    // Create detailed response message
+    let responseMessage;
+    if (successCount === 0 && failureCount > 0) {
+      responseMessage = `Failed to send ${failureCount} article${failureCount > 1 ? 's' : ''} to Distro. Please check your API key and endpoint.`;
+    } else if (successCount > 0 && failureCount > 0) {
+      responseMessage = `Successfully sent ${successCount} article${successCount > 1 ? 's' : ''} to Distro, but ${failureCount} failed.`;
+    } else if (successCount > 0) {
+      responseMessage = `Successfully sent ${successCount} article${successCount > 1 ? 's' : ''} to Distro!`;
+    } else {
+      responseMessage = `No articles were sent. Please check your configuration.`;
+    }
+
     res.json({ 
-      message: `${successCount} articles sent successfully, ${failureCount} failed.`,
+      message: responseMessage,
       results: results,
       count: articles.length,
       successCount: successCount,
-      failureCount: failureCount
+      failureCount: failureCount,
+      success: successCount > 0
     });
   } catch (error) {
     console.error('Error preparing articles for send:', error);

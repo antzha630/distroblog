@@ -150,7 +150,13 @@ function App() {
       }
 
       const result = await response.json();
-      alert(`Successfully sent ${result.successCount} articles!`);
+      
+      // Show detailed message from server
+      if (result.success) {
+        alert(result.message);
+      } else {
+        alert(`❌ ${result.message}`);
+      }
       
       // Reset workflow
       setWorkflowStep('review');
