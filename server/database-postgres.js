@@ -53,8 +53,15 @@ class Database {
           status VARCHAR(50) DEFAULT 'new',
           is_manual BOOLEAN DEFAULT FALSE,
           ai_summary TEXT,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
+      `);
+
+      // Add updated_at column if it doesn't exist (for existing tables)
+      await client.query(`
+        ALTER TABLE articles 
+        ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       `);
 
       // Create indexes for better performance
