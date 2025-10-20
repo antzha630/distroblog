@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 
-function SourceManager({ onSourceAdded, onSourceRemoved }) {
+function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
   const [sources, setSources] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
@@ -24,6 +24,13 @@ function SourceManager({ onSourceAdded, onSourceRemoved }) {
     fetchSources();
     fetchCategories();
   }, []);
+
+  // Watch for refresh trigger from parent
+  useEffect(() => {
+    if (refreshTrigger) {
+      fetchSources();
+    }
+  }, [refreshTrigger]);
 
   const fetchSources = async () => {
     try {
@@ -204,7 +211,7 @@ function SourceManager({ onSourceAdded, onSourceRemoved }) {
           paddingBottom: '20px',
           borderBottom: '1px solid #e9ecef'
         }}>
-          <h2 className="card-title" style={{ margin: '0 0 16px 0' }}>RSS Source Management</h2>
+          <h2 className="card-title" style={{ margin: '0 0 16px 0' }}>Sources</h2>
           <button 
             className="btn btn-primary"
             onClick={() => setShowAddForm(!showAddForm)}
@@ -226,10 +233,10 @@ function SourceManager({ onSourceAdded, onSourceRemoved }) {
             marginBottom: '24px',
             border: '1px solid #e9ecef'
           }}>
-            <h3 style={{ marginTop: 0 }}>Add New RSS Source</h3>
+            <h3 style={{ marginTop: 0 }}>Add Source</h3>
             <form onSubmit={handleAddSource}>
               <div className="form-group">
-                <label className="form-label">Website or RSS Feed URL *</label>
+                <label className="form-label">Website *</label>
                 <div style={{ display: 'flex', gap: '8px' }}>
                   <input
                     type="url"
@@ -266,7 +273,7 @@ function SourceManager({ onSourceAdded, onSourceRemoved }) {
                   </button>
                 </div>
                 <div style={{ fontSize: '0.8rem', color: '#6c757d', marginTop: '4px' }}>
-                  Enter a website URL (like https://techcrunch.com) and we'll find RSS feeds for you, or enter the direct RSS URL
+                  Enter a website URL (like https://techcrunch.com) and we'll find RSS feeds for you.
                 </div>
               </div>
 

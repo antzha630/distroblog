@@ -12,6 +12,8 @@ function App() {
   const [selectedArticles, setSelectedArticles] = useState([]);
   const [workflowStep, setWorkflowStep] = useState('review'); // 'review', 'edit', 'send'
   const [distroScoutStep, setDistroScoutStep] = useState('landing'); // 'landing', 'edit-send'
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [isCheckingFeeds, setIsCheckingFeeds] = useState(false);
   // inline editing only; no modal state
 
   useEffect(() => {
@@ -168,6 +170,7 @@ function App() {
   };
 
   const handleCheckNow = async () => {
+    setIsCheckingFeeds(true);
     try {
       // Trigger immediate feed check
       const response = await fetch(`${config.API_BASE_URL}/api/monitor/trigger`, {
@@ -179,9 +182,17 @@ function App() {
       
       if (response.ok) {
         console.log('Feed check triggered successfully');
+        // Wait a moment for the feeds to process, then refresh sources
+        setTimeout(() => {
+          setRefreshTrigger(prev => prev + 1);
+          setIsCheckingFeeds(false);
+        }, 2000);
+      } else {
+        setIsCheckingFeeds(false);
       }
     } catch (error) {
       console.error('Error triggering feed check:', error);
+      setIsCheckingFeeds(false);
     }
   };
 
@@ -209,9 +220,10 @@ function App() {
             <button 
               className="nav-link check-now-btn"
               onClick={handleCheckNow}
+              disabled={isCheckingFeeds}
               title="Check all sources for new articles immediately"
             >
-              🔍 Check Now
+              {isCheckingFeeds ? '⏳ Checking...' : '🔍 Check Now'}
             </button>
           </nav>
         </div>
@@ -237,6 +249,7 @@ function App() {
             sources={sources}
             onSourceAdded={handleSourceAdded}
             onSourceRemoved={handleSourceRemoved}
+            refreshTrigger={refreshTrigger}
           />
         )}
         {activeTab === 'new' && workflowStep === 'send' && (
