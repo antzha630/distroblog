@@ -107,6 +107,32 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
     cat.name.toLowerCase().includes(newSource.category.toLowerCase())
   );
 
+  const handlePauseSource = async (sourceId, sourceName) => {
+    try {
+      await axios.post(`/api/sources/${sourceId}/pause`);
+      
+      // Refresh sources list
+      await fetchSources();
+      
+      console.log(`Source "${sourceName}" has been paused`);
+    } catch (error) {
+      console.error('Error pausing source:', error);
+    }
+  };
+
+  const handleReactivateSource = async (sourceId, sourceName) => {
+    try {
+      await axios.post(`/api/sources/${sourceId}/reactivate`);
+      
+      // Refresh sources list
+      await fetchSources();
+      
+      console.log(`Source "${sourceName}" has been reactivated`);
+    } catch (error) {
+      console.error('Error reactivating source:', error);
+    }
+  };
+
   const handleAddSource = async (e) => {
     e.preventDefault();
     setIsValidating(true);
@@ -243,7 +269,7 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
                     className="form-input"
                     value={newSource.url}
                     onChange={(e) => setNewSource({ ...newSource, url: e.target.value })}
-                    placeholder="https://example.com or https://example.com/feed.xml"
+                    placeholder="https://example.com"
                     required
                     style={{ flex: 1 }}
                   />
@@ -468,16 +494,20 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
               fontWeight: '500'
             }}>
               Monitoring {sources.length} sources
+              <div style={{ fontSize: '0.8rem', marginTop: '8px', color: '#6c757d', fontWeight: 'normal' }}>
+                💡 <strong>Paused sources:</strong> Won't be checked for new articles, but can be reactivated anytime
+              </div>
             </div>
             
             {sources.map(source => (
               <div key={source.id} style={{
-                border: '1px solid #e9ecef',
+                border: source.is_paused ? '1px solid #ffc107' : '1px solid #e9ecef',
                 borderRadius: '8px',
                 padding: '20px',
                 marginBottom: '16px',
-                background: 'white',
-                boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+                background: source.is_paused ? '#fffbf0' : 'white',
+                boxShadow: source.is_paused ? '0 2px 8px rgba(255,193,7,0.15)' : '0 2px 4px rgba(0,0,0,0.05)',
+                opacity: source.is_paused ? 0.8 : 1
               }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                   <div style={{ flex: 1 }}>
@@ -503,7 +533,7 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
                     </div>
                   </div>
                   
-                  <div style={{ textAlign: 'right', minWidth: '120px' }}>
+                  <div style={{ textAlign: 'right', minWidth: '140px' }}>
                     <div style={{ 
                       fontSize: '1rem',
                       fontWeight: 'bold',
@@ -514,30 +544,71 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
                     </div>
                     <div style={{ 
                       fontSize: '0.9rem', 
-                      color: '#6c757d',
+                      color: source.is_paused ? '#ffc107' : '#28a745',
                       marginBottom: '12px',
                       fontWeight: '500'
                     }}>
-                      {source.active ? '✓ Active' : '✗ Inactive'}
+                      {source.is_paused ? '⏸️ Paused' : '✓ Active'}
                     </div>
-                    <button
-                      onClick={() => confirmRemoveSource(source)}
-                      style={{
-                        background: '#dc3545',
-                        color: 'white',
-                        border: 'none',
-                        padding: '6px 12px',
-                        borderRadius: '4px',
-                        fontSize: '0.8rem',
-                        cursor: 'pointer',
-                        transition: 'background-color 0.2s',
-                        fontWeight: '500'
-                      }}
-                      onMouseEnter={(e) => e.target.style.background = '#c82333'}
-                      onMouseLeave={(e) => e.target.style.background = '#dc3545'}
-                    >
-                      🗑️ Remove
-                    </button>
+                    <div style={{ display: 'flex', gap: '8px', flexDirection: 'column' }}>
+                      {source.is_paused ? (
+                        <button
+                          onClick={() => handleReactivateSource(source.id, source.name)}
+                          style={{
+                            background: '#28a745',
+                            color: 'white',
+                            border: 'none',
+                            padding: '6px 12px',
+                            borderRadius: '4px',
+                            fontSize: '0.8rem',
+                            cursor: 'pointer',
+                            transition: 'background-color 0.2s',
+                            fontWeight: '500'
+                          }}
+                          onMouseEnter={(e) => e.target.style.background = '#218838'}
+                          onMouseLeave={(e) => e.target.style.background = '#28a745'}
+                        >
+                          ▶️ Reactivate
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handlePauseSource(source.id, source.name)}
+                          style={{
+                            background: '#ffc107',
+                            color: '#212529',
+                            border: 'none',
+                            padding: '6px 12px',
+                            borderRadius: '4px',
+                            fontSize: '0.8rem',
+                            cursor: 'pointer',
+                            transition: 'background-color 0.2s',
+                            fontWeight: '500'
+                          }}
+                          onMouseEnter={(e) => e.target.style.background = '#e0a800'}
+                          onMouseLeave={(e) => e.target.style.background = '#ffc107'}
+                        >
+                          ⏸️ Pause
+                        </button>
+                      )}
+                      <button
+                        onClick={() => confirmRemoveSource(source)}
+                        style={{
+                          background: '#dc3545',
+                          color: 'white',
+                          border: 'none',
+                          padding: '6px 12px',
+                          borderRadius: '4px',
+                          fontSize: '0.8rem',
+                          cursor: 'pointer',
+                          transition: 'background-color 0.2s',
+                          fontWeight: '500'
+                        }}
+                        onMouseEnter={(e) => e.target.style.background = '#c82333'}
+                        onMouseLeave={(e) => e.target.style.background = '#dc3545'}
+                      >
+                        🗑️ Remove
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>

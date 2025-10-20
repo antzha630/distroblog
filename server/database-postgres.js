@@ -34,6 +34,7 @@ class Database {
           name VARCHAR(255) NOT NULL,
           url VARCHAR(500) NOT NULL UNIQUE,
           last_checked TIMESTAMP,
+          is_paused BOOLEAN DEFAULT FALSE,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
       `);
@@ -71,6 +72,12 @@ class Database {
       await client.query(`
         ALTER TABLE articles 
         ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      `);
+
+      // Add is_paused column if it doesn't exist (for existing tables)
+      await client.query(`
+        ALTER TABLE sources 
+        ADD COLUMN IF NOT EXISTS is_paused BOOLEAN DEFAULT FALSE
       `);
 
       // Create indexes for better performance
@@ -128,6 +135,22 @@ class Database {
       'UPDATE sources SET last_checked = CURRENT_TIMESTAMP WHERE id = $1',
       [id]
     );
+  }
+
+  async pauseSource(id) {
+    const result = await this.pool.query(
+      'UPDATE sources SET is_paused = TRUE WHERE id = $1 RETURNING *',
+      [id]
+    );
+    return result.rows[0];
+  }
+
+  async reactivateSource(id) {
+    const result = await this.pool.query(
+      'UPDATE sources SET is_paused = FALSE WHERE id = $1 RETURNING *',
+      [id]
+    );
+    return result.rows[0];
   }
 
   // Articles methods

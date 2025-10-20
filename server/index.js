@@ -134,6 +134,54 @@ app.delete('/api/sources/:id', async (req, res) => {
   }
 });
 
+// Pause a source
+app.post('/api/sources/:id/pause', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    if (!id || isNaN(id)) {
+      return res.status(400).json({ error: 'Valid source ID is required' });
+    }
+
+    const source = await database.pauseSource(parseInt(id));
+    if (!source) {
+      return res.status(404).json({ error: 'Source not found' });
+    }
+    
+    res.json({ 
+      message: `Source "${source.name}" has been paused`,
+      source: source
+    });
+  } catch (error) {
+    console.error('Error pausing source:', error);
+    res.status(500).json({ error: 'Failed to pause source' });
+  }
+});
+
+// Reactivate a source
+app.post('/api/sources/:id/reactivate', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    if (!id || isNaN(id)) {
+      return res.status(400).json({ error: 'Valid source ID is required' });
+    }
+
+    const source = await database.reactivateSource(parseInt(id));
+    if (!source) {
+      return res.status(404).json({ error: 'Source not found' });
+    }
+    
+    res.json({ 
+      message: `Source "${source.name}" has been reactivated`,
+      source: source
+    });
+  } catch (error) {
+    console.error('Error reactivating source:', error);
+    res.status(500).json({ error: 'Failed to reactivate source' });
+  }
+});
+
 // Get all categories
 app.get('/api/categories', async (req, res) => {
   try {

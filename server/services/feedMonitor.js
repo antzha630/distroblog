@@ -200,10 +200,23 @@ class FeedMonitor {
         return [];
       }
 
-      console.log(`🔍 Checking ${sources.length} sources for new articles...`);
+      // Filter out paused sources
+      const activeSources = sources.filter(source => !source.is_paused);
+      const pausedSources = sources.filter(source => source.is_paused);
+      
+      if (pausedSources.length > 0) {
+        console.log(`⏸️ Skipping ${pausedSources.length} paused sources: ${pausedSources.map(s => s.name).join(', ')}`);
+      }
+
+      if (activeSources.length === 0) {
+        console.log('No active sources to check');
+        return [];
+      }
+
+      console.log(`🔍 Checking ${activeSources.length} active sources for new articles...`);
       const results = [];
       
-      for (const source of sources) {
+      for (const source of activeSources) {
         try {
           // Use limited feed checking to only get 5 most recent articles per source
           const newArticles = await this.checkFeedLimited(source, 5);
@@ -225,7 +238,7 @@ class FeedMonitor {
         }
       }
       
-      console.log(`✅ Feed check completed. ${results.filter(r => r.success).length}/${results.length} sources successful`);
+      console.log(`✅ Feed check completed. ${results.filter(r => r.success).length}/${results.length} active sources successful`);
       return results;
     } catch (error) {
       console.error('Error checking all feeds:', error);
