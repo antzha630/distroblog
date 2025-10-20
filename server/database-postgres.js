@@ -38,6 +38,15 @@ class Database {
         )
       `);
 
+      // Create categories table
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS categories (
+          id SERIAL PRIMARY KEY,
+          name VARCHAR(100) NOT NULL UNIQUE,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
       // Create articles table
       await client.query(`
         CREATE TABLE IF NOT EXISTS articles (
@@ -448,6 +457,34 @@ class Database {
       AND (articles.link LIKE '%' || REPLACE(REPLACE(s.url, 'https://', ''), 'http://', '') || '%')
     `);
     return result.rowCount;
+  }
+
+  // Categories methods
+  async getAllCategories() {
+    const result = await this.pool.query('SELECT * FROM categories ORDER BY name');
+    return result.rows;
+  }
+
+  async addCategory(name) {
+    try {
+      const result = await this.pool.query(
+        'INSERT INTO categories (name) VALUES ($1) RETURNING *',
+        [name]
+      );
+      return result.rows[0];
+    } catch (error) {
+      if (error.code === '23505') { // Unique constraint violation
+        // Category already exists, return it
+        const result = await this.pool.query('SELECT * FROM categories WHERE name = $1', [name]);
+        return result.rows[0];
+      }
+      throw error;
+    }
+  }
+
+  async getCategoryByName(name) {
+    const result = await this.pool.query('SELECT * FROM categories WHERE name = $1', [name]);
+    return result.rows[0];
   }
 
   async close() {

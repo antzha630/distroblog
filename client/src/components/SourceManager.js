@@ -8,7 +8,7 @@ function SourceManager({ onSourceAdded, onSourceRemoved }) {
   const [newSource, setNewSource] = useState({
     url: '',
     name: '',
-    category: 'general'
+    category: ''
   });
   const [isValidating, setIsValidating] = useState(false);
   const [validationError, setValidationError] = useState('');
@@ -17,9 +17,12 @@ function SourceManager({ onSourceAdded, onSourceRemoved }) {
   const [showDetectedFeeds, setShowDetectedFeeds] = useState(false);
   const [showRemoveConfirm, setShowRemoveConfirm] = useState(null);
   const [isRemoving, setIsRemoving] = useState(false);
+  const [categories, setCategories] = useState([]);
+  const [showCategorySuggestions, setShowCategorySuggestions] = useState(false);
 
   useEffect(() => {
     fetchSources();
+    fetchCategories();
   }, []);
 
   const fetchSources = async () => {
@@ -30,6 +33,15 @@ function SourceManager({ onSourceAdded, onSourceRemoved }) {
       console.error('Error fetching sources:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchCategories = async () => {
+    try {
+      const response = await axios.get('/api/categories');
+      setCategories(response.data);
+    } catch (error) {
+      console.error('Error fetching categories:', error);
     }
   };
 
@@ -73,6 +85,21 @@ function SourceManager({ onSourceAdded, onSourceRemoved }) {
     setDetectedFeeds([]);
   };
 
+  const handleCategoryChange = (e) => {
+    const value = e.target.value;
+    setNewSource({ ...newSource, category: value });
+    setShowCategorySuggestions(value.length > 0);
+  };
+
+  const handleCategorySelect = (categoryName) => {
+    setNewSource({ ...newSource, category: categoryName });
+    setShowCategorySuggestions(false);
+  };
+
+  const filteredCategories = categories.filter(cat => 
+    cat.name.toLowerCase().includes(newSource.category.toLowerCase())
+  );
+
   const handleAddSource = async (e) => {
     e.preventDefault();
     setIsValidating(true);
@@ -81,8 +108,9 @@ function SourceManager({ onSourceAdded, onSourceRemoved }) {
     try {
       await axios.post('/api/sources', newSource);
       
-      // Refresh sources list
+      // Refresh sources list and categories
       await fetchSources();
+      await fetchCategories();
       
       // Notify parent component that source was added
       if (onSourceAdded) {
@@ -90,7 +118,7 @@ function SourceManager({ onSourceAdded, onSourceRemoved }) {
       }
       
       // Reset form
-      setNewSource({ url: '', name: '', category: 'general' });
+      setNewSource({ url: '', name: '', category: '' });
       setShowAddForm(false);
       setDetectedFeeds([]);
       setShowDetectedFeeds(false);
@@ -329,20 +357,50 @@ function SourceManager({ onSourceAdded, onSourceRemoved }) {
 
               <div className="form-group">
                 <label className="form-label">Category</label>
-                <select
-                  className="form-select"
-                  value={newSource.category}
-                  onChange={(e) => setNewSource({ ...newSource, category: e.target.value })}
-                >
-                  <option value="general">General News</option>
-                  <option value="government">Government</option>
-                  <option value="business">Business</option>
-                  <option value="technology">Technology</option>
-                  <option value="health">Health</option>
-                  <option value="science">Science</option>
-                  <option value="sports">Sports</option>
-                  <option value="other">Other</option>
-                </select>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    type="text"
+                    className="form-input"
+                    value={newSource.category}
+                    onChange={handleCategoryChange}
+                    onFocus={() => setShowCategorySuggestions(newSource.category.length > 0)}
+                    onBlur={() => setTimeout(() => setShowCategorySuggestions(false), 200)}
+                    placeholder="Type a category name (e.g., Technology, Health, Politics)"
+                    required
+                  />
+                  {showCategorySuggestions && filteredCategories.length > 0 && (
+                    <div style={{
+                      position: 'absolute',
+                      top: '100%',
+                      left: 0,
+                      right: 0,
+                      background: 'white',
+                      border: '1px solid #ddd',
+                      borderTop: 'none',
+                      borderRadius: '0 0 4px 4px',
+                      maxHeight: '200px',
+                      overflowY: 'auto',
+                      zIndex: 1000,
+                      boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                    }}>
+                      {filteredCategories.map((category) => (
+                        <div
+                          key={category.id}
+                          style={{
+                            padding: '8px 12px',
+                            cursor: 'pointer',
+                            borderBottom: '1px solid #eee'
+                          }}
+                          onMouseDown={() => handleCategorySelect(category.name)}
+                          onMouseEnter={(e) => e.target.style.backgroundColor = '#f5f5f5'}
+                          onMouseLeave={(e) => e.target.style.backgroundColor = 'white'}
+                        >
+                          {category.name}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
 
               {validationError && (

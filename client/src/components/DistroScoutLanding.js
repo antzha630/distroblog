@@ -135,11 +135,10 @@ function DistroScoutLanding({ onArticlesSelected }) {
   };
 
 
-  const formatDate = (dateString, fallback) => {
-    const value = dateString || fallback;
-    if (!value) return 'Date unavailable';
+  const formatDate = (dateString) => {
+    if (!dateString) return 'Date unavailable';
 
-    const date = new Date(value);
+    const date = new Date(dateString);
     const now = new Date();
     const diffInHours = Math.floor((now - date) / (1000 * 60 * 60));
     
@@ -259,7 +258,7 @@ function DistroScoutLanding({ onArticlesSelected }) {
                 
                 <h3 className="article-title">{article.title}</h3>
                 
-                <div className="article-date">{formatDate(article.pub_date, article.created_at)}</div>
+                <div className="article-date">{formatDate(article.pub_date)}</div>
                 
                 {article.preview && article.preview !== "No preview available" && article.preview !== "9" && article.preview !== "9..." && (
                   <div className="article-preview">

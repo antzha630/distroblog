@@ -82,12 +82,19 @@ app.post('/api/sources', async (req, res) => {
       return res.status(400).json({ error: 'Invalid or inaccessible RSS feed' });
     }
 
+    // Add category if provided
+    let categoryName = null;
+    if (category && category.trim()) {
+      const categoryRecord = await database.addCategory(category.trim());
+      categoryName = categoryRecord.name;
+    }
+
     const source = await database.addSource(name, url);
     const sourceId = source.id;
     
     // Fetch 5 most recent articles from the new source
     try {
-      await feedMonitor.checkFeedLimited({ id: sourceId, url, name, category }, 5);
+      await feedMonitor.checkFeedLimited({ id: sourceId, url, name, category: categoryName }, 5);
       console.log(`✅ Added 5 most recent articles from new source: ${name}`);
     } catch (error) {
       console.log('Could not fetch recent articles for new source:', error.message);
@@ -124,6 +131,34 @@ app.delete('/api/sources/:id', async (req, res) => {
   } catch (error) {
     console.error('Error removing source:', error);
     res.status(500).json({ error: 'Failed to remove source' });
+  }
+});
+
+// Get all categories
+app.get('/api/categories', async (req, res) => {
+  try {
+    const categories = await database.getAllCategories();
+    res.json(categories);
+  } catch (error) {
+    console.error('Error fetching categories:', error);
+    res.status(500).json({ error: 'Failed to fetch categories' });
+  }
+});
+
+// Add a new category
+app.post('/api/categories', async (req, res) => {
+  try {
+    const { name } = req.body;
+    
+    if (!name || !name.trim()) {
+      return res.status(400).json({ error: 'Category name is required' });
+    }
+
+    const category = await database.addCategory(name.trim());
+    res.json(category);
+  } catch (error) {
+    console.error('Error adding category:', error);
+    res.status(500).json({ error: 'Failed to add category' });
   }
 });
 
