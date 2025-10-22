@@ -27,12 +27,7 @@ function DistroScoutLanding({ onArticlesSelected }) {
   const fetchArticles = async () => {
     try {
       setLoading(true);
-      const endpoint =
-        timeFilter === 'all'
-          ? '/api/articles/last5-per-source'
-          : timeFilter === '2days'
-            ? '/api/articles/recent/2'
-            : '/api/articles/recent/7';
+      const endpoint = timeFilter === '2days' ? '/api/articles/recent/2' : '/api/articles/recent/7';
       const response = await fetch(`${config.API_BASE_URL}${endpoint}`);
       if (!response.ok) {
         throw new Error('Failed to fetch articles');
@@ -240,13 +235,6 @@ function DistroScoutLanding({ onArticlesSelected }) {
               onClick={() => setTimeFilter('7days')}
             >
               Past 7 Days
-            </button>
-            <button
-              type="button"
-              className={`mode-btn ${timeFilter === 'all' ? 'active' : ''}`}
-              onClick={() => setTimeFilter('all')}
-            >
-              Latest per Source
             </button>
           </div>
           <button 
