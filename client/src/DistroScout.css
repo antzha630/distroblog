@@ -87,6 +87,13 @@
   border-color: #007bff;
 }
 
+/* Select all section */
+.select-all-section {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 25px;
+}
+
 /* Select all button */
 .select-all-btn {
   background: #28a745;
@@ -98,7 +105,6 @@
   font-weight: 600;
   cursor: pointer;
   transition: background-color 0.2s;
-  margin-bottom: 25px;
 }
 
 .select-all-btn:hover {
