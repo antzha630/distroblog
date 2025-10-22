@@ -189,6 +189,11 @@ app.put('/api/sources/:id/category', async (req, res) => {
       return res.status(400).json({ error: 'Valid source ID is required' });
     }
 
+    // Add category to categories table if it doesn't exist
+    if (category && category.trim()) {
+      await database.addCategory(category.trim());
+    }
+
     const source = await database.updateSourceCategory(parseInt(id), category);
     if (!source) {
       return res.status(404).json({ error: 'Source not found' });
@@ -691,6 +696,34 @@ app.post('/api/maintenance/backfill-article-categories', async (req, res) => {
   } catch (error) {
     console.error('Error backfilling article categories:', error);
     res.status(500).json({ success: false, error: 'Failed to backfill article categories' });
+  }
+});
+
+// Maintenance: add all source categories to categories table
+app.post('/api/maintenance/backfill-categories-table', async (req, res) => {
+  try {
+    const sources = await database.getAllSources();
+    let added = 0;
+
+    for (const source of sources) {
+      if (source.category) {
+        try {
+          await database.addCategory(source.category);
+          added++;
+          console.log(`Added category "${source.category}" to categories table`);
+        } catch (error) {
+          // Category might already exist, which is fine
+          if (!error.message.includes('duplicate key')) {
+            console.error(`Error adding category "${source.category}":`, error.message);
+          }
+        }
+      }
+    }
+
+    res.json({ success: true, added });
+  } catch (error) {
+    console.error('Error backfilling categories table:', error);
+    res.status(500).json({ success: false, error: 'Failed to backfill categories table' });
   }
 });
 
