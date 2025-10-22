@@ -33,6 +33,7 @@ class Database {
           id SERIAL PRIMARY KEY,
           name VARCHAR(255) NOT NULL,
           url VARCHAR(500) NOT NULL UNIQUE,
+          category VARCHAR(255),
           last_checked TIMESTAMP,
           is_paused BOOLEAN DEFAULT FALSE,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -78,6 +79,12 @@ class Database {
       await client.query(`
         ALTER TABLE sources 
         ADD COLUMN IF NOT EXISTS is_paused BOOLEAN DEFAULT FALSE
+      `);
+
+      // Add category column if it doesn't exist (for existing tables)
+      await client.query(`
+        ALTER TABLE sources 
+        ADD COLUMN IF NOT EXISTS category VARCHAR(255)
       `);
 
       // Create indexes for better performance
