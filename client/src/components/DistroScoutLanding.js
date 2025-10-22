@@ -3,6 +3,7 @@ import config from '../config';
 
 function DistroScoutLanding({ onArticlesSelected }) {
   const [articles, setArticles] = useState([]);
+  const [filteredArticles, setFilteredArticles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedArticles, setSelectedArticles] = useState([]);
   const [error, setError] = useState(null);
@@ -10,10 +11,18 @@ function DistroScoutLanding({ onArticlesSelected }) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [newUrl, setNewUrl] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [categories, setCategories] = useState([]);
+  const [selectedCategory, setSelectedCategory] = useState('all');
+  const [sortOrder, setSortOrder] = useState('newest'); // 'newest' | 'oldest'
 
   useEffect(() => {
     fetchArticles();
+    fetchCategories();
   }, [timeFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    applyFiltersAndSort();
+  }, [articles, selectedCategory, sortOrder]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchArticles = async () => {
     try {
@@ -37,6 +46,41 @@ function DistroScoutLanding({ onArticlesSelected }) {
     } finally {
       setLoading(false);
     }
+  };
+
+  const fetchCategories = async () => {
+    try {
+      const response = await fetch(`${config.API_BASE_URL}/api/categories`);
+      if (response.ok) {
+        const data = await response.json();
+        setCategories(data);
+      }
+    } catch (err) {
+      console.error('Error fetching categories:', err);
+    }
+  };
+
+  const applyFiltersAndSort = () => {
+    let filtered = [...articles];
+
+    // Apply category filter
+    if (selectedCategory !== 'all') {
+      filtered = filtered.filter(article => article.category === selectedCategory);
+    }
+
+    // Apply sort order
+    filtered.sort((a, b) => {
+      const dateA = new Date(a.pub_date || a.created_at);
+      const dateB = new Date(b.pub_date || b.created_at);
+      
+      if (sortOrder === 'newest') {
+        return dateB - dateA; // Newest first
+      } else {
+        return dateA - dateB; // Oldest first
+      }
+    });
+
+    setFilteredArticles(filtered);
   };
 
   const handleRefresh = async () => {
@@ -72,10 +116,10 @@ function DistroScoutLanding({ onArticlesSelected }) {
   };
 
   const handleSelectAll = () => {
-    if (selectedArticles.length === articles.length) {
+    if (selectedArticles.length === filteredArticles.length && filteredArticles.length > 0) {
       setSelectedArticles([]);
     } else {
-      setSelectedArticles(articles.map(article => article.id));
+      setSelectedArticles(filteredArticles.map(article => article.id));
     }
   };
 
@@ -215,24 +259,56 @@ function DistroScoutLanding({ onArticlesSelected }) {
         </div>
       </div>
 
-      {/* Select All Button */}
-      <div className="select-all-section">
+      {/* Filter and Sort Controls */}
+      <div className="filter-sort-section">
+        <div className="filter-sort-controls">
+          <div className="dropdown-group">
+            <label htmlFor="category-filter">Filter:</label>
+            <select
+              id="category-filter"
+              value={selectedCategory}
+              onChange={(e) => setSelectedCategory(e.target.value)}
+              className="filter-dropdown"
+            >
+              <option value="all">All Categories</option>
+              {categories.map(category => (
+                <option key={category.id} value={category.name}>
+                  {category.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          
+          <div className="dropdown-group">
+            <label htmlFor="sort-order">Sort:</label>
+            <select
+              id="sort-order"
+              value={sortOrder}
+              onChange={(e) => setSortOrder(e.target.value)}
+              className="sort-dropdown"
+            >
+              <option value="newest">Newest to Oldest</option>
+              <option value="oldest">Oldest to Newest</option>
+            </select>
+          </div>
+        </div>
+        
         <button 
           onClick={handleSelectAll}
           className="select-all-btn"
         >
-          {selectedArticles.length === articles.length && articles.length > 0 ? 'All Selected' : 'Select All'}
+          {selectedArticles.length === filteredArticles.length && filteredArticles.length > 0 ? 'All Selected' : 'Select All'}
         </button>
       </div>
 
       {/* Articles List */}
       <div className="articles-list">
-        {articles.length === 0 ? (
+        {filteredArticles.length === 0 ? (
           <div className="no-articles">
             <p>No articles found. Try adding more sources or check back later.</p>
           </div>
         ) : (
-          articles.map(article => (
+          filteredArticles.map(article => (
             <div 
               key={article.id} 
               className={`article-card ${selectedArticles.includes(article.id) ? 'selected' : ''}`}
