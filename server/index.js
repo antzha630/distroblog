@@ -193,6 +193,9 @@ app.put('/api/sources/:id/category', async (req, res) => {
     if (!source) {
       return res.status(404).json({ error: 'Source not found' });
     }
+
+    // Update all existing articles from this source with the new category
+    await database.updateArticlesCategoryBySource(parseInt(id), category);
     
     res.json({ 
       message: `Source "${source.name}" category updated successfully`,
@@ -667,6 +670,27 @@ app.post('/api/maintenance/backfill-pubdates', async (req, res) => {
   } catch (error) {
     console.error('Error backfilling pub dates:', error);
     res.status(500).json({ success: false, error: 'Failed to backfill pub dates' });
+  }
+});
+
+// Maintenance: backfill article categories from source categories
+app.post('/api/maintenance/backfill-article-categories', async (req, res) => {
+  try {
+    const sources = await database.getAllSources();
+    let updated = 0;
+
+    for (const source of sources) {
+      if (source.category) {
+        const updatedCount = await database.updateArticlesCategoryBySource(source.id, source.category);
+        updated += updatedCount;
+        console.log(`Updated ${updatedCount} articles for source "${source.name}" with category "${source.category}"`);
+      }
+    }
+
+    res.json({ success: true, updated });
+  } catch (error) {
+    console.error('Error backfilling article categories:', error);
+    res.status(500).json({ success: false, error: 'Failed to backfill article categories' });
   }
 });
 

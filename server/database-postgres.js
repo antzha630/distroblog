@@ -168,6 +168,14 @@ class Database {
     return result.rows[0];
   }
 
+  async updateArticlesCategoryBySource(sourceId, category) {
+    const result = await this.pool.query(
+      'UPDATE articles SET category = $1 WHERE source_id = $2',
+      [category, sourceId]
+    );
+    return result.rowCount;
+  }
+
   // Articles methods
   async getAllArticles() {
     const result = await this.pool.query(`
