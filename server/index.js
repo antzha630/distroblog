@@ -17,9 +17,6 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
-// Initialize database
-database.init();
-
 // Routes
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
@@ -853,12 +850,26 @@ app.get('*', (req, res) => {
 });
 
 // Start the server
-app.listen(PORT, () => {
-  console.log(`Distro Scoopstream server running on port ${PORT}`);
-  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-  
-  // Start feed monitoring
-  feedMonitor.startMonitoring();
-});
+const startServer = async () => {
+  try {
+    // Initialize database first
+    await database.init();
+    console.log('Database initialized successfully');
+    
+    // Start the server
+    app.listen(PORT, () => {
+      console.log(`Distro Scoopstream server running on port ${PORT}`);
+      console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+      
+      // Start feed monitoring
+      feedMonitor.startMonitoring();
+    });
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  }
+};
+
+startServer();
 
 module.exports = app;
