@@ -182,6 +182,31 @@ app.post('/api/sources/:id/reactivate', async (req, res) => {
   }
 });
 
+// Update source category
+app.put('/api/sources/:id/category', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { category } = req.body;
+    
+    if (!id || isNaN(id)) {
+      return res.status(400).json({ error: 'Valid source ID is required' });
+    }
+
+    const source = await database.updateSourceCategory(parseInt(id), category);
+    if (!source) {
+      return res.status(404).json({ error: 'Source not found' });
+    }
+    
+    res.json({ 
+      message: `Source "${source.name}" category updated successfully`,
+      source: source
+    });
+  } catch (error) {
+    console.error('Error updating source category:', error);
+    res.status(500).json({ error: 'Failed to update source category' });
+  }
+});
+
 // Get all categories
 app.get('/api/categories', async (req, res) => {
   try {

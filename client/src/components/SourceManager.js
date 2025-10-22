@@ -19,6 +19,8 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
   const [isRemoving, setIsRemoving] = useState(false);
   const [categories, setCategories] = useState([]);
   const [showCategorySuggestions, setShowCategorySuggestions] = useState(false);
+  const [editingCategory, setEditingCategory] = useState(null);
+  const [newCategory, setNewCategory] = useState('');
 
   useEffect(() => {
     fetchSources();
@@ -188,6 +190,36 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
     } finally {
       setIsRemoving(false);
     }
+  };
+
+  const handleEditCategory = (sourceId, currentCategory) => {
+    setEditingCategory(sourceId);
+    setNewCategory(currentCategory || '');
+  };
+
+  const handleSaveCategory = async (sourceId) => {
+    try {
+      // Update the source's category in the database
+      await axios.put(`/api/sources/${sourceId}/category`, {
+        category: newCategory.trim()
+      });
+      
+      // Update local state
+      setSources(prev => prev.map(s => 
+        s.id === sourceId ? { ...s, category: newCategory.trim() } : s
+      ));
+      
+      setEditingCategory(null);
+      setNewCategory('');
+    } catch (error) {
+      console.error('Error updating category:', error);
+      alert('Failed to update category. Please try again.');
+    }
+  };
+
+  const handleCancelEdit = () => {
+    setEditingCategory(null);
+    setNewCategory('');
   };
 
   const confirmRemoveSource = (source) => {
@@ -515,15 +547,71 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
                       {source.name}
                     </h3>
                     <div style={{ fontSize: '0.9rem', color: '#6c757d', marginBottom: '12px' }}>
-                      <span style={{ 
-                        background: '#e9ecef', 
-                        padding: '4px 10px', 
-                        borderRadius: '12px',
-                        marginRight: '12px',
-                        fontWeight: '500'
-                      }}>
-                        #{source.category}
-                      </span>
+                      {editingCategory === source.id ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                          <input
+                            type="text"
+                            value={newCategory}
+                            onChange={(e) => setNewCategory(e.target.value)}
+                            placeholder="Enter category"
+                            style={{
+                              padding: '4px 8px',
+                              border: '1px solid #ced4da',
+                              borderRadius: '4px',
+                              fontSize: '0.9rem',
+                              width: '150px'
+                            }}
+                            onKeyPress={(e) => {
+                              if (e.key === 'Enter') {
+                                handleSaveCategory(source.id);
+                              }
+                            }}
+                          />
+                          <button
+                            onClick={() => handleSaveCategory(source.id)}
+                            style={{
+                              background: '#28a745',
+                              color: 'white',
+                              border: 'none',
+                              padding: '4px 8px',
+                              borderRadius: '4px',
+                              fontSize: '0.8rem',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            ✓
+                          </button>
+                          <button
+                            onClick={handleCancelEdit}
+                            style={{
+                              background: '#6c757d',
+                              color: 'white',
+                              border: 'none',
+                              padding: '4px 8px',
+                              borderRadius: '4px',
+                              fontSize: '0.8rem',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ) : (
+                        <span style={{ 
+                          background: '#e9ecef', 
+                          padding: '4px 10px', 
+                          borderRadius: '12px',
+                          marginRight: '12px',
+                          fontWeight: '500',
+                          cursor: 'pointer',
+                          display: 'inline-block'
+                        }}
+                        onClick={() => handleEditCategory(source.id, source.category)}
+                        title="Click to edit category"
+                        >
+                          #{source.category || 'No category'}
+                        </span>
+                      )}
                       Last checked: {formatDate(source.last_checked)}
                     </div>
                     <div style={{ fontSize: '0.9rem', wordBreak: 'break-all', color: '#495057' }}>

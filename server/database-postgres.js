@@ -153,6 +153,14 @@ class Database {
     return result.rows[0];
   }
 
+  async updateSourceCategory(id, category) {
+    const result = await this.pool.query(
+      'UPDATE sources SET category = $1 WHERE id = $2 RETURNING *',
+      [category, id]
+    );
+    return result.rows[0];
+  }
+
   // Articles methods
   async getAllArticles() {
     const result = await this.pool.query(`
