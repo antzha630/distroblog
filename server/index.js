@@ -86,7 +86,7 @@ app.post('/api/sources', async (req, res) => {
       categoryName = categoryRecord.name;
     }
 
-    const source = await database.addSource(name, url);
+    const source = await database.addSource(name, url, categoryName);
     const sourceId = source.id;
     
     // Fetch 5 most recent articles from the new source

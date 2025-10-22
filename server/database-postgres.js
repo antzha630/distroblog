@@ -109,10 +109,10 @@ class Database {
     return result.rows;
   }
 
-  async addSource(name, url) {
+  async addSource(name, url, category = null) {
     const result = await this.pool.query(
-      'INSERT INTO sources (name, url) VALUES ($1, $2) RETURNING *',
-      [name, url]
+      'INSERT INTO sources (name, url, category) VALUES ($1, $2, $3) RETURNING *',
+      [name, url, category]
     );
     return result.rows[0];
   }
