@@ -68,12 +68,14 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
       const response = await axios.post('/api/sources/detect', {
         url: newSource.url.trim()
       });
-      
-      setDetectedFeeds(response.data.feeds);
+
+      // Only show feeds that the server marked as valid
+      const validFeeds = (response.data.feeds || []).filter(f => f.status === 'valid');
+      setDetectedFeeds(validFeeds);
       setShowDetectedFeeds(true);
-      
-      if (response.data.feeds.length === 0) {
-        setValidationError('No RSS feeds found on this website. Try entering the direct RSS URL.');
+
+      if (validFeeds.length === 0) {
+        setValidationError('No valid RSS feeds found. Try entering the direct RSS URL.');
       }
     } catch (error) {
       setValidationError(

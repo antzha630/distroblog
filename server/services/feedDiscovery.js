@@ -431,69 +431,73 @@ class FeedDiscovery {
   }
 
   isValidFeed(content) {
-    if (!content || typeof content !== 'string') {
+    if (!content) return false;
+    if (typeof content !== 'string') return false;
+
+    // Only sniff the first chunk for speed and to reduce false positives
+    const snippet = content.slice(0, 4096).toLowerCase();
+
+    // Quickly reject obvious HTML documents
+    if (snippet.includes('<html') || snippet.includes('<!doctype html')) {
       return false;
     }
-    
-    const lowerContent = content.toLowerCase();
-    
-    // Check for RSS/Atom indicators
-    const feedIndicators = [
-      '<rss',
-      '<feed',
-      '<channel',
-      '<?xml',
-      '<atom:feed',
-      '<feed xmlns',
-      '<rdf:rdf',
-      '<rss version',
-      '<atom version',
-      'application/rss+xml',
-      'application/atom+xml',
-      'application/xml'
-    ];
-    
-    // Check if content contains feed indicators
-    for (const indicator of feedIndicators) {
-      if (lowerContent.includes(indicator)) {
-        // Additional validation: ensure it's not just a mention in HTML
-        if (!lowerContent.includes('<html') && !lowerContent.includes('<!doctype html')) {
-          return true;
-        }
-      }
+
+    // RSS/Atom/XML signatures near the top
+    const xmlSignatures = ['<rss', '<feed', '<rdf:rdf', '<channel', '<?xml'];
+    if (xmlSignatures.some(sig => snippet.includes(sig))) {
+      return true;
     }
-    
-    // Check for JSON Feed format
+
+    // JSON Feed minimal validation
     try {
-      const jsonContent = JSON.parse(content);
-      if (jsonContent.version && jsonContent.items) {
+      const json = JSON.parse(snippet);
+      if (json && typeof json === 'object' && json.version && (json.items || json.item)) {
         return true;
       }
-    } catch (error) {
-      // Not JSON, continue with other checks
+    } catch (_) {
+      // not JSON
     }
-    
+
     return false;
   }
 
   async testFeed(feedUrl) {
     try {
+      // Quick HEAD to verify the content-type when available
+      try {
+        const head = await axios.head(feedUrl, {
+          timeout: 5000,
+          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; RSS Feed Discovery Bot)' }
+        });
+        const ct = (head.headers['content-type'] || '').toLowerCase();
+        // Accept xml/atom/rss or json (for JSONFeed). If clearly html, reject early.
+        if (ct && ct.includes('html')) {
+          return { success: false, status: head.status, error: 'HTML content-type' };
+        }
+      } catch (_) {
+        // HEAD not supported; continue with GET
+      }
+
+      // GET with small timeout and rely on content sniffing
       const response = await this.makeRequestWithRetry(feedUrl, { timeout: 10000 });
-      
+      const contentType = (response.headers['content-type'] || '').toLowerCase();
+
+      // Reject obvious HTML content-types
+      if (contentType.includes('text/html')) {
+        return { success: false, status: response.status, error: 'HTML page, not a feed' };
+      }
+
+      // Validate body content
       if (response && response.status === 200 && this.isValidFeed(response.data)) {
         return {
           success: true,
           status: response.status,
-          contentType: response.headers['content-type'],
-          size: response.data.length
-        };
-      } else {
-        return {
-          success: false,
-          status: response?.status || 'unknown',
-          error: 'Invalid feed content'
+          contentType,
+          size: typeof response.data === 'string' ? response.data.length : 0
         };
       }
+
+      return { success: false, status: response?.status || 'unknown', error: 'Invalid feed content' };
     } catch (error) {
       return {
         success: false,
