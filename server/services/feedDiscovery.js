@@ -98,6 +98,10 @@ class FeedDiscovery {
     // Always try HTML parsing first (most reliable)
     methods.push({ name: 'HTML', func: this.parseHtmlForFeeds.bind(this) });
     
+    // Try parent-page strategies early (cheap and high-signal)
+    methods.push({ name: 'Parent meta', func: this.checkParentPagesMeta.bind(this) });
+    methods.push({ name: 'Parent suffixes', func: this.checkParentCommonSuffixes.bind(this) });
+    
     // Check for platform-specific patterns first
     if (baseUrl.includes('substack.com')) {
       methods.push({ name: 'Substack', func: this.checkSubstackFeeds.bind(this) });
@@ -115,6 +119,9 @@ class FeedDiscovery {
     // Always try common paths (but after platform-specific)
     methods.push({ name: 'Common paths', func: this.checkCommonFeedPaths.bind(this) });
     
+    // Sitemap discovery (run after common paths to avoid heavy requests when not needed)
+    methods.push({ name: 'Sitemap', func: this.checkSitemapForFeeds.bind(this) });
+    
     // Add remaining platform checks if not already added
     if (!baseUrl.includes('substack.com')) {
       methods.push({ name: 'Substack', func: this.checkSubstackFeeds.bind(this) });
@@ -130,6 +137,110 @@ class FeedDiscovery {
     }
     
     return methods;
+  }
+
+  // Generate parent paths by walking up the URL path hierarchy
+  buildParentPaths(baseUrl) {
+    try {
+      const u = new URL(baseUrl);
+      const parts = u.pathname.split('/').filter(Boolean);
+      const parents = ['/' + parts.slice(0, 1).join('/')];
+      for (let i = 1; i < parts.length; i++) {
+        parents.push('/' + parts.slice(0, i + 1).join('/'));
+      }
+      // Ensure root is included
+      parents.unshift('/');
+      // Deduplicate and keep shallowest first
+      return [...new Set(parents)];
+    } catch (_) {
+      return ['/'];
+    }
+  }
+
+  // Check parent pages for <link rel="alternate" ...> style feed hints
+  async checkParentPagesMeta(baseUrl) {
+    try {
+      const u = new URL(baseUrl);
+      const parents = this.buildParentPaths(baseUrl);
+      const working = [];
+      for (const p of parents) {
+        const pageUrl = `${u.origin}${p}`.replace(/\/$/, '');
+        const found = await this.parseHtmlForFeeds(pageUrl);
+        if (found && found.length) {
+          working.push(...found);
+          break; // stop after first success
+        }
+      }
+      return working;
+    } catch (_) {
+      return [];
+    }
+  }
+
+  // Probe common feed paths on each parent path and common blog sections
+  async checkParentCommonSuffixes(baseUrl) {
+    try {
+      const u = new URL(baseUrl);
+      const parents = this.buildParentPaths(baseUrl);
+      const sectionHints = ['', '/blog', '/news', '/posts', '/articles', '/updates'];
+      for (const parent of parents) {
+        for (const section of sectionHints) {
+          const prefix = `${u.origin}${section || parent}`.replace(/\/$/, '');
+          const found = await this.checkCommonFeedPaths(prefix);
+          if (found && found.length) return found;
+        }
+      }
+      return [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  // Parse sitemap.xml for likely feed URLs or relevant sections to probe
+  async checkSitemapForFeeds(baseUrl) {
+    try {
+      const u = new URL(baseUrl);
+      const sitemapUrl = `${u.origin}/sitemap.xml`;
+      const res = await this.makeRequestWithRetry(sitemapUrl, { timeout: 8000 });
+      if (!res || res.status !== 200 || typeof res.data !== 'string') return [];
+      const xml = res.data;
+      const urls = [];
+      // Extract URLs from a simple regex (cheap and sufficient here)
+      const locRegex = /<loc>([^<]+)<\/loc>/gi;
+      let m;
+      while ((m = locRegex.exec(xml)) !== null) {
+        const href = m[1];
+        // Only same-origin URLs
+        try {
+          const v = new URL(href);
+          if (v.origin !== u.origin) continue;
+          urls.push(href);
+        } catch (_) {}
+      }
+
+      // First pass: direct feed-looking URLs
+      const candidateFeeds = urls.filter(h => /(rss|atom|feed)\.(xml|rss|atom)|\/(rss|atom|feed)(\/|$)/i.test(h));
+      for (const cand of candidateFeeds) {
+        try {
+          const r = await this.makeRequestWithRetry(cand);
+          if (r && r.status === 200 && this.isValidFeed(r.data)) {
+            return [cand];
+          }
+        } catch (_) {}
+      }
+
+      // Second pass: likely sections to probe with common paths
+      const sectionUrls = urls.filter(h => /\/(blog|news|posts|articles|updates)(\/|$)/i.test(h));
+      for (const s of sectionUrls.slice(0, 20)) { // cap to avoid heavy scans
+        try {
+          const found = await this.checkCommonFeedPaths(s.replace(/\/$/, ''));
+          if (found && found.length) return found;
+        } catch (_) {}
+      }
+      return [];
+    } catch (_) {
+      return [];
+    }
   }
 
   normalizeUrl(url) {
