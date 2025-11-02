@@ -7,11 +7,8 @@ require('dotenv').config();
 
 const feedMonitor = require('./services/feedMonitor');
 const FeedDiscovery = require('./services/feedDiscovery');
-const WebScraper = require('./services/webScraper');
 const llmService = require('./services/llmService');
 const database = require('./database-postgres');
-
-const webScraper = new WebScraper();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -76,38 +73,10 @@ app.post('/api/sources', async (req, res) => {
       return res.status(400).json({ error: 'URL and name are required' });
     }
 
-    // Try RSS feed first
-    let monitoringType = 'RSS';
-    let feedUrl = url;
-    let isValid = await feedMonitor.validateFeed(url);
-    
-    // If direct URL is not an RSS feed, try to discover one
+    // Validate RSS feed
+    const isValid = await feedMonitor.validateFeed(url);
     if (!isValid) {
-      const feedDiscovery = new FeedDiscovery();
-      const discoveredFeed = await feedDiscovery.discoverFeedUrl(url);
-      
-      if (discoveredFeed) {
-        feedUrl = discoveredFeed;
-        isValid = await feedMonitor.validateFeed(discoveredFeed);
-        if (isValid) {
-          console.log(`✅ Discovered RSS feed: ${discoveredFeed}`);
-        }
-      }
-    }
-
-    // If still no RSS feed found, use web scraping fallback
-    if (!isValid) {
-      console.log(`📝 No RSS feed found for ${url}, using web scraping fallback`);
-      monitoringType = 'WEB_SCRAPING';
-      // Validate that the URL is accessible
-      try {
-        const response = await axios.head(url, { timeout: 5000 });
-        if (response.status >= 400) {
-          return res.status(400).json({ error: 'Website URL is not accessible' });
-        }
-      } catch (error) {
-        return res.status(400).json({ error: 'Website URL is not accessible or invalid' });
-      }
+      return res.status(400).json({ error: 'Invalid or inaccessible RSS feed' });
     }
 
     // Add category if provided
@@ -117,54 +86,18 @@ app.post('/api/sources', async (req, res) => {
       categoryName = categoryRecord.name;
     }
 
-    const source = await database.addSource(name, feedUrl || url, categoryName, monitoringType);
+    const source = await database.addSource(name, url, categoryName);
     const sourceId = source.id;
     
     // Fetch 5 most recent articles from the new source
     try {
-      if (monitoringType === 'RSS') {
-        await feedMonitor.checkFeedLimited({ id: sourceId, url: feedUrl, name, category: categoryName }, 5);
-        console.log(`✅ Added 5 most recent articles from RSS feed: ${name}`);
-      } else {
-        // Web scraping - get initial articles
-        const articles = await webScraper.monitorWebsite({ id: sourceId, url, name, category: categoryName });
-        // Save articles to database
-        for (const scrapedArticle of articles.slice(0, 5)) {
-          try {
-            const exists = await database.articleExists(scrapedArticle.link);
-            if (!exists) {
-              // Format article for database
-              const article = {
-                sourceId: sourceId,
-                title: scrapedArticle.title || 'Untitled',
-                link: scrapedArticle.link,
-                content: scrapedArticle.preview || '',
-                preview: scrapedArticle.preview || '',
-                pubDate: scrapedArticle.pub_date ? new Date(scrapedArticle.pub_date).toISOString() : null,
-                sourceName: name,
-                category: categoryName || 'General',
-                status: 'new'
-              };
-              
-              if (article.title !== 'Untitled' && article.link) {
-                await database.addArticle(article);
-              }
-            }
-          } catch (err) {
-            // Skip duplicates or errors
-          }
-        }
-        console.log(`✅ Added ${Math.min(articles.length, 5)} initial articles from web scraping: ${name}`);
-      }
+      await feedMonitor.checkFeedLimited({ id: sourceId, url, name, category: categoryName }, 5);
+      console.log(`✅ Added 5 most recent articles from new source: ${name}`);
     } catch (error) {
       console.log('Could not fetch recent articles for new source:', error.message);
     }
     
-    res.json({ 
-      id: sourceId, 
-      message: 'Source added successfully',
-      monitoring_type: monitoringType
-    });
+    res.json({ id: sourceId, message: 'Source added successfully' });
   } catch (error) {
     console.error('Error adding source:', error);
     res.status(500).json({ error: 'Failed to add source' });

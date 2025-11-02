@@ -87,12 +87,6 @@ class Database {
         ADD COLUMN IF NOT EXISTS category VARCHAR(255)
       `);
 
-      // Add monitoring_type column if it doesn't exist (for existing tables)
-      await client.query(`
-        ALTER TABLE sources 
-        ADD COLUMN IF NOT EXISTS monitoring_type VARCHAR(20) DEFAULT 'RSS'
-      `);
-
       // Create indexes for better performance
       await client.query(`
         CREATE INDEX IF NOT EXISTS idx_articles_status ON articles(status);
@@ -115,10 +109,10 @@ class Database {
     return result.rows;
   }
 
-  async addSource(name, url, category = null, monitoringType = 'RSS') {
+  async addSource(name, url, category = null) {
     const result = await this.pool.query(
-      'INSERT INTO sources (name, url, category, monitoring_type) VALUES ($1, $2, $3, $4) RETURNING *',
-      [name, url, category, monitoringType]
+      'INSERT INTO sources (name, url, category) VALUES ($1, $2, $3) RETURNING *',
+      [name, url, category]
     );
     return result.rows[0];
   }
