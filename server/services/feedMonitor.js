@@ -3,6 +3,7 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const database = require('../database-postgres');
 const FeedDiscovery = require('./feedDiscovery');
+const WebScraper = require('./webScraper');
 
 const parser = new Parser();
 
@@ -11,6 +12,7 @@ class FeedMonitor {
     this.isMonitoring = false;
     this.monitoringInterval = null;
     this.feedDiscovery = new FeedDiscovery();
+    this.webScraper = new WebScraper();
   }
 
   // Detect RSS feeds from a website URL using robust discovery
@@ -218,16 +220,74 @@ class FeedMonitor {
       
       for (const source of activeSources) {
         try {
-          // Use limited feed checking to only get 5 most recent articles per source
-          const newArticles = await this.checkFeedLimited(source, 5);
+          const monitoringType = source.monitoring_type || 'RSS';
+          let newArticles = [];
+          
+          if (monitoringType === 'WEB_SCRAPING') {
+            // Web scraping for sites without RSS
+            const articles = await this.webScraper.monitorWebsite(source);
+            // Save new articles to database
+            for (const scrapedArticle of articles) {
+              try {
+                const exists = await database.articleExists(scrapedArticle.link);
+                if (!exists) {
+                  // Format article to match RSS item format for enhanceArticleContent
+                  const formattedItem = {
+                    title: scrapedArticle.title,
+                    link: scrapedArticle.link,
+                    content: scrapedArticle.preview,
+                    contentSnippet: scrapedArticle.preview,
+                    description: scrapedArticle.preview,
+                    pubDate: scrapedArticle.pub_date ? new Date(scrapedArticle.pub_date).toISOString() : null
+                  };
+                  
+                  // Generate AI-enhanced content
+                  const enhancedContent = await this.enhanceArticleContent(formattedItem);
+                  
+                  // Format article object for database
+                  const article = {
+                    sourceId: source.id,
+                    title: enhancedContent.title || scrapedArticle.title || 'Untitled',
+                    link: scrapedArticle.link,
+                    content: enhancedContent.content || scrapedArticle.preview || '',
+                    preview: enhancedContent.preview || scrapedArticle.preview || '',
+                    pubDate: scrapedArticle.pub_date ? new Date(scrapedArticle.pub_date).toISOString() : null,
+                    sourceName: source.name || 'Unknown Source',
+                    category: source.category || 'General',
+                    status: 'new'
+                  };
+                  
+                  // Validate required fields
+                  if (!article.title || article.title === 'Untitled' || !article.link) {
+                    continue;
+                  }
+                  
+                  const articleId = await database.addArticle(article);
+                  newArticles.push({
+                    id: articleId,
+                    title: article.title,
+                    link: article.link
+                  });
+                }
+              } catch (err) {
+                // Skip duplicates or errors
+                console.log(`Skipping article: ${err.message}`);
+              }
+            }
+          } else {
+            // RSS feed monitoring
+            newArticles = await this.checkFeedLimited(source, 5);
+          }
+          
           results.push({
             source: source.name,
             url: source.url,
             newArticles: newArticles.length,
-            success: true
+            success: true,
+            monitoring_type: monitoringType
           });
         } catch (error) {
-          console.error(`Error checking feed ${source.name}:`, error.message);
+          console.error(`Error checking ${source.monitoring_type || 'RSS'} source ${source.name}:`, error.message);
           results.push({
             source: source.name,
             url: source.url,
