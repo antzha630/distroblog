@@ -103,6 +103,18 @@ class FeedMonitor {
       const content = response.data;
       const contentType = response.headers['content-type'] || '';
       
+      // Check if it's a JSON Feed
+      if (contentType.includes('json') || contentType.includes('application/json') || contentType.includes('application/feed+json')) {
+        try {
+          const jsonFeed = typeof content === 'string' ? JSON.parse(content) : content;
+          if (jsonFeed && jsonFeed.version && (jsonFeed.items || jsonFeed.item)) {
+            return jsonFeed.items && jsonFeed.items.length > 0;
+          }
+        } catch (parseError) {
+          // Not JSON Feed
+        }
+      }
+      
       // Check if it looks like a feed based on content type
       if (contentType.includes('xml') || contentType.includes('rss') || contentType.includes('atom')) {
         // Try to parse with the RSS parser
@@ -121,6 +133,18 @@ class FeedMonitor {
       
       // If content type doesn't indicate XML, check content for feed indicators
       if (this.feedDiscovery.isValidFeed(content)) {
+        // Check if it's JSON Feed first
+        if (typeof content === 'string') {
+          try {
+            const jsonFeed = JSON.parse(content);
+            if (jsonFeed && jsonFeed.version && (jsonFeed.items || jsonFeed.item)) {
+              return jsonFeed.items && jsonFeed.items.length > 0;
+            }
+          } catch (e) {
+            // Not JSON, continue to RSS parsing
+          }
+        }
+        
         try {
           const feed = await parser.parseString(content);
           return feed && feed.items && feed.items.length > 0;
@@ -247,10 +271,89 @@ class FeedMonitor {
   }
 
   // Check a single feed for new articles
+  // Convert JSON Feed to RSS-like format for compatibility
+  async parseJSONFeed(url) {
+    try {
+      const response = await axios.get(url, {
+        timeout: 10000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; RSS Feed Parser)'
+        }
+      });
+      
+      const jsonFeed = typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
+      
+      if (!jsonFeed || !jsonFeed.version || !jsonFeed.items) {
+        throw new Error('Invalid JSON Feed format');
+      }
+      
+      // Convert JSON Feed to RSS-like format
+      const rssLikeFeed = {
+        title: jsonFeed.title || '',
+        description: jsonFeed.description || '',
+        link: jsonFeed.home_page_url || jsonFeed.feed_url || url,
+        items: jsonFeed.items.map(item => ({
+          title: item.title || '',
+          link: item.url || item.id || '',
+          pubDate: item.date_published || item.date_modified || null,
+          isoDate: item.date_published || item.date_modified || null,
+          content: item.content_html || item.content_text || item.summary || '',
+          contentSnippet: item.content_text || item.summary || '',
+          description: item.summary || item.content_text || '',
+          author: item.authors && item.authors.length > 0 ? item.authors[0].name : null,
+          id: item.id || item.url || ''
+        }))
+      };
+      
+      return rssLikeFeed;
+    } catch (error) {
+      console.error('Error parsing JSON Feed:', error.message);
+      throw error;
+    }
+  }
+
+  // Check if URL is a JSON Feed
+  async isJSONFeed(url) {
+    try {
+      const response = await axios.get(url, {
+        timeout: 5000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; RSS Feed Checker)'
+        },
+        validateStatus: (status) => status < 500
+      });
+      
+      const contentType = (response.headers['content-type'] || '').toLowerCase();
+      if (contentType.includes('json') || contentType.includes('application/feed+json')) {
+        const jsonFeed = typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
+        return jsonFeed && jsonFeed.version && (jsonFeed.items || jsonFeed.item);
+      }
+      
+      // Also check content if URL suggests JSON Feed
+      if (url.includes('.json') || url.includes('/feed.json')) {
+        const jsonFeed = typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
+        return jsonFeed && jsonFeed.version && (jsonFeed.items || jsonFeed.item);
+      }
+      
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
   // Check feed with limited number of articles (for new sources)
   async checkFeedLimited(source, maxArticles = 5) {
     try {
-      const feed = await parser.parseURL(source.url);
+      // Check if it's a JSON Feed first
+      let feed;
+      const isJSON = await this.isJSONFeed(source.url);
+      
+      if (isJSON) {
+        feed = await this.parseJSONFeed(source.url);
+      } else {
+        feed = await parser.parseURL(source.url);
+      }
+      
       const newArticles = [];
       
       // Generate session ID for this batch of articles
@@ -372,7 +475,16 @@ class FeedMonitor {
 
   async checkFeed(source) {
     try {
-      const feed = await parser.parseURL(source.url);
+      // Check if it's a JSON Feed first
+      let feed;
+      const isJSON = await this.isJSONFeed(source.url);
+      
+      if (isJSON) {
+        feed = await this.parseJSONFeed(source.url);
+      } else {
+        feed = await parser.parseURL(source.url);
+      }
+      
       const newArticles = [];
       
       // Generate session ID for this batch of articles

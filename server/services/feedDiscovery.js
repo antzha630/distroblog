@@ -7,6 +7,7 @@ class FeedDiscovery {
     this.commonFeedPaths = [
       '/feed',
       '/feed.xml',
+      '/feed.json',
       '/rss',
       '/rss.xml',
       '/atom.xml',
@@ -18,14 +19,19 @@ class FeedDiscovery {
       '/feed/',
       '/feeds/',
       '/blog/feed',
+      '/blog/feed.json',
       '/blog/rss',
       '/news/feed',
+      '/news/feed.json',
       '/news/rss',
       '/posts/feed',
+      '/posts/feed.json',
       '/posts/rss',
       '/articles/feed',
+      '/articles/feed.json',
       '/articles/rss',
       '/updates/feed',
+      '/updates/feed.json',
       '/updates/rss',
       '/content/feed',
       '/content/rss',
@@ -258,13 +264,14 @@ class FeedDiscovery {
     
     // Prioritize most common paths first
     const prioritizedPaths = [
-      '/feed',           // Most common
+      '/feed',           // Most common (RSS)
+      '/feed.json',      // Modern JSON Feed
       '/rss',            // Very common
       '/feed.xml',       // Common
       '/rss.xml',        // Common
       '/atom.xml',       // Common
       '/feeds/all.xml',  // Common
-      ...this.commonFeedPaths.filter(p => !['/feed', '/rss', '/feed.xml', '/rss.xml', '/atom.xml', '/feeds/all.xml'].includes(p))
+      ...this.commonFeedPaths.filter(p => !['/feed', '/feed.json', '/rss', '/feed.xml', '/rss.xml', '/atom.xml', '/feeds/all.xml'].includes(p))
     ];
     
     for (const path of prioritizedPaths) {
@@ -294,14 +301,18 @@ class FeedDiscovery {
       const $ = cheerio.load(response.data);
       const feeds = [];
       
-      // Look for RSS/Atom feed links with comprehensive selectors
+      // Look for RSS/Atom/JSON Feed links with comprehensive selectors
       const feedSelectors = [
         'link[type="application/rss+xml"]',
         'link[type="application/atom+xml"]',
+        'link[type="application/json"]',
+        'link[type="application/feed+json"]',
         'link[type="application/xml"]',
         'link[rel="alternate"][type*="xml"]',
+        'link[rel="alternate"][type*="json"]',
         'link[rel="alternate"][type*="rss"]',
         'link[rel="alternate"][type*="atom"]',
+        'link[rel="alternate"][type*="feed"]',
         'link[rel="feed"]',
         'link[rel="syndication"]'
       ];
@@ -324,15 +335,15 @@ class FeedDiscovery {
       });
       
       // Also look for any links that might be feeds (heuristic approach)
-      $('a[href*="feed"], a[href*="rss"], a[href*="atom"]').each((i, elem) => {
+      $('a[href*="feed"], a[href*="rss"], a[href*="atom"], a[href*="feed.json"]').each((i, elem) => {
         const href = $(elem).attr('href');
         const text = $(elem).text().toLowerCase();
         
-        if (href && (text.includes('rss') || text.includes('feed') || text.includes('syndication'))) {
+        if (href && (text.includes('rss') || text.includes('feed') || text.includes('syndication') || text.includes('json'))) {
           const feedUrl = this.resolveUrl(baseUrl, href);
           feeds.push({
             url: feedUrl,
-            title: $(elem).text() || 'RSS Feed',
+            title: $(elem).text() || 'Feed',
             type: 'heuristic'
           });
         }
@@ -678,6 +689,179 @@ class FeedDiscovery {
           throw error;
         }
       }
+    }
+  }
+
+  // Extract structured data (JSON-LD) from a webpage
+  async extractStructuredData(baseUrl) {
+    try {
+      const response = await this.makeRequestWithRetry(baseUrl, { timeout: 10000 });
+      if (!response) return [];
+      
+      const $ = cheerio.load(response.data);
+      const articles = [];
+      
+      // Look for JSON-LD structured data
+      $('script[type="application/ld+json"]').each((i, elem) => {
+        try {
+          const data = JSON.parse($(elem).html());
+          
+          // Handle BlogPosting
+          if (data['@type'] === 'BlogPosting' || data['@type'] === 'Article') {
+            articles.push({
+              url: data.url || data.mainEntityOfPage?.['@id'] || data['@id'] || '',
+              title: data.headline || data.name || '',
+              description: data.description || '',
+              datePublished: data.datePublished || data.dateCreated || null
+            });
+          }
+          
+          // Handle Blog with blogPosts
+          if (data['@type'] === 'Blog' && data.blogPost) {
+            const blogPosts = Array.isArray(data.blogPost) ? data.blogPost : [data.blogPost];
+            blogPosts.forEach(post => {
+              if (post['@type'] === 'BlogPosting' || post['@type'] === 'Article') {
+                articles.push({
+                  url: post.url || post.mainEntityOfPage?.['@id'] || post['@id'] || '',
+                  title: post.headline || post.name || '',
+                  description: post.description || '',
+                  datePublished: post.datePublished || post.dateCreated || null
+                });
+              }
+            });
+          }
+          
+          // Handle ItemList with BlogPosting items
+          if (data['@type'] === 'ItemList' && data.itemListElement) {
+            data.itemListElement.forEach(item => {
+              const element = item.item || item;
+              if (element['@type'] === 'BlogPosting' || element['@type'] === 'Article') {
+                articles.push({
+                  url: element.url || element.mainEntityOfPage?.['@id'] || element['@id'] || '',
+                  title: element.headline || element.name || '',
+                  description: element.description || '',
+                  datePublished: element.datePublished || element.dateCreated || null
+                });
+              }
+            });
+          }
+        } catch (e) {
+          // Invalid JSON, skip
+        }
+      });
+      
+      // Return unique articles by URL
+      const uniqueArticles = [];
+      const seenUrls = new Set();
+      for (const article of articles) {
+        if (article.url && !seenUrls.has(article.url)) {
+          seenUrls.add(article.url);
+          uniqueArticles.push(article);
+        }
+      }
+      
+      return uniqueArticles;
+    } catch (error) {
+      return [];
+    }
+  }
+
+  // Extract articles from blog section HTML (fallback for sites without feeds)
+  async extractArticlesFromBlogSection(baseUrl) {
+    try {
+      // Try to find blog section
+      const blogPaths = ['/blog', '/posts', '/articles', '/news', '/press', '/press-releases'];
+      let blogUrl = baseUrl;
+      
+      for (const path of blogPaths) {
+        try {
+          const testUrl = baseUrl.replace(/\/$/, '') + path;
+          const response = await this.makeRequestWithRetry(testUrl, { timeout: 5000 });
+          if (response && response.status === 200) {
+            blogUrl = testUrl;
+            break;
+          }
+        } catch (e) {
+          // Continue to next path
+        }
+      }
+      
+      // Fetch blog page
+      const response = await this.makeRequestWithRetry(blogUrl, { timeout: 10000 });
+      if (!response) return [];
+      
+      const $ = cheerio.load(response.data);
+      const articles = [];
+      
+      // Extract structured data first (most reliable)
+      const structuredArticles = await this.extractStructuredData(blogUrl);
+      articles.push(...structuredArticles);
+      
+      // Fallback: HTML pattern matching for article/blog post elements
+      const articleSelectors = [
+        'article',
+        '[class*="article"]',
+        '[class*="post"]',
+        '[class*="blog-post"]',
+        '[id*="article"]',
+        '[id*="post"]',
+        '.entry',
+        '.news-item'
+      ];
+      
+      for (const selector of articleSelectors) {
+        $(selector).each((i, elem) => {
+          const $elem = $(elem);
+          const link = $elem.find('a').first().attr('href');
+          const title = $elem.find('h1, h2, h3, [class*="title"], [class*="headline"]').first().text().trim();
+          
+          if (title && link) {
+            const fullLink = link.startsWith('http') ? link : this.resolveUrl(blogUrl, link);
+            
+            // Try to extract date
+            const dateText = $elem.find('[class*="date"], time, [datetime]').first().attr('datetime') || 
+                            $elem.find('[class*="date"], time').first().text();
+            let pubDate = null;
+            if (dateText) {
+              try {
+                pubDate = new Date(dateText);
+                if (isNaN(pubDate.getTime())) pubDate = null;
+              } catch (e) {
+                pubDate = null;
+              }
+            }
+            
+            articles.push({
+              url: fullLink,
+              title: title,
+              description: $elem.find('[class*="excerpt"], [class*="summary"], p').first().text().trim().substring(0, 300),
+              datePublished: pubDate
+            });
+          }
+        });
+      }
+      
+      // Deduplicate by URL
+      const uniqueArticles = [];
+      const seenUrls = new Set();
+      for (const article of articles) {
+        if (article.url && !seenUrls.has(article.url)) {
+          seenUrls.add(article.url);
+          uniqueArticles.push(article);
+        }
+      }
+      
+      // Sort by date (newest first)
+      uniqueArticles.sort((a, b) => {
+        if (a.datePublished && b.datePublished) {
+          return new Date(b.datePublished) - new Date(a.datePublished);
+        }
+        return 0;
+      });
+      
+      return uniqueArticles.slice(0, 20); // Return max 20 most recent
+    } catch (error) {
+      return [];
     }
   }
 }
