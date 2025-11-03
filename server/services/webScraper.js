@@ -1,6 +1,4 @@
 const { chromium } = require('playwright');
-const axios = require('axios');
-const cheerio = require('cheerio');
 const FeedDiscovery = require('./feedDiscovery');
 
 class WebScraper {
@@ -13,6 +11,7 @@ class WebScraper {
   /**
    * Scrape articles from a website (fallback when RSS/JSON Feed not found)
    * Returns articles in RSS-like format for compatibility
+   * Strategy: Try static scraping first (fast), then Playwright if needed (slower but handles JS)
    */
   async scrapeArticles(source) {
     try {
@@ -27,28 +26,52 @@ class WebScraper {
         articles = await this.scrapeWithPlaywright(source.url);
       }
       
-      // Convert to RSS-like format
-      const normalizedArticles = articles.map(article => ({
-        title: article.title || 'Untitled',
-        link: article.url || article.link || '',
-        content: article.content || article.description || '',
-        contentSnippet: article.description || article.preview || '',
-        description: article.description || article.preview || '',
-        pubDate: article.datePublished ? new Date(article.datePublished).toISOString() : null,
-        isoDate: article.datePublished ? new Date(article.datePublished).toISOString() : null,
-        sourceName: source.name || 'Unknown Source',
-        category: source.category || 'General'
-      }));
+      // Enhance articles with full content (reuse existing logic from feedMonitor)
+      const feedMonitor = require('./feedMonitor');
+      const enhancedArticles = [];
       
-      // Sort by date (newest first), limit to most recent
-      normalizedArticles.sort((a, b) => {
+      for (const article of articles) {
+        try {
+          // Fetch full content for each article (reuse existing method)
+          const fullContent = await feedMonitor.fetchFullArticleContent(article.url || article.link);
+          
+          // Convert to RSS-like format
+          enhancedArticles.push({
+            title: article.title || 'Untitled',
+            link: article.url || article.link || '',
+            content: fullContent || article.content || article.description || '',
+            contentSnippet: article.description || article.preview || '',
+            description: article.description || article.preview || '',
+            pubDate: article.datePublished ? new Date(article.datePublished).toISOString() : null,
+            isoDate: article.datePublished ? new Date(article.datePublished).toISOString() : null,
+            sourceName: source.name || 'Unknown Source',
+            category: source.category || 'General'
+          });
+        } catch (err) {
+          // If fetching full content fails, use what we have
+          enhancedArticles.push({
+            title: article.title || 'Untitled',
+            link: article.url || article.link || '',
+            content: article.content || article.description || '',
+            contentSnippet: article.description || article.preview || '',
+            description: article.description || article.preview || '',
+            pubDate: article.datePublished ? new Date(article.datePublished).toISOString() : null,
+            isoDate: article.datePublished ? new Date(article.datePublished).toISOString() : null,
+            sourceName: source.name || 'Unknown Source',
+            category: source.category || 'General'
+          });
+        }
+      }
+      
+      // Sort by date (newest first)
+      enhancedArticles.sort((a, b) => {
         if (a.pubDate && b.pubDate) {
           return new Date(b.pubDate) - new Date(a.pubDate);
         }
         return 0;
       });
       
-      return normalizedArticles;
+      return enhancedArticles;
     } catch (error) {
       console.error(`❌ Error scraping ${source.url}:`, error.message);
       return [];

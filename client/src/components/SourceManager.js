@@ -635,10 +635,22 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
                     <div style={{ 
                       fontSize: '0.9rem', 
                       color: source.is_paused ? '#ffc107' : '#28a745',
-                      marginBottom: '12px',
+                      marginBottom: '8px',
                       fontWeight: '500'
                     }}>
                       {source.is_paused ? '⏸️ Paused' : '✓ Active'}
+                    </div>
+                    <div style={{ 
+                      fontSize: '0.8rem', 
+                      color: source.monitoring_type === 'SCRAPING' ? '#ff9800' : '#007bff',
+                      marginBottom: '12px',
+                      fontWeight: '500',
+                      padding: '2px 6px',
+                      borderRadius: '4px',
+                      backgroundColor: source.monitoring_type === 'SCRAPING' ? '#fff3e0' : '#e3f2fd',
+                      display: 'inline-block'
+                    }}>
+                      {source.monitoring_type === 'SCRAPING' ? '🌐 Scraping' : '📡 RSS Feed'}
                     </div>
                     <div style={{ display: 'flex', gap: '8px', flexDirection: 'column' }}>
                       {source.is_paused ? (
