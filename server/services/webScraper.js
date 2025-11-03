@@ -26,37 +26,71 @@ class WebScraper {
         articles = await this.scrapeWithPlaywright(source.url);
       }
       
-      // Enhance articles with full content (reuse existing logic from feedMonitor)
+      // Enhance articles with full content and better date extraction (reuse existing logic from feedMonitor)
       const feedMonitor = require('./feedMonitor');
       const enhancedArticles = [];
       
       for (const article of articles) {
         try {
+          const articleUrl = article.url || article.link;
+          
           // Fetch full content for each article (reuse existing method)
-          const fullContent = await feedMonitor.fetchFullArticleContent(article.url || article.link);
+          const fullContent = await feedMonitor.fetchFullArticleContent(articleUrl);
+          
+          // Extract publication date from article page (more comprehensive than list page)
+          let pubDate = article.datePublished ? new Date(article.datePublished) : null;
+          
+          // If no date from list page, try extracting from article page
+          if (!pubDate || isNaN(pubDate.getTime())) {
+            try {
+              const metadata = await feedMonitor.extractArticleMetadata(articleUrl);
+              if (metadata.pubDate) {
+                pubDate = new Date(metadata.pubDate);
+              }
+            } catch (err) {
+              // If extraction fails, keep existing date or null
+            }
+          }
+          
+          // Validate and format date
+          let finalPubDate = null;
+          let finalIsoDate = null;
+          if (pubDate && !isNaN(pubDate.getTime())) {
+            finalPubDate = pubDate.toISOString();
+            finalIsoDate = pubDate.toISOString();
+          }
           
           // Convert to RSS-like format
           enhancedArticles.push({
             title: article.title || 'Untitled',
-            link: article.url || article.link || '',
+            link: articleUrl,
             content: fullContent || article.content || article.description || '',
             contentSnippet: article.description || article.preview || '',
             description: article.description || article.preview || '',
-            pubDate: article.datePublished ? new Date(article.datePublished).toISOString() : null,
-            isoDate: article.datePublished ? new Date(article.datePublished).toISOString() : null,
+            pubDate: finalPubDate,
+            isoDate: finalIsoDate,
             sourceName: source.name || 'Unknown Source',
             category: source.category || 'General'
           });
         } catch (err) {
           // If fetching full content fails, use what we have
+          const articleUrl = article.url || article.link;
+          let pubDate = article.datePublished ? new Date(article.datePublished) : null;
+          let finalPubDate = null;
+          let finalIsoDate = null;
+          if (pubDate && !isNaN(pubDate.getTime())) {
+            finalPubDate = pubDate.toISOString();
+            finalIsoDate = pubDate.toISOString();
+          }
+          
           enhancedArticles.push({
             title: article.title || 'Untitled',
-            link: article.url || article.link || '',
+            link: articleUrl,
             content: article.content || article.description || '',
             contentSnippet: article.description || article.preview || '',
             description: article.description || article.preview || '',
-            pubDate: article.datePublished ? new Date(article.datePublished).toISOString() : null,
-            isoDate: article.datePublished ? new Date(article.datePublished).toISOString() : null,
+            pubDate: finalPubDate,
+            isoDate: finalIsoDate,
             sourceName: source.name || 'Unknown Source',
             category: source.category || 'General'
           });

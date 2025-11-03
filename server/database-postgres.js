@@ -209,8 +209,8 @@ class Database {
       SELECT a.*, s.name as source_name 
       FROM articles a 
       LEFT JOIN sources s ON a.source_id = s.id 
-      WHERE COALESCE(a.pub_date, a.created_at) >= NOW() - INTERVAL '${days} days'
-      ORDER BY COALESCE(a.pub_date, a.created_at) DESC
+      WHERE a.pub_date >= NOW() - INTERVAL '${days} days'
+      ORDER BY a.pub_date DESC
     `);
     return result.rows;
   }
