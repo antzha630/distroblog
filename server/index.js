@@ -7,8 +7,11 @@ require('dotenv').config();
 
 const feedMonitor = require('./services/feedMonitor');
 const FeedDiscovery = require('./services/feedDiscovery');
+const WebScraper = require('./services/webScraper');
 const llmService = require('./services/llmService');
 const database = require('./database-postgres');
+
+const webScraper = new WebScraper();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -114,10 +117,42 @@ app.post('/api/sources', async (req, res) => {
       return res.status(400).json({ error: 'URL and name are required' });
     }
 
-    // Validate RSS feed
-    const isValid = await feedMonitor.validateFeed(url);
+    let monitoringType = 'RSS';
+    let feedUrl = url;
+    
+    // Try RSS/JSON Feed first
+    let isValid = await feedMonitor.validateFeed(url);
+    
+    // If direct URL is not a feed, try to discover one
     if (!isValid) {
-      return res.status(400).json({ error: 'Invalid or inaccessible RSS feed' });
+      const feedDiscovery = new FeedDiscovery();
+      const discoveredFeed = await feedDiscovery.discoverFeedUrl(url);
+      
+      if (discoveredFeed) {
+        feedUrl = discoveredFeed;
+        isValid = await feedMonitor.validateFeed(discoveredFeed);
+        if (isValid) {
+          const isJSON = await feedMonitor.isJSONFeed(discoveredFeed);
+          console.log(`✅ Discovered ${isJSON ? 'JSON' : 'RSS'} feed: ${discoveredFeed}`);
+        }
+      }
+    }
+
+    // If still no feed found, try scraping as fallback
+    if (!isValid) {
+      console.log(`📝 No RSS/JSON Feed found for ${url}, trying scraping fallback...`);
+      monitoringType = 'SCRAPING';
+      
+      // Test if scraping works
+      const testArticles = await webScraper.scrapeArticles({ url, name, category: category || null });
+      
+      if (testArticles.length === 0) {
+        return res.status(400).json({ 
+          error: 'No RSS/JSON Feed found and scraping returned no articles. Please check the URL or provide a direct RSS feed URL.' 
+        });
+      }
+      
+      console.log(`✅ Scraping found ${testArticles.length} articles, using scraping fallback`);
     }
 
     // Add category if provided
@@ -127,18 +162,58 @@ app.post('/api/sources', async (req, res) => {
       categoryName = categoryRecord.name;
     }
 
-    const source = await database.addSource(name, url, categoryName);
+    const source = await database.addSource(name, feedUrl || url, categoryName, monitoringType);
     const sourceId = source.id;
     
-    // Fetch 5 most recent articles from the new source
+    // Fetch 3 most recent articles from the new source
     try {
-      await feedMonitor.checkFeedLimited({ id: sourceId, url, name, category: categoryName }, 5);
-      console.log(`✅ Added 5 most recent articles from new source: ${name}`);
+      if (monitoringType === 'SCRAPING') {
+        // Scraping: get 3 most recent articles
+        const articles = await webScraper.scrapeArticles({ id: sourceId, url, name, category: categoryName });
+        
+        for (const article of articles.slice(0, 3)) {
+          try {
+            const exists = await database.articleExists(article.link);
+            if (!exists) {
+              // Generate AI-enhanced content (same as RSS)
+              const enhancedContent = await feedMonitor.enhanceArticleContent(article);
+              
+              const articleObj = {
+                sourceId: sourceId,
+                title: enhancedContent.title || article.title || 'Untitled',
+                link: article.link,
+                content: enhancedContent.content || article.content || '',
+                preview: enhancedContent.preview || article.preview || '',
+                pubDate: article.pubDate || article.isoDate || null,
+                sourceName: name,
+                category: categoryName || 'General',
+                status: 'new'
+              };
+              
+              if (articleObj.title !== 'Untitled' && articleObj.link) {
+                await database.addArticle(articleObj);
+              }
+            }
+          } catch (err) {
+            // Skip duplicates or errors
+          }
+        }
+        
+        console.log(`✅ Added ${Math.min(articles.length, 3)} most recent articles from scraping: ${name}`);
+      } else {
+        // RSS/JSON Feed
+        await feedMonitor.checkFeedLimited({ id: sourceId, url: feedUrl, name, category: categoryName }, 3);
+        console.log(`✅ Added 3 most recent articles from RSS/JSON Feed: ${name}`);
+      }
     } catch (error) {
       console.log('Could not fetch recent articles for new source:', error.message);
     }
     
-    res.json({ id: sourceId, message: 'Source added successfully' });
+    res.json({ 
+      id: sourceId, 
+      message: 'Source added successfully',
+      monitoring_type: monitoringType
+    });
   } catch (error) {
     console.error('Error adding source:', error);
     res.status(500).json({ error: 'Failed to add source' });

@@ -3,6 +3,7 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const database = require('../database-postgres');
 const FeedDiscovery = require('./feedDiscovery');
+const WebScraper = require('./webScraper');
 
 const parser = new Parser();
 
@@ -11,6 +12,7 @@ class FeedMonitor {
     this.isMonitoring = false;
     this.monitoringInterval = null;
     this.feedDiscovery = new FeedDiscovery();
+    this.webScraper = new WebScraper();
   }
 
   // Detect RSS feeds from a website URL using robust discovery
@@ -242,16 +244,62 @@ class FeedMonitor {
       
       for (const source of activeSources) {
         try {
-          // Use limited feed checking to only get 5 most recent articles per source
-          const newArticles = await this.checkFeedLimited(source, 5);
+          const monitoringType = source.monitoring_type || 'RSS';
+          let newArticles = [];
+          
+          if (monitoringType === 'SCRAPING') {
+            // Scraping: get articles and check for new ones
+            const articles = await this.webScraper.scrapeArticles(source);
+            
+            for (const article of articles) {
+              try {
+                const exists = await database.articleExists(article.link);
+                if (!exists) {
+                  // Generate AI-enhanced content (same as RSS)
+                  const enhancedContent = await this.enhanceArticleContent(article);
+                  
+                  const articleObj = {
+                    sourceId: source.id,
+                    title: enhancedContent.title || article.title || 'Untitled',
+                    link: article.link,
+                    content: enhancedContent.content || article.content || '',
+                    preview: enhancedContent.preview || article.preview || '',
+                    pubDate: article.pubDate || article.isoDate || null,
+                    sourceName: source.name || 'Unknown Source',
+                    category: source.category || 'General',
+                    status: 'new'
+                  };
+                  
+                  if (articleObj.title !== 'Untitled' && articleObj.link) {
+                    await database.addArticle(articleObj);
+                    newArticles.push({
+                      id: articleObj.sourceId,
+                      title: articleObj.title,
+                      link: articleObj.link
+                    });
+                  }
+                }
+              } catch (err) {
+                // Skip duplicates or errors
+              }
+            }
+            
+            // Update last_checked timestamp
+            await database.updateSourceLastChecked(source.id);
+          } else {
+            // RSS/JSON Feed: use existing method
+            newArticles = await this.checkFeedLimited(source, 5);
+          }
+          
           results.push({
             source: source.name,
             url: source.url,
             newArticles: newArticles.length,
-            success: true
+            success: true,
+            monitoring_type: monitoringType
           });
         } catch (error) {
-          console.error(`Error checking feed ${source.name}:`, error.message);
+          console.error(`Error checking ${source.monitoring_type || 'RSS'} source ${source.name}:`, error.message);
           results.push({
             source: source.name,
             url: source.url,
