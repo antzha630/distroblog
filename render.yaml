@@ -2,7 +2,7 @@ services:
   - type: web
     name: distroblog
     env: node
-    buildCommand: npm install && npx playwright install --with-deps chromium && cd client && npm install && cd .. && npm run build
+    buildCommand: npm install && npx playwright install chromium && cd client && npm install && cd .. && npm run build
     startCommand: npm start
     envVars:
       - key: NODE_ENV
