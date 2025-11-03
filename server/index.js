@@ -64,6 +64,47 @@ app.post('/api/sources/detect', async (req, res) => {
   }
 });
 
+// Test scraping fallback for a given URL (does not persist)
+app.post('/api/scrape/test', async (req, res) => {
+  try {
+    const { url } = req.body;
+    if (!url) {
+      return res.status(400).json({ error: 'URL is required' });
+    }
+
+    const discovery = new FeedDiscovery();
+
+    // Try structured data first, then blog section extraction
+    const structured = await discovery.extractStructuredData(url);
+    const blogArticles = await discovery.extractArticlesFromBlogSection(url);
+
+    // Merge and normalize to the same shape used by RSS items
+    const merged = [...structured, ...blogArticles];
+
+    // De-dupe by url
+    const seen = new Set();
+    const unique = merged.filter(a => {
+      const key = a.url;
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    const normalized = unique.map(a => ({
+      title: a.title || 'Untitled',
+      link: a.url || '',
+      content: a.description || '',
+      preview: a.description || '',
+      pub_date: a.datePublished || null
+    }));
+
+    res.json({ count: normalized.length, articles: normalized });
+  } catch (error) {
+    console.error('Error in /api/scrape/test:', error.message);
+    res.status(500).json({ error: 'Failed to scrape URL' });
+  }
+});
+
 // Add a new source to monitor
 app.post('/api/sources', async (req, res) => {
   try {
