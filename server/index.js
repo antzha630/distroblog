@@ -870,6 +870,53 @@ app.post('/api/articles/dismiss-all', async (req, res) => {
   }
 });
 
+// Debug endpoint to check scraping sources and articles
+app.get('/api/debug/scraping', async (req, res) => {
+  try {
+    // Get all scraping sources
+    const scrapingSources = await database.pool.query(`
+      SELECT id, name, url, monitoring_type, last_checked, created_at
+      FROM sources
+      WHERE monitoring_type = 'SCRAPING'
+      ORDER BY created_at DESC
+    `);
+
+    // Get articles from scraping sources
+    const scrapingArticles = await database.pool.query(`
+      SELECT a.id, a.title, a.link, a.pub_date, a.created_at, a.source_name, a.preview,
+             s.monitoring_type, s.name as source_name_from_table
+      FROM articles a
+      LEFT JOIN sources s ON a.source_id = s.id
+      WHERE s.monitoring_type = 'SCRAPING' OR a.source_name = 'Vana'
+      ORDER BY a.created_at DESC
+      LIMIT 20
+    `);
+
+    // Get Vana-specific info
+    const vanaSource = scrapingSources.rows.find(s => s.name === 'Vana');
+    const vanaArticles = scrapingArticles.rows.filter(a => 
+      a.source_name === 'Vana' || a.source_name_from_table === 'Vana'
+    );
+
+    res.json({
+      scrapingSources: scrapingSources.rows,
+      scrapingArticles: scrapingArticles.rows,
+      vana: {
+        source: vanaSource || null,
+        articles: vanaArticles,
+        articleCount: vanaArticles.length
+      },
+      summary: {
+        totalScrapingSources: scrapingSources.rows.length,
+        totalScrapingArticles: scrapingArticles.rows.length
+      }
+    });
+  } catch (error) {
+    console.error('Error in debug endpoint:', error);
+    res.status(500).json({ error: 'Failed to fetch debug info' });
+  }
+});
+
 // Generate AI summaries for selected articles
 app.post('/api/articles/generate-summaries', async (req, res) => {
   try {
