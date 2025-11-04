@@ -797,12 +797,63 @@ class FeedDiscovery {
       const structuredArticles = await this.extractStructuredData(blogUrl);
       articles.push(...structuredArticles);
       
-      // Fallback: HTML pattern matching for article/blog post elements
+      // Strategy 1: Look for all links that might be articles (posts, blog, etc.)
+      const articleLinks = [];
+      $('a[href*="/post"], a[href*="/blog"], a[href*="/article"], a[href*="/posts"]').each((i, elem) => {
+        const href = $(elem).attr('href');
+        if (href && !href.match(/^#|^javascript:|mailto:|tel:/)) {
+          const fullLink = href.startsWith('http') ? href : this.resolveUrl(blogUrl, href);
+          if (!articleLinks.some(a => a.url === fullLink)) {
+            // Try to find title near the link
+            const $link = $(elem);
+            const title = $link.text().trim() || 
+                         $link.find('h1, h2, h3, h4, [class*="title"]').first().text().trim() ||
+                         $link.closest('article, [class*="post"], [class*="article"], [class*="card"]').find('h1, h2, h3, h4, [class*="title"]').first().text().trim();
+            
+            if (title && title.length > 10 && !title.toLowerCase().includes('featured') && !title.toLowerCase().includes('other posts')) {
+              // Try to find date near the link
+              const $container = $link.closest('article, [class*="post"], [class*="article"], [class*="card"], div');
+              let dateText = $container.find('time[datetime]').first().attr('datetime') ||
+                           $container.find('[class*="date"]').first().text().trim() ||
+                           $container.find('time').first().text().trim();
+              
+              // Parse date formats like "SEPTEMBER 22, 2025" or "OCTOBER 21, 2025"
+              let pubDate = null;
+              if (dateText) {
+                try {
+                  pubDate = new Date(dateText);
+                  if (isNaN(pubDate.getTime())) {
+                    // Try parsing formats like "SEPTEMBER 22, 2025"
+                    const dateMatch = dateText.match(/(\w+)\s+(\d+),\s+(\d+)/i);
+                    if (dateMatch) {
+                      pubDate = new Date(dateText);
+                    }
+                  }
+                  if (isNaN(pubDate.getTime())) pubDate = null;
+                } catch (e) {
+                  pubDate = null;
+                }
+              }
+              
+              articleLinks.push({
+                url: fullLink,
+                title: title,
+                description: $container.find('[class*="excerpt"], [class*="summary"], p').first().text().trim().substring(0, 300) || '',
+                datePublished: pubDate
+              });
+            }
+          }
+        }
+      });
+      articles.push(...articleLinks);
+      
+      // Strategy 2: Fallback - HTML pattern matching for article/blog post elements
       const articleSelectors = [
         'article',
         '[class*="article"]',
         '[class*="post"]',
         '[class*="blog-post"]',
+        '[class*="card"]',
         '[id*="article"]',
         '[id*="post"]',
         '.entry',
@@ -813,14 +864,25 @@ class FeedDiscovery {
         $(selector).each((i, elem) => {
           const $elem = $(elem);
           const link = $elem.find('a').first().attr('href');
-          const title = $elem.find('h1, h2, h3, [class*="title"], [class*="headline"]').first().text().trim();
+          const title = $elem.find('h1, h2, h3, h4, [class*="title"], [class*="headline"]').first().text().trim();
           
-          if (title && link) {
+          if (title && link && title.length > 10 && !title.toLowerCase().includes('featured')) {
             const fullLink = link.startsWith('http') ? link : this.resolveUrl(blogUrl, link);
             
-            // Try to extract date
-            const dateText = $elem.find('[class*="date"], time, [datetime]').first().attr('datetime') || 
-                            $elem.find('[class*="date"], time').first().text();
+            // Try to extract date with multiple formats
+            let dateText = $elem.find('time[datetime]').first().attr('datetime') || 
+                          $elem.find('[class*="date"]').first().text().trim() ||
+                          $elem.find('time').first().text().trim();
+            
+            // Also check for date in text like "SEPTEMBER 22, 2025"
+            if (!dateText) {
+              const text = $elem.text();
+              const dateMatch = text.match(/(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\s+\d+,\s+\d{4}/i);
+              if (dateMatch) {
+                dateText = dateMatch[0];
+              }
+            }
+            
             let pubDate = null;
             if (dateText) {
               try {
