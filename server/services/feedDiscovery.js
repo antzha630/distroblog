@@ -855,52 +855,84 @@ class FeedDiscovery {
                            $container.find('[class*="date"]').first().text().trim() ||
                            $container.find('time').first().text().trim();
               
-              // Also check for date in text content (like "SEPTEMBER 22, 2025" or "MAY 22, 2025")
+              // Generic date extraction from text content (works for any blog format)
               if (!dateText || dateText.length < 10) {
                 const containerText = $container.text();
-                // Try multiple date patterns
+                
+                // Try multiple date patterns (generic, not Vana-specific)
+                // Pattern 1: Full month name "SEPTEMBER 22, 2025" or "May 22, 2025"
                 let dateMatch = containerText.match(/(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\s+\d+,\s+\d{4}/i);
+                
+                // Pattern 2: "BY X | MONTH DAY, YEAR" format (common on many blogs)
                 if (!dateMatch) {
-                  // Try "BY X | MONTH DAY, YEAR" format
-                  dateMatch = containerText.match(/BY\s+[^|]+\s+\|\s+(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\s+\d+,\s+\d{4}/i);
-                  if (dateMatch) {
+                  dateMatch = containerText.match(/(?:BY|by|By)\s+[^|]+\s+\|\s+(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\s+(\d+),\s+(\d{4})/i);
+                  if (dateMatch && dateMatch.length >= 4) {
                     dateText = dateMatch[1] + ' ' + dateMatch[2] + ', ' + dateMatch[3];
                   }
                 }
+                
+                // Pattern 3: Short month "Sep 22, 2025" or "May 22, 2025"
+                if (!dateMatch) {
+                  dateMatch = containerText.match(/(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d+,\s+\d{4}/i);
+                }
+                
+                // Pattern 4: ISO format "2025-09-22" or "2025/09/22"
+                if (!dateMatch) {
+                  dateMatch = containerText.match(/\d{4}[-/]\d{1,2}[-/]\d{1,2}/);
+                }
+                
+                // Pattern 5: DD/MM/YYYY or MM/DD/YYYY
+                if (!dateMatch) {
+                  dateMatch = containerText.match(/\d{1,2}\/\d{1,2}\/\d{4}/);
+                }
+                
                 if (dateMatch && !dateText) {
                   dateText = dateMatch[0];
                 }
               }
               
-              // Parse date formats like "SEPTEMBER 22, 2025" or "MAY 22, 2025"
+              // Generic date parsing (handles multiple formats)
               let pubDate = null;
               if (dateText) {
                 try {
-                  // Clean up the date text
-                  const cleanDate = dateText.trim().replace(/BY\s+[^|]+\s+\|\s+/i, '').trim();
+                  // Clean up the date text (remove "BY X |" prefix, etc.)
+                  let cleanDate = dateText.trim()
+                    .replace(/BY\s+[^|]+\s+\|\s+/i, '')
+                    .replace(/Published\s+on\s+/i, '')
+                    .replace(/Posted\s+on\s+/i, '')
+                    .replace(/Date:\s*/i, '')
+                    .trim();
                   
-                  // Try parsing directly
+                  // Try parsing directly (handles most standard formats)
                   pubDate = new Date(cleanDate);
+                  
+                  // If that fails, try manual parsing for month names
                   if (isNaN(pubDate.getTime())) {
-                    // Try parsing with different formats
-                    pubDate = new Date(cleanDate);
-                  }
-                  if (isNaN(pubDate.getTime())) {
-                    // Try manual parsing for "SEPTEMBER 22, 2025" format
                     const monthMap = {
                       'JANUARY': '01', 'FEBRUARY': '02', 'MARCH': '03', 'APRIL': '04',
                       'MAY': '05', 'JUNE': '06', 'JULY': '07', 'AUGUST': '08',
-                      'SEPTEMBER': '09', 'OCTOBER': '10', 'NOVEMBER': '11', 'DECEMBER': '12'
+                      'SEPTEMBER': '09', 'OCTOBER': '10', 'NOVEMBER': '11', 'DECEMBER': '12',
+                      'JAN': '01', 'FEB': '02', 'MAR': '03', 'APR': '04',
+                      'MAY': '05', 'JUN': '06', 'JUL': '07', 'AUG': '08',
+                      'SEP': '09', 'OCT': '10', 'NOV': '11', 'DEC': '12'
                     };
+                    
                     const dateParts = cleanDate.match(/(\w+)\s+(\d+),\s+(\d{4})/i);
-                    if (dateParts) {
-                      const month = monthMap[dateParts[1].toUpperCase()];
-                      const day = dateParts[2].padStart(2, '0');
-                      const year = dateParts[3];
-                      pubDate = new Date(`${year}-${month}-${day}`);
+                    if (dateParts && dateParts.length >= 4) {
+                      const monthName = dateParts[1].toUpperCase();
+                      const month = monthMap[monthName] || monthMap[monthName.substring(0, 3)];
+                      if (month) {
+                        const day = dateParts[2].padStart(2, '0');
+                        const year = dateParts[3];
+                        pubDate = new Date(`${year}-${month}-${day}`);
+                      }
                     }
                   }
-                  if (isNaN(pubDate.getTime())) pubDate = null;
+                  
+                  // Validate the date
+                  if (isNaN(pubDate.getTime()) || pubDate.getFullYear() < 2000 || pubDate.getFullYear() > 2100) {
+                    pubDate = null;
+                  }
                 } catch (e) {
                   pubDate = null;
                 }

@@ -32,10 +32,57 @@ class WebScraper {
       
       for (const article of articles) {
         try {
-          const articleUrl = article.url || article.link;
+          let articleUrl = article.url || article.link;
+          
+          // Fix URL resolution - handle relative URLs and malformed URLs
+          if (articleUrl && !articleUrl.startsWith('http')) {
+            // Relative URL - resolve against base URL
+            if (articleUrl.startsWith('/')) {
+              const baseUrlObj = new URL(source.url);
+              articleUrl = `${baseUrlObj.protocol}//${baseUrlObj.host}${articleUrl}`;
+            } else {
+              // Relative path - resolve against source URL
+              const baseUrlObj = new URL(source.url);
+              const basePath = baseUrlObj.pathname.replace(/\/[^\/]*$/, '/');
+              articleUrl = `${baseUrlObj.protocol}//${baseUrlObj.host}${basePath}${articleUrl}`;
+            }
+          }
           
           // Fetch full content for each article (reuse existing method)
-          const fullContent = await feedMonitor.fetchFullArticleContent(articleUrl);
+          let fullContent = null;
+          try {
+            fullContent = await feedMonitor.fetchFullArticleContent(articleUrl);
+          } catch (err) {
+            // If 404, try alternative URL patterns
+            if (err.response && err.response.status === 404) {
+              console.log(`⚠️ 404 for ${articleUrl}, trying alternative URLs...`);
+              
+              // Try alternative URL patterns
+              const urlVariations = [
+                articleUrl.replace('/posts/', '/post/'),
+                articleUrl.replace('/post/', '/posts/'),
+                articleUrl.replace('/posts/', '/blog/'),
+                articleUrl.replace('/post/', '/blog/'),
+              ];
+              
+              for (const altUrl of urlVariations) {
+                try {
+                  fullContent = await feedMonitor.fetchFullArticleContent(altUrl);
+                  if (fullContent && fullContent.length > 100) {
+                    articleUrl = altUrl; // Use the working URL
+                    break;
+                  }
+                } catch (e) {
+                  // Continue to next variation
+                }
+              }
+            }
+            
+            // If still no content, use what we have from scraping
+            if (!fullContent) {
+              console.log(`⚠️ Could not fetch full content for ${articleUrl}, using scraped content`);
+            }
+          }
           
           // Extract publication date from article page (more comprehensive than list page)
           let pubDate = article.datePublished ? new Date(article.datePublished) : null;
@@ -61,10 +108,13 @@ class WebScraper {
           }
           
           // Convert to RSS-like format
+          // Store full content for AI summaries (use scraped content if fetch failed)
+          const articleContent = fullContent || article.content || article.description || '';
+          
           enhancedArticles.push({
             title: article.title || 'Untitled',
             link: articleUrl,
-            content: fullContent || article.content || article.description || '',
+            content: articleContent, // Full content for AI summaries
             contentSnippet: article.description || article.preview || '',
             description: article.description || article.preview || '',
             pubDate: finalPubDate,
