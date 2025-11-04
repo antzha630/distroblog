@@ -654,22 +654,25 @@ class FeedMonitor {
         }
       }
       
-      // Use LLM service to generate proper summary
+      // Use LLM service to generate author's note style summary (concise, factual)
       const llmService = require('./llmService');
       const summary = await llmService.summarizeArticle(title, cleanedContent, 'RSS Feed');
       
       return {
         content: cleanedContent,
-        preview: summary,
+        preview: summary, // Author's note style summary
         title: title
       };
     } catch (error) {
       console.error('Error enhancing article content:', error);
       const { title, content } = this.extractTitleAndContent(item);
       const cleanedContent = this.cleanContent(content);
+      // Fallback to author's note style
+      const llmService = require('./llmService');
+      const fallbackSummary = llmService.createAuthorsNoteStyleSummary(title, cleanedContent, 'RSS Feed');
       return {
         content: cleanedContent,
-        preview: cleanedContent.substring(0, 200) + (cleanedContent.length > 200 ? '...' : ''),
+        preview: fallbackSummary,
         title: title
       };
     }

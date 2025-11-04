@@ -802,7 +802,31 @@ class FeedDiscovery {
       $('a[href*="/post"], a[href*="/blog"], a[href*="/article"], a[href*="/posts"]').each((i, elem) => {
         const href = $(elem).attr('href');
         if (href && !href.match(/^#|^javascript:|mailto:|tel:/) && href.match(/\/post/)) {
-          const fullLink = href.startsWith('http') ? href : this.resolveUrl(blogUrl, href);
+          // Fix URL resolution - handle base URL with /post properly
+          let fullLink;
+          if (href.startsWith('http')) {
+            fullLink = href;
+          } else if (href.startsWith('/')) {
+            // Absolute path - resolve against domain
+            const baseUrlObj = new URL(blogUrl);
+            fullLink = `${baseUrlObj.protocol}//${baseUrlObj.host}${href}`;
+          } else {
+            // Relative path - resolve against blogUrl
+            fullLink = this.resolveUrl(blogUrl, href);
+          }
+          
+          // Fix double /post/ issue: if base has /post and link has /posts/, remove duplicate
+          // Also handle /post/... links that should be /posts/...
+          if (fullLink.includes('/post/posts/')) {
+            fullLink = fullLink.replace('/post/posts/', '/posts/');
+          }
+          // If link is like /posts/... but base is /post, fix it
+          if (blogUrl.includes('/post') && !blogUrl.includes('/posts') && fullLink.includes('/post/') && !fullLink.includes('/post/posts/')) {
+            // Check if link should be /posts/ instead
+            if (fullLink.match(/\/post\/posts\/[^\/]+/)) {
+              fullLink = fullLink.replace(/\/post\//, '/posts/');
+            }
+          }
           if (!articleLinks.some(a => a.url === fullLink)) {
             const $link = $(elem);
             const $container = $link.closest('article, [class*="post"], [class*="article"], [class*="card"], div, section');

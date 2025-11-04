@@ -48,6 +48,16 @@ class WebScraper {
             }
           }
           
+          // Fix double /post/ issue: if base has /post and link has /posts/, fix it
+          if (articleUrl.includes('/post/posts/')) {
+            articleUrl = articleUrl.replace('/post/posts/', '/posts/');
+          }
+          // If base is /post but link should be /posts/, fix it
+          if (source.url.includes('/post') && !source.url.includes('/posts') && 
+              articleUrl.includes('/post/') && articleUrl.match(/\/post\/posts\/[^\/]+/)) {
+            articleUrl = articleUrl.replace(/\/post\//, '/posts/');
+          }
+          
           // Fetch full content for each article (reuse existing method)
           let fullContent = null;
           try {
@@ -111,12 +121,30 @@ class WebScraper {
           // Store full content for AI summaries (use scraped content if fetch failed)
           const articleContent = fullContent || article.content || article.description || '';
           
+          // Generate author's note style summary immediately for scraped articles
+          const llmService = require('./llmService');
+          let authorNote = article.description || article.preview || '';
+          
+          // If we have content but no good description, generate author's note style summary
+          if (articleContent && articleContent.length > 100 && (!authorNote || authorNote.length < 50)) {
+            try {
+              authorNote = llmService.createAuthorsNoteStyleSummary(
+                article.title || 'Untitled',
+                articleContent,
+                source.name || 'Unknown Source'
+              );
+            } catch (err) {
+              // If generation fails, use what we have
+              console.warn('Could not generate author\'s note style summary:', err.message);
+            }
+          }
+          
           enhancedArticles.push({
             title: article.title || 'Untitled',
             link: articleUrl,
             content: articleContent, // Full content for AI summaries
-            contentSnippet: article.description || article.preview || '',
-            description: article.description || article.preview || '',
+            contentSnippet: authorNote, // Author's note style summary
+            description: authorNote, // Author's note style summary (shown on dashboard)
             pubDate: finalPubDate,
             isoDate: finalIsoDate,
             sourceName: source.name || 'Unknown Source',

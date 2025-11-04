@@ -73,6 +73,23 @@ class LLMService {
     }
   }
 
+  // Create author's note style summary (concise, factual, like RSS feed descriptions)
+  createAuthorsNoteStyleSummary(title, content, sourceName) {
+    if (!content || content.length < 50) {
+      return `${sourceName} has published "${title}". This announcement may be of interest to journalists covering technology and industry developments.`;
+    }
+    
+    // Extract first few sentences or key facts
+    const sentences = content.split(/[.!?]+/).filter(s => s.trim().length > 20);
+    const firstFewSentences = sentences.slice(0, 3).join('. ').trim();
+    
+    if (firstFewSentences.length > 300) {
+      return firstFewSentences.substring(0, 297) + '...';
+    }
+    
+    return firstFewSentences + (firstFewSentences.length < 200 ? '.' : '');
+  }
+
   createSummaryPrompt(title, content, sourceName) {
     // Check if content is just a URL or very minimal content
     if (!content || content.trim().length < 50 || content.trim().match(/^https?:\/\/[^\s]+$/)) {
