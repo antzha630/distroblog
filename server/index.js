@@ -659,13 +659,29 @@ app.get('/api/articles/recent/:days', async (req, res) => {
     
     // Format articles for professional display
     const formattedArticles = articles.map(article => {
-      let actualPreview = article.publisher_description || article.preview;
-      let actualLink = article.link;
+      // Priority: AI summary > author's note (publisher_description) > preview > fallback
+      let actualPreview = null;
       
-      // Handle corrupted preview data
-      if (!actualPreview || actualPreview === '9' || actualPreview === '9...') {
+      // 1. Try AI summary first (if available)
+      if (article.ai_summary && article.ai_summary.trim().length > 0) {
+        actualPreview = article.ai_summary;
+      }
+      // 2. Try author's note (publisher description) - this is the RSS description
+      else if (article.publisher_description && article.publisher_description.trim().length > 0 && 
+               article.publisher_description !== '9' && article.publisher_description !== '9...') {
+        actualPreview = article.publisher_description;
+      }
+      // 3. Try preview
+      else if (article.preview && article.preview.trim().length > 0 && 
+               article.preview !== '9' && article.preview !== '9...') {
+        actualPreview = article.preview;
+      }
+      // 4. Fallback
+      else {
         actualPreview = "No description available";
       }
+      
+      let actualLink = article.link;
       
       return {
         id: article.id,
@@ -673,9 +689,9 @@ app.get('/api/articles/recent/:days', async (req, res) => {
         more_info_url: actualLink,
         source: article.source_name || "Unknown Source",
         cost: 10,
-        preview: actualPreview,
+        preview: actualPreview, // AI summary > author's note > preview
         title: article.title,
-        content: "Content will be generated when summaries are created",
+        content: article.content || "Content will be generated when summaries are created",
         source_name: article.source_name || "Unknown Source",
         created_at: article.created_at,
         pub_date: article.pub_date, // Only use publication date for display
