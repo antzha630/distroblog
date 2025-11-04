@@ -147,7 +147,7 @@ class WebScraper {
       if (!this.browser) {
         this.browser = await chromium.launch({
           headless: true,
-          args: ['--no-sandbox', '--disable-setuid-sandbox']
+          args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
         });
       }
       
@@ -261,6 +261,12 @@ class WebScraper {
       return unique;
       
     } catch (error) {
+      // If browser isn't installed, log helpful message and return empty
+      if (error.message.includes('Executable doesn\'t exist') || error.message.includes('browserType.launch')) {
+        console.error('⚠️ Playwright browsers not installed. Skipping JS-rendered scraping.');
+        console.error('   To fix: Run "npx playwright install chromium" during build');
+        return [];
+      }
       console.error('Error in Playwright scraping:', error.message);
       return [];
     }
