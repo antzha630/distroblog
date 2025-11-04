@@ -801,33 +801,78 @@ class FeedDiscovery {
       const articleLinks = [];
       $('a[href*="/post"], a[href*="/blog"], a[href*="/article"], a[href*="/posts"]').each((i, elem) => {
         const href = $(elem).attr('href');
-        if (href && !href.match(/^#|^javascript:|mailto:|tel:/)) {
+        if (href && !href.match(/^#|^javascript:|mailto:|tel:/) && href.match(/\/post/)) {
           const fullLink = href.startsWith('http') ? href : this.resolveUrl(blogUrl, href);
           if (!articleLinks.some(a => a.url === fullLink)) {
-            // Try to find title near the link
             const $link = $(elem);
-            const title = $link.text().trim() || 
-                         $link.find('h1, h2, h3, h4, [class*="title"]').first().text().trim() ||
-                         $link.closest('article, [class*="post"], [class*="article"], [class*="card"]').find('h1, h2, h3, h4, [class*="title"]').first().text().trim();
+            const $container = $link.closest('article, [class*="post"], [class*="article"], [class*="card"], div, section');
+            
+            // Try multiple strategies to find the title - prioritize titles in the container
+            let title = null;
+            
+            // Strategy 1: Look for heading in the container (most specific)
+            const headings = $container.find('h1, h2, h3, h4, h5, h6, [class*="title"], [class*="headline"]');
+            if (headings.length > 0) {
+              // Find the heading that's closest to this link or in the same container
+              headings.each((idx, heading) => {
+                const $heading = $(heading);
+                // Check if heading is in the same container as the link
+                if ($heading.closest($container).length > 0 || $container.find($heading).length > 0) {
+                  const headingText = $heading.text().trim();
+                  if (headingText && headingText.length > 10 && !title) {
+                    title = headingText;
+                    return false; // Break
+                  }
+                }
+              });
+            }
+            
+            // Strategy 2: Use link text if it's meaningful
+            if (!title || title.length < 10) {
+              const linkText = $link.text().trim();
+              if (linkText && linkText.length > 10 && !linkText.toLowerCase().includes('read more') && !linkText.toLowerCase().includes('view')) {
+                title = linkText;
+              }
+            }
+            
+            // Strategy 3: Look for title in parent elements
+            if (!title || title.length < 10) {
+              let $parent = $link.parent();
+              for (let i = 0; i < 3 && $parent.length; i++) {
+                const parentTitle = $parent.find('h1, h2, h3, h4, [class*="title"]').first().text().trim();
+                if (parentTitle && parentTitle.length > 10) {
+                  title = parentTitle;
+                  break;
+                }
+                $parent = $parent.parent();
+              }
+            }
             
             if (title && title.length > 10 && !title.toLowerCase().includes('featured') && !title.toLowerCase().includes('other posts')) {
-              // Try to find date near the link
-              const $container = $link.closest('article, [class*="post"], [class*="article"], [class*="card"], div');
+              // Try to find date near the link with multiple strategies
               let dateText = $container.find('time[datetime]').first().attr('datetime') ||
+                           $container.find('[datetime]').first().attr('datetime') ||
                            $container.find('[class*="date"]').first().text().trim() ||
                            $container.find('time').first().text().trim();
+              
+              // Also check for date in text content (like "SEPTEMBER 22, 2025")
+              if (!dateText || dateText.length < 10) {
+                const containerText = $container.text();
+                const dateMatch = containerText.match(/(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\s+\d+,\s+\d{4}/i);
+                if (dateMatch) {
+                  dateText = dateMatch[0];
+                }
+              }
               
               // Parse date formats like "SEPTEMBER 22, 2025" or "OCTOBER 21, 2025"
               let pubDate = null;
               if (dateText) {
                 try {
+                  // Try parsing directly
                   pubDate = new Date(dateText);
                   if (isNaN(pubDate.getTime())) {
                     // Try parsing formats like "SEPTEMBER 22, 2025"
-                    const dateMatch = dateText.match(/(\w+)\s+(\d+),\s+(\d+)/i);
-                    if (dateMatch) {
-                      pubDate = new Date(dateText);
-                    }
+                    pubDate = new Date(dateText);
                   }
                   if (isNaN(pubDate.getTime())) pubDate = null;
                 } catch (e) {
