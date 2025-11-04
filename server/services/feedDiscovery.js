@@ -855,24 +855,50 @@ class FeedDiscovery {
                            $container.find('[class*="date"]').first().text().trim() ||
                            $container.find('time').first().text().trim();
               
-              // Also check for date in text content (like "SEPTEMBER 22, 2025")
+              // Also check for date in text content (like "SEPTEMBER 22, 2025" or "MAY 22, 2025")
               if (!dateText || dateText.length < 10) {
                 const containerText = $container.text();
-                const dateMatch = containerText.match(/(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\s+\d+,\s+\d{4}/i);
-                if (dateMatch) {
+                // Try multiple date patterns
+                let dateMatch = containerText.match(/(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\s+\d+,\s+\d{4}/i);
+                if (!dateMatch) {
+                  // Try "BY X | MONTH DAY, YEAR" format
+                  dateMatch = containerText.match(/BY\s+[^|]+\s+\|\s+(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\s+\d+,\s+\d{4}/i);
+                  if (dateMatch) {
+                    dateText = dateMatch[1] + ' ' + dateMatch[2] + ', ' + dateMatch[3];
+                  }
+                }
+                if (dateMatch && !dateText) {
                   dateText = dateMatch[0];
                 }
               }
               
-              // Parse date formats like "SEPTEMBER 22, 2025" or "OCTOBER 21, 2025"
+              // Parse date formats like "SEPTEMBER 22, 2025" or "MAY 22, 2025"
               let pubDate = null;
               if (dateText) {
                 try {
+                  // Clean up the date text
+                  const cleanDate = dateText.trim().replace(/BY\s+[^|]+\s+\|\s+/i, '').trim();
+                  
                   // Try parsing directly
-                  pubDate = new Date(dateText);
+                  pubDate = new Date(cleanDate);
                   if (isNaN(pubDate.getTime())) {
-                    // Try parsing formats like "SEPTEMBER 22, 2025"
-                    pubDate = new Date(dateText);
+                    // Try parsing with different formats
+                    pubDate = new Date(cleanDate);
+                  }
+                  if (isNaN(pubDate.getTime())) {
+                    // Try manual parsing for "SEPTEMBER 22, 2025" format
+                    const monthMap = {
+                      'JANUARY': '01', 'FEBRUARY': '02', 'MARCH': '03', 'APRIL': '04',
+                      'MAY': '05', 'JUNE': '06', 'JULY': '07', 'AUGUST': '08',
+                      'SEPTEMBER': '09', 'OCTOBER': '10', 'NOVEMBER': '11', 'DECEMBER': '12'
+                    };
+                    const dateParts = cleanDate.match(/(\w+)\s+(\d+),\s+(\d{4})/i);
+                    if (dateParts) {
+                      const month = monthMap[dateParts[1].toUpperCase()];
+                      const day = dateParts[2].padStart(2, '0');
+                      const year = dateParts[3];
+                      pubDate = new Date(`${year}-${month}-${day}`);
+                    }
                   }
                   if (isNaN(pubDate.getTime())) pubDate = null;
                 } catch (e) {
