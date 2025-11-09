@@ -701,6 +701,22 @@ class FeedDiscovery {
       const $ = cheerio.load(response.data);
       const articles = [];
       
+      // Get source domain for filtering
+      const baseUrlObj = new URL(baseUrl);
+      const sourceDomain = baseUrlObj.hostname.replace(/^www\./, '').toLowerCase();
+      
+      // Helper to check if URL is from same domain
+      const isSameDomain = (urlString) => {
+        try {
+          if (!urlString) return false;
+          const urlObj = new URL(urlString);
+          const urlDomain = urlObj.hostname.replace(/^www\./, '').toLowerCase();
+          return urlDomain === sourceDomain;
+        } catch (e) {
+          return false;
+        }
+      };
+      
       // Look for JSON-LD structured data
       $('script[type="application/ld+json"]').each((i, elem) => {
         try {
@@ -708,12 +724,15 @@ class FeedDiscovery {
           
           // Handle BlogPosting
           if (data['@type'] === 'BlogPosting' || data['@type'] === 'Article') {
-            articles.push({
-              url: data.url || data.mainEntityOfPage?.['@id'] || data['@id'] || '',
-              title: data.headline || data.name || '',
-              description: data.description || '',
-              datePublished: data.datePublished || data.dateCreated || null
-            });
+            const articleUrl = data.url || data.mainEntityOfPage?.['@id'] || data['@id'] || '';
+            if (isSameDomain(articleUrl)) {
+              articles.push({
+                url: articleUrl,
+                title: data.headline || data.name || '',
+                description: data.description || '',
+                datePublished: data.datePublished || data.dateCreated || null
+              });
+            }
           }
           
           // Handle Blog with blogPosts
@@ -721,12 +740,15 @@ class FeedDiscovery {
             const blogPosts = Array.isArray(data.blogPost) ? data.blogPost : [data.blogPost];
             blogPosts.forEach(post => {
               if (post['@type'] === 'BlogPosting' || post['@type'] === 'Article') {
-                articles.push({
-                  url: post.url || post.mainEntityOfPage?.['@id'] || post['@id'] || '',
-                  title: post.headline || post.name || '',
-                  description: post.description || '',
-                  datePublished: post.datePublished || post.dateCreated || null
-                });
+                const articleUrl = post.url || post.mainEntityOfPage?.['@id'] || post['@id'] || '';
+                if (isSameDomain(articleUrl)) {
+                  articles.push({
+                    url: articleUrl,
+                    title: post.headline || post.name || '',
+                    description: post.description || '',
+                    datePublished: post.datePublished || post.dateCreated || null
+                  });
+                }
               }
             });
           }
@@ -736,12 +758,15 @@ class FeedDiscovery {
             data.itemListElement.forEach(item => {
               const element = item.item || item;
               if (element['@type'] === 'BlogPosting' || element['@type'] === 'Article') {
-                articles.push({
-                  url: element.url || element.mainEntityOfPage?.['@id'] || element['@id'] || '',
-                  title: element.headline || element.name || '',
-                  description: element.description || '',
-                  datePublished: element.datePublished || element.dateCreated || null
-                });
+                const articleUrl = element.url || element.mainEntityOfPage?.['@id'] || element['@id'] || '';
+                if (isSameDomain(articleUrl)) {
+                  articles.push({
+                    url: articleUrl,
+                    title: element.headline || element.name || '',
+                    description: element.description || '',
+                    datePublished: element.datePublished || element.dateCreated || null
+                  });
+                }
               }
             });
           }
@@ -797,6 +822,10 @@ class FeedDiscovery {
       const structuredArticles = await this.extractStructuredData(blogUrl);
       articles.push(...structuredArticles);
       
+      // Get source domain for filtering
+      const baseUrlObj = new URL(baseUrl);
+      const sourceDomain = baseUrlObj.hostname.replace(/^www\./, '').toLowerCase();
+      
       // Strategy 1: Look for all links that might be articles (posts, blog, etc.)
       const articleLinks = [];
       $('a[href*="/post"], a[href*="/blog"], a[href*="/article"], a[href*="/posts"]').each((i, elem) => {
@@ -813,6 +842,17 @@ class FeedDiscovery {
           } else {
             // Relative path - resolve against blogUrl
             fullLink = this.resolveUrl(blogUrl, href);
+          }
+          
+          // Filter: Only include articles from the same domain
+          try {
+            const linkUrlObj = new URL(fullLink);
+            const linkDomain = linkUrlObj.hostname.replace(/^www\./, '').toLowerCase();
+            if (linkDomain !== sourceDomain) {
+              return; // Skip external links
+            }
+          } catch (e) {
+            return; // Skip invalid URLs
           }
           
           // Fix double /post/ issue: if base has /post and link has /posts/, remove duplicate
@@ -995,6 +1035,17 @@ class FeedDiscovery {
           
           if (title && link && title.length > 10 && !title.toLowerCase().includes('featured')) {
             const fullLink = link.startsWith('http') ? link : this.resolveUrl(blogUrl, link);
+            
+            // Filter: Only include articles from the same domain
+            try {
+              const linkUrlObj = new URL(fullLink);
+              const linkDomain = linkUrlObj.hostname.replace(/^www\./, '').toLowerCase();
+              if (linkDomain !== sourceDomain) {
+                return; // Skip external links
+              }
+            } catch (e) {
+              return; // Skip invalid URLs
+            }
             
             // Try to extract date with multiple formats
             let dateText = $elem.find('time[datetime]').first().attr('datetime') || 

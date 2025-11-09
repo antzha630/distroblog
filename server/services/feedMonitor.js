@@ -749,8 +749,29 @@ class FeedMonitor {
 
   // Fetch and extract readable text from an article page
   async fetchFullArticleContent(url) {
-    const resp = await axios.get(url, { timeout: 15000, headers: { 'User-Agent': 'Mozilla/5.0' } });
-    const $ = cheerio.load(resp.data);
+    try {
+      const resp = await axios.get(url, { 
+        timeout: 15000, 
+        headers: { 
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.5',
+          'Accept-Encoding': 'gzip, deflate, br',
+          'Connection': 'keep-alive',
+          'Upgrade-Insecure-Requests': '1',
+          'Sec-Fetch-Dest': 'document',
+          'Sec-Fetch-Mode': 'navigate',
+          'Sec-Fetch-Site': 'none'
+        },
+        maxRedirects: 5,
+        validateStatus: (status) => {
+          // Allow 200-302 (success and redirects), but treat 403 as error
+          if (status === 403) return false;
+          return status >= 200 && status < 400;
+        }
+      });
+      
+      const $ = cheerio.load(resp.data);
 
     // Common content selectors across blogs/CMS (including Substack-like)
     const selectors = [
@@ -789,12 +810,36 @@ class FeedMonitor {
     }
 
     return best;
+    } catch (error) {
+      // Re-throw errors - caller will handle 403s gracefully
+      throw error;
+    }
   }
 
   // Extract article metadata from a URL
   async extractArticleMetadata(url) {
     try {
-      const resp = await axios.get(url, { timeout: 15000, headers: { 'User-Agent': 'Mozilla/5.0' } });
+      const resp = await axios.get(url, { 
+        timeout: 15000, 
+        headers: { 
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.5',
+          'Accept-Encoding': 'gzip, deflate, br',
+          'Connection': 'keep-alive',
+          'Upgrade-Insecure-Requests': '1',
+          'Sec-Fetch-Dest': 'document',
+          'Sec-Fetch-Mode': 'navigate',
+          'Sec-Fetch-Site': 'none'
+        },
+        maxRedirects: 5,
+        validateStatus: (status) => {
+          // Allow 200-302 (success and redirects), but treat 403 as error
+          if (status === 403) return false;
+          return status >= 200 && status < 400;
+        }
+      });
+      
       const $ = cheerio.load(resp.data);
 
       // Extract title
@@ -864,7 +909,21 @@ class FeedMonitor {
       }
 
       // Extract content using the same logic as fetchFullArticleContent
-      const content = await this.fetchFullArticleContent(url);
+      // But handle 403 gracefully - don't fail if we can't fetch full content
+      let content = '';
+      try {
+        content = await this.fetchFullArticleContent(url);
+      } catch (contentError) {
+        // If 403, just use empty content - we already have description from meta tags
+        if (contentError.response && contentError.response.status === 403) {
+          console.log(`⚠️ 403 Forbidden when fetching full content from ${url}, using meta description only`);
+          content = description || ''; // Use description as fallback
+        } else {
+          // For other errors, log but don't fail
+          console.warn(`⚠️ Could not fetch full content from ${url}:`, contentError.message);
+          content = description || ''; // Use description as fallback
+        }
+      }
 
       return {
         title,
@@ -874,6 +933,17 @@ class FeedMonitor {
         description
       };
     } catch (error) {
+      // Handle 403 errors gracefully
+      if (error.response && error.response.status === 403) {
+        console.log(`⚠️ 403 Forbidden when extracting metadata from ${url} (Cloudflare protection)`);
+        return { 
+          title: 'Untitled',
+          content: '',
+          pubDate: null,
+          sourceName: '',
+          description: ''
+        };
+      }
       console.error('Error extracting article metadata:', error);
       throw error;
     }

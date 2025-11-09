@@ -9,6 +9,24 @@ class WebScraper {
   }
 
   /**
+   * Check if a URL is from the same domain as the source
+   */
+  isSameDomain(url, sourceUrl) {
+    try {
+      const urlObj = new URL(url);
+      const sourceObj = new URL(sourceUrl);
+      
+      // Normalize domains (remove www. and compare)
+      const urlDomain = urlObj.hostname.replace(/^www\./, '').toLowerCase();
+      const sourceDomain = sourceObj.hostname.replace(/^www\./, '').toLowerCase();
+      
+      return urlDomain === sourceDomain;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /**
    * Scrape articles from a website (fallback when RSS/JSON Feed not found)
    * Returns articles in RSS-like format for compatibility
    * Strategy: Try static scraping first (fast), then Playwright if needed (slower but handles JS)
@@ -24,6 +42,24 @@ class WebScraper {
       if (articles.length === 0) {
         console.log(`📱 No articles found with static scraping, trying Playwright...`);
         articles = await this.scrapeWithPlaywright(source.url);
+      }
+      
+      // Filter articles to only include those from the same domain as the source
+      const sourceDomain = new URL(source.url).hostname.replace(/^www\./, '').toLowerCase();
+      articles = articles.filter(article => {
+        try {
+          const articleUrl = article.url || article.link;
+          if (!articleUrl) return false;
+          return this.isSameDomain(articleUrl, source.url);
+        } catch (e) {
+          return false;
+        }
+      });
+      
+      if (articles.length === 0) {
+        console.log(`⚠️ No articles found from ${sourceDomain} domain. Found articles from other domains were filtered out.`);
+      } else {
+        console.log(`✅ Found ${articles.length} articles from ${sourceDomain} domain`);
       }
       
       // Enhance articles with full content and better date extraction (reuse existing logic from feedMonitor)
@@ -63,17 +99,21 @@ class WebScraper {
           try {
             fullContent = await feedMonitor.fetchFullArticleContent(articleUrl);
           } catch (err) {
+            // Handle 403 (Cloudflare) gracefully - just use scraped content
+            if (err.response && err.response.status === 403) {
+              console.log(`⚠️ 403 Forbidden for ${articleUrl} (Cloudflare protection), using scraped content`);
+            }
             // If 404, try alternative URL patterns
-            if (err.response && err.response.status === 404) {
+            else if (err.response && err.response.status === 404) {
               console.log(`⚠️ 404 for ${articleUrl}, trying alternative URLs...`);
               
-              // Try alternative URL patterns
+              // Try alternative URL patterns (only if same domain)
               const urlVariations = [
                 articleUrl.replace('/posts/', '/post/'),
                 articleUrl.replace('/post/', '/posts/'),
                 articleUrl.replace('/posts/', '/blog/'),
                 articleUrl.replace('/post/', '/blog/'),
-              ];
+              ].filter(url => this.isSameDomain(url, source.url));
               
               for (const altUrl of urlVariations) {
                 try {
@@ -90,22 +130,25 @@ class WebScraper {
             
             // If still no content, use what we have from scraping
             if (!fullContent) {
-              console.log(`⚠️ Could not fetch full content for ${articleUrl}, using scraped content`);
+              // Don't log if it's a 403 - we already logged that
+              if (!err.response || err.response.status !== 403) {
+                console.log(`⚠️ Could not fetch full content for ${articleUrl}, using scraped content`);
+              }
             }
           }
           
           // Extract publication date from article page (more comprehensive than list page)
           let pubDate = article.datePublished ? new Date(article.datePublished) : null;
           
-          // If no date from list page, try extracting from article page
-          if (!pubDate || isNaN(pubDate.getTime())) {
+          // If no date from list page, try extracting from article page (skip if 403)
+          if ((!pubDate || isNaN(pubDate.getTime())) && fullContent) {
             try {
               const metadata = await feedMonitor.extractArticleMetadata(articleUrl);
               if (metadata.pubDate) {
                 pubDate = new Date(metadata.pubDate);
               }
             } catch (err) {
-              // If extraction fails, keep existing date or null
+              // If extraction fails (especially 403), keep existing date or null
             }
           }
           
@@ -243,9 +286,24 @@ class WebScraper {
       // Wait a bit for any lazy-loaded content
       await page.waitForTimeout(2000);
       
+      // Get source domain for filtering
+      const sourceUrlObj = new URL(url);
+      const sourceDomain = sourceUrlObj.hostname.replace(/^www\./, '').toLowerCase();
+      
       // Extract articles using multiple strategies
-      const articles = await page.evaluate(() => {
+      const articles = await page.evaluate((sourceDomain) => {
         const results = [];
+        
+        // Helper to check if URL is from same domain
+        const isSameDomain = (urlString) => {
+          try {
+            const urlObj = new URL(urlString);
+            const urlDomain = urlObj.hostname.replace(/^www\./, '').toLowerCase();
+            return urlDomain === sourceDomain;
+          } catch (e) {
+            return false;
+          }
+        };
         
         // Strategy 1: Look for article elements
         const articleElements = document.querySelectorAll('article, [class*="article"], [class*="post"], [class*="blog-post"]');
@@ -254,7 +312,7 @@ class WebScraper {
           const title = el.querySelector('h1, h2, h3, h4, [class*="title"], [class*="headline"]');
           const date = el.querySelector('time, [class*="date"], [datetime]');
           
-          if (link && title) {
+          if (link && title && isSameDomain(link.href)) {
             results.push({
               url: link.href,
               title: title.textContent.trim(),
@@ -290,7 +348,7 @@ class WebScraper {
             }
           }
           
-          if (link && link.includes('blog') || link.includes('post') || link.includes('article')) {
+          if (link && isSameDomain(link) && (link.includes('blog') || link.includes('post') || link.includes('article'))) {
             // Check if we already have this URL
             if (!results.some(r => r.url === link)) {
               results.push({
@@ -309,6 +367,8 @@ class WebScraper {
           const links = container.querySelectorAll('a[href*="/blog/"], a[href*="/post/"], a[href*="/article/"]');
           links.forEach(link => {
             const href = link.href;
+            if (!isSameDomain(href)) return; // Filter by domain
+            
             const title = link.textContent.trim() || link.querySelector('h1, h2, h3, h4')?.textContent.trim();
             
             if (title && title.length > 10 && !results.some(r => r.url === href)) {
@@ -323,7 +383,7 @@ class WebScraper {
         });
         
         return results;
-      });
+      }, sourceDomain);
       
       await page.close();
       
