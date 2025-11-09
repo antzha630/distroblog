@@ -147,11 +147,21 @@ app.post('/api/sources', async (req, res) => {
       const discoveredFeed = await feedDiscovery.discoverFeedUrl(url);
       
       if (discoveredFeed) {
-        feedUrl = discoveredFeed;
-        isValid = await feedMonitor.validateFeed(discoveredFeed);
-        if (isValid) {
-          const isJSON = await feedMonitor.isJSONFeed(discoveredFeed);
-          console.log(`✅ Discovered ${isJSON ? 'JSON' : 'RSS'} feed: ${discoveredFeed}`);
+        // Double-check: reject sitemaps (they're not feeds!)
+        if (discoveredFeed.includes('sitemap.xml') || discoveredFeed.includes('sitemap')) {
+          console.log(`⚠️ Rejecting discovered sitemap URL: ${discoveredFeed}`);
+          discoveredFeed = null; // Don't use sitemap as feed
+        } else {
+          feedUrl = discoveredFeed;
+          isValid = await feedMonitor.validateFeed(discoveredFeed);
+          if (isValid) {
+            const isJSON = await feedMonitor.isJSONFeed(discoveredFeed);
+            console.log(`✅ Discovered ${isJSON ? 'JSON' : 'RSS'} feed: ${discoveredFeed}`);
+          } else {
+            // If discovered feed is invalid, don't use it
+            console.log(`⚠️ Discovered feed is invalid: ${discoveredFeed}`);
+            feedUrl = url; // Use original URL instead
+          }
         }
       }
     }

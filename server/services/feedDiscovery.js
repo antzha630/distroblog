@@ -74,10 +74,25 @@ class FeedDiscovery {
         try {
           const feeds = await method.func(baseUrl);
           if (feeds && feeds.length > 0) {
-            console.log(`✅ Found ${feeds.length} ${method.name} feed(s):`, feeds);
-            const result = feeds[0];
-            this.detectionCache.set(cacheKey, { result, timestamp: Date.now() });
-            return result;
+            // Filter out sitemaps - they're not feeds!
+            const validFeeds = feeds.filter(feed => {
+              const feedUrl = typeof feed === 'string' ? feed : feed.url || feed;
+              return !feedUrl.includes('sitemap.xml') && !feedUrl.includes('sitemap');
+            });
+            
+            if (validFeeds.length > 0) {
+              console.log(`✅ Found ${validFeeds.length} ${method.name} feed(s):`, validFeeds);
+              const result = typeof validFeeds[0] === 'string' ? validFeeds[0] : validFeeds[0].url || validFeeds[0];
+              
+              // Double-check it's not a sitemap
+              if (result && result.includes('sitemap')) {
+                console.log(`⚠️ Rejecting sitemap URL: ${result}`);
+                continue; // Skip this result
+              }
+              
+              this.detectionCache.set(cacheKey, { result, timestamp: Date.now() });
+              return result;
+            }
           }
         } catch (error) {
           console.log(`⚠️ ${method.name} detection failed:`, error.message);
