@@ -140,59 +140,59 @@ class WebScraper {
             articleUrl = articleUrl.replace(/\/post\//, '/posts/');
           }
           
-              // Fetch full content for each article (reuse existing method)
-              // NOTE: For initial scraping, we skip full content fetch to avoid timeouts
-              // Full content will be fetched later when articles are processed individually
-              let fullContent = null;
-              
-              // Only fetch full content for the first few articles to avoid timeouts
-              // When adding a new source, we only process 3 articles anyway
-              if (enhancedArticles.length < 5) {
-                try {
-                  fullContent = await feedMonitor.fetchFullArticleContent(articleUrl);
-                } catch (err) {
-                  // Handle 403 (Cloudflare) gracefully - just use scraped content
-                  if (err.response && err.response.status === 403) {
-                    console.log(`⚠️ 403 Forbidden for ${articleUrl} (Cloudflare protection), using scraped content`);
-                  }
-                  // If 404, try alternative URL patterns
-                  else if (err.response && err.response.status === 404) {
-                    console.log(`⚠️ 404 for ${articleUrl}, trying alternative URLs...`);
-                    
-                    // Try alternative URL patterns (only if same domain)
-                    const urlVariations = [
-                      articleUrl.replace('/posts/', '/post/'),
-                      articleUrl.replace('/post/', '/posts/'),
-                      articleUrl.replace('/posts/', '/blog/'),
-                      articleUrl.replace('/post/', '/blog/'),
-                    ].filter(url => this.isSameDomain(url, source.url));
-                    
-                    for (const altUrl of urlVariations) {
-                      try {
-                        fullContent = await feedMonitor.fetchFullArticleContent(altUrl);
-                        if (fullContent && fullContent.length > 100) {
-                          articleUrl = altUrl; // Use the working URL
-                          break;
-                        }
-                      } catch (e) {
-                        // Continue to next variation
-                      }
+          // Fetch full content for each article (reuse existing method)
+          // NOTE: For initial scraping, we skip full content fetch to avoid timeouts
+          // Full content will be fetched later when articles are processed individually
+          let fullContent = null;
+          
+          // Only fetch full content for the first few articles to avoid timeouts
+          // When adding a new source, we only process 3 articles anyway
+          if (enhancedArticles.length < 5) {
+            try {
+              fullContent = await feedMonitor.fetchFullArticleContent(articleUrl);
+            } catch (err) {
+              // Handle 403 (Cloudflare) gracefully - just use scraped content
+              if (err.response && err.response.status === 403) {
+                console.log(`⚠️ 403 Forbidden for ${articleUrl} (Cloudflare protection), using scraped content`);
+              }
+              // If 404, try alternative URL patterns
+              else if (err.response && err.response.status === 404) {
+                console.log(`⚠️ 404 for ${articleUrl}, trying alternative URLs...`);
+                
+                // Try alternative URL patterns (only if same domain)
+                const urlVariations = [
+                  articleUrl.replace('/posts/', '/post/'),
+                  articleUrl.replace('/post/', '/posts/'),
+                  articleUrl.replace('/posts/', '/blog/'),
+                  articleUrl.replace('/post/', '/blog/'),
+                ].filter(url => this.isSameDomain(url, source.url));
+                
+                for (const altUrl of urlVariations) {
+                  try {
+                    fullContent = await feedMonitor.fetchFullArticleContent(altUrl);
+                    if (fullContent && fullContent.length > 100) {
+                      articleUrl = altUrl; // Use the working URL
+                      break;
                     }
-                  }
-                  
-                  // If still no content, use what we have from scraping
-                  if (!fullContent) {
-                    // Don't log if it's a 403 - we already logged that
-                    if (!err.response || err.response.status !== 403) {
-                      console.log(`⚠️ Could not fetch full content for ${articleUrl}, using scraped content`);
-                    }
+                  } catch (e) {
+                    // Continue to next variation
                   }
                 }
-              } else {
-                // For articles beyond the first 5, skip full content fetch to save time
-                // Full content will be fetched later when needed
-                fullContent = null;
               }
+              
+              // If still no content, use what we have from scraping
+              if (!fullContent) {
+                // Don't log if it's a 403 - we already logged that
+                if (!err.response || err.response.status !== 403) {
+                  console.log(`⚠️ Could not fetch full content for ${articleUrl}, using scraped content`);
+                }
+              }
+            }
+          } else {
+            // For articles beyond the first 5, skip full content fetch to save time
+            // Full content will be fetched later when needed
+            fullContent = null;
+          }
           
           // Extract publication date from article page (more comprehensive than list page)
           let pubDate = article.datePublished ? new Date(article.datePublished) : null;
