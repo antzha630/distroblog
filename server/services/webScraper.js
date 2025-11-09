@@ -39,9 +39,20 @@ class WebScraper {
       let articles = await this.scrapeStatic(source.url);
       
       // If no articles found, try with Playwright (for JS-rendered sites)
+      // Only if Playwright is available (gracefully skip if not installed)
       if (articles.length === 0) {
-        console.log(`📱 No articles found with static scraping, trying Playwright...`);
-        articles = await this.scrapeWithPlaywright(source.url);
+        try {
+          console.log(`📱 No articles found with static scraping, trying Playwright...`);
+          articles = await this.scrapeWithPlaywright(source.url);
+        } catch (playwrightError) {
+          // Playwright not available or failed - this is OK, static scraping is preferred anyway
+          if (playwrightError.message && playwrightError.message.includes('Executable doesn\'t exist')) {
+            console.log(`ℹ️ Playwright browsers not installed. Static scraping is sufficient for most sites.`);
+          } else {
+            console.log(`ℹ️ Playwright unavailable: ${playwrightError.message}. Continuing with static scraping results.`);
+          }
+          // Keep articles as empty array - static scraping didn't find anything
+        }
       }
       
       // Filter articles to only include those from the same domain as the source
@@ -288,8 +299,15 @@ class WebScraper {
    * Playwright-based scraping for JS-rendered sites
    */
   async scrapeWithPlaywright(url) {
+    // Check if Playwright is available first
+    if (!playwrightAvailable) {
+      throw new Error('Playwright not installed - static scraping should be used instead');
+    }
+    
     let browser = null;
     try {
+      const { chromium } = require('playwright');
+      
       // Launch browser (reuse if possible)
       if (!this.browser) {
         this.browser = await chromium.launch({
@@ -426,9 +444,10 @@ class WebScraper {
       
     } catch (error) {
       // If browser isn't installed, log helpful message and return empty
-      if (error.message.includes('Executable doesn\'t exist') || error.message.includes('browserType.launch')) {
-        console.error('⚠️ Playwright browsers not installed. Skipping JS-rendered scraping.');
-        console.error('   To fix: Run "npx playwright install chromium" during build');
+      if (error.message.includes('Executable doesn\'t exist') || 
+          error.message.includes('browserType.launch') ||
+          error.message.includes('Cannot find module')) {
+        console.log('ℹ️ Playwright not available. This is normal - static scraping works for most sites.');
         return [];
       }
       console.error('Error in Playwright scraping:', error.message);
