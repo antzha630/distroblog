@@ -109,10 +109,14 @@ class WebScraper {
       }
       
       // Enhance articles with full content and better date extraction (reuse existing logic from feedMonitor)
+      // IMPORTANT: Limit processing to avoid timeouts - only process first 10 articles in detail
+      // The workflow will further limit to 3 when adding a new source
       const feedMonitor = require('./feedMonitor');
       const enhancedArticles = [];
+      const maxArticlesToProcess = 10; // Only process first 10 articles in detail
       
-      for (const article of articles) {
+      for (let i = 0; i < Math.min(articles.length, maxArticlesToProcess); i++) {
+        const article = articles[i];
         try {
           let articleUrl = article.url || article.link;
           
@@ -145,9 +149,10 @@ class WebScraper {
           // Full content will be fetched later when articles are processed individually
           let fullContent = null;
           
-          // Only fetch full content for the first few articles to avoid timeouts
+          // Only fetch full content for the first 3 articles to avoid timeouts
           // When adding a new source, we only process 3 articles anyway
-          if (enhancedArticles.length < 5) {
+          // This saves time and prevents timeouts when scraping sites with many articles
+          if (i < 3) {
             try {
               fullContent = await feedMonitor.fetchFullArticleContent(articleUrl);
             } catch (err) {
@@ -189,16 +194,16 @@ class WebScraper {
               }
             }
           } else {
-            // For articles beyond the first 5, skip full content fetch to save time
-            // Full content will be fetched later when needed
+            // For articles beyond the first 3, skip full content fetch to save time
+            // Full content will be fetched later when needed (e.g., when generating AI summaries)
             fullContent = null;
           }
           
           // Extract publication date from article page (more comprehensive than list page)
           let pubDate = article.datePublished ? new Date(article.datePublished) : null;
           
-          // If no date from list page, try extracting from article page (skip if 403)
-          if ((!pubDate || isNaN(pubDate.getTime())) && fullContent) {
+          // Only try to extract metadata from article page for first 3 articles (to save time)
+          if (i < 3 && (!pubDate || isNaN(pubDate.getTime())) && fullContent) {
             try {
               const metadata = await feedMonitor.extractArticleMetadata(articleUrl);
               if (metadata.pubDate) {
@@ -221,12 +226,13 @@ class WebScraper {
           // Store full content for AI summaries (use scraped content if fetch failed)
           const articleContent = fullContent || article.content || article.description || '';
           
-          // Generate author's note style summary immediately for scraped articles
+          // Generate author's note style summary only for first 3 articles (to save time and API calls)
+          // Other articles will use the description from scraping
           const llmService = require('./llmService');
           let authorNote = article.description || article.preview || '';
           
-          // If we have content but no good description, generate author's note style summary
-          if (articleContent && articleContent.length > 100 && (!authorNote || authorNote.length < 50)) {
+          // Only generate AI summary for first 3 articles to avoid timeouts and API costs
+          if (i < 3 && articleContent && articleContent.length > 100 && (!authorNote || authorNote.length < 50)) {
             try {
               authorNote = llmService.createAuthorsNoteStyleSummary(
                 article.title || 'Untitled',
@@ -296,11 +302,52 @@ class WebScraper {
         return 0;
       });
       
-      // Limit to most recent 20 articles to avoid processing too many
-      // When adding a new source, only 3 will be used anyway
+      // Add remaining articles (beyond maxArticlesToProcess) without full processing
+      // These are already sorted by date, so we just add them with minimal processing
+      for (let i = maxArticlesToProcess; i < articles.length && enhancedArticles.length < 20; i++) {
+        const article = articles[i];
+        try {
+          let articleUrl = article.url || article.link;
+          
+          // Fix URL resolution
+          if (articleUrl && !articleUrl.startsWith('http')) {
+            if (articleUrl.startsWith('/')) {
+              const baseUrlObj = new URL(source.url);
+              articleUrl = `${baseUrlObj.protocol}//${baseUrlObj.host}${articleUrl}`;
+            } else {
+              const baseUrlObj = new URL(source.url);
+              const basePath = baseUrlObj.pathname.replace(/\/[^\/]*$/, '/');
+              articleUrl = `${baseUrlObj.protocol}//${baseUrlObj.host}${basePath}${articleUrl}`;
+            }
+          }
+          
+          // Parse date if available
+          let pubDate = article.datePublished ? new Date(article.datePublished) : null;
+          let finalPubDate = null;
+          if (pubDate && !isNaN(pubDate.getTime())) {
+            finalPubDate = pubDate.toISOString();
+          }
+          
+          enhancedArticles.push({
+            title: article.title || 'Untitled',
+            link: articleUrl,
+            content: article.description || '', // Minimal content - will be fetched later if needed
+            contentSnippet: article.description || '',
+            description: article.description || '',
+            pubDate: finalPubDate,
+            isoDate: finalPubDate,
+            sourceName: source.name || 'Unknown Source',
+            category: source.category || 'General'
+          });
+        } catch (err) {
+          // Skip articles that fail to process
+        }
+      }
+      
+      // Limit to most recent 20 articles total
       const limitedArticles = enhancedArticles.slice(0, 20);
       
-      console.log(`✅ Scraping completed: ${limitedArticles.length} articles (from ${enhancedArticles.length} total, showing most recent)`);
+      console.log(`✅ Scraping completed: ${limitedArticles.length} articles processed (from ${articles.length} found, showing most recent)`);
       return limitedArticles;
     } catch (error) {
       console.error(`❌ Error scraping ${source.url}:`, error.message);
