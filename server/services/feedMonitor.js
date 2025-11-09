@@ -284,7 +284,7 @@ class FeedMonitor {
               }
             }
             
-            // Update last_checked timestamp
+            // Update last_checked timestamp (scraping result is already stored by webScraper)
             await database.updateSourceLastChecked(source.id);
           } else {
             // RSS/JSON Feed: use existing method

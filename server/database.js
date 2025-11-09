@@ -79,6 +79,15 @@ class Database {
         console.error('Error adding is_manual column to articles:', err.message);
       }
     });
+
+    // Add last_scraping_result column to sources table if missing (SQLite only)
+    if (!this.pool) {
+      this.db.run('ALTER TABLE sources ADD COLUMN last_scraping_result TEXT', (err) => {
+        if (err && !/duplicate column name/i.test(err.message)) {
+          console.error('Error adding last_scraping_result column to sources:', err.message);
+        }
+      });
+    }
   }
 
   // Source management
@@ -142,16 +151,48 @@ class Database {
   }
 
   async updateSourceLastChecked(id) {
-    return new Promise((resolve, reject) => {
-      this.db.run(
-        'UPDATE sources SET last_checked = CURRENT_TIMESTAMP WHERE id = ?',
-        [id],
-        function(err) {
-          if (err) reject(err);
-          else resolve(this.changes);
-        }
+    if (this.pool) {
+      // PostgreSQL
+      await this.pool.query(
+        'UPDATE sources SET last_checked = CURRENT_TIMESTAMP WHERE id = $1',
+        [id]
       );
-    });
+    } else {
+      // SQLite fallback
+      return new Promise((resolve, reject) => {
+        this.db.run(
+          'UPDATE sources SET last_checked = CURRENT_TIMESTAMP WHERE id = ?',
+          [id],
+          function(err) {
+            if (err) reject(err);
+            else resolve(this.changes);
+          }
+        );
+      });
+    }
+  }
+
+  async updateScrapingResult(id, result) {
+    if (this.pool) {
+      // PostgreSQL
+      await this.pool.query(
+        'UPDATE sources SET last_scraping_result = $1, last_checked = CURRENT_TIMESTAMP WHERE id = $2',
+        [JSON.stringify(result), id]
+      );
+    } else {
+      // SQLite fallback
+      return new Promise((resolve, reject) => {
+        // SQLite doesn't have native JSON support, store as TEXT
+        this.db.run(
+          'UPDATE sources SET last_scraping_result = ?, last_checked = CURRENT_TIMESTAMP WHERE id = ?',
+          [JSON.stringify(result), id],
+          function(err) {
+            if (err) reject(err);
+            else resolve(this.changes);
+          }
+        );
+      });
+    }
   }
 
   // Article management

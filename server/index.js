@@ -41,7 +41,25 @@ app.get('/api/sources', async (req, res) => {
       const c = bySourceId.get(s.id) || { total: 0, successes: 0 };
       const success_rate = c.total > 0 ? c.successes / c.total : null;
       const active = s.last_checked ? (Date.now() - new Date(s.last_checked).getTime()) < (60 * 60 * 1000) : false;
-      return { ...s, success_rate, active };
+      
+      // Parse scraping result for scraping sources
+      let scrapingResult = null;
+      if (s.monitoring_type === 'SCRAPING' && s.last_scraping_result) {
+        try {
+          scrapingResult = typeof s.last_scraping_result === 'string' 
+            ? JSON.parse(s.last_scraping_result) 
+            : s.last_scraping_result;
+        } catch (e) {
+          // Invalid JSON, ignore
+        }
+      }
+      
+      return { 
+        ...s, 
+        success_rate, 
+        active,
+        scraping_result: scrapingResult
+      };
     });
     res.json(enriched);
   } catch (error) {

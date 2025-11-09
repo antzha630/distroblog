@@ -46,6 +46,7 @@ class WebScraper {
       
       // Filter articles to only include those from the same domain as the source
       const sourceDomain = new URL(source.url).hostname.replace(/^www\./, '').toLowerCase();
+      const articlesBeforeFilter = articles.length;
       articles = articles.filter(article => {
         try {
           const articleUrl = article.url || article.link;
@@ -56,10 +57,35 @@ class WebScraper {
         }
       });
       
+      const articlesFiltered = articlesBeforeFilter - articles.length;
+      
       if (articles.length === 0) {
-        console.log(`⚠️ No articles found from ${sourceDomain} domain. Found articles from other domains were filtered out.`);
+        if (articlesBeforeFilter > 0) {
+          console.log(`⚠️ No articles found from ${sourceDomain} domain. ${articlesBeforeFilter} articles from other domains were filtered out.`);
+        } else {
+          console.log(`⚠️ No articles found from ${sourceDomain} domain.`);
+        }
       } else {
-        console.log(`✅ Found ${articles.length} articles from ${sourceDomain} domain`);
+        console.log(`✅ Found ${articles.length} articles from ${sourceDomain} domain${articlesFiltered > 0 ? ` (${articlesFiltered} external articles filtered out)` : ''}`);
+      }
+      
+      // Store scraping result for health tracking
+      if (source.id) {
+        try {
+          // Use the same database instance as the rest of the app
+          const database = require('../database-postgres');
+          await database.updateScrapingResult(source.id, {
+            articlesFound: articlesBeforeFilter,
+            articlesAfterFilter: articles.length,
+            articlesFiltered: articlesFiltered,
+            success: articles.length > 0,
+            timestamp: new Date().toISOString(),
+            domain: sourceDomain
+          });
+        } catch (err) {
+          // Don't fail scraping if result storage fails
+          console.warn('Could not store scraping result:', err.message);
+        }
       }
       
       // Enhance articles with full content and better date extraction (reuse existing logic from feedMonitor)

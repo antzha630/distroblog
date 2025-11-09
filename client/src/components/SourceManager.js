@@ -248,6 +248,40 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
     return `${Math.round(rate * 100)}%`;
   };
 
+  const getScrapingHealthText = (source) => {
+    if (source.monitoring_type !== 'SCRAPING') return null;
+    
+    if (!source.scraping_result) {
+      return 'Not checked yet';
+    }
+    
+    const result = source.scraping_result;
+    if (result.success && result.articlesAfterFilter > 0) {
+      return `✓ ${result.articlesAfterFilter} article${result.articlesAfterFilter !== 1 ? 's' : ''} found`;
+    } else if (result.articlesFound > 0 && result.articlesAfterFilter === 0) {
+      return `⚠️ ${result.articlesFound} external article${result.articlesFound !== 1 ? 's' : ''} filtered`;
+    } else {
+      return '✗ No articles found';
+    }
+  };
+
+  const getScrapingHealthColor = (source) => {
+    if (source.monitoring_type !== 'SCRAPING') return null;
+    
+    if (!source.scraping_result) {
+      return '#95a5a6'; // Gray for not checked
+    }
+    
+    const result = source.scraping_result;
+    if (result.success && result.articlesAfterFilter > 0) {
+      return '#27ae60'; // Green for success
+    } else if (result.articlesFound > 0 && result.articlesAfterFilter === 0) {
+      return '#f39c12'; // Orange for filtered
+    } else {
+      return '#e74c3c'; // Red for failure
+    }
+  };
+
   if (loading) {
     return (
       <div className="card">
@@ -624,14 +658,26 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
                   </div>
                   
                   <div style={{ textAlign: 'right', minWidth: '140px' }}>
-                    <div style={{ 
-                      fontSize: '1rem',
-                      fontWeight: 'bold',
-                      color: getSuccessRateColor(source.success_rate),
-                      marginBottom: '8px'
-                    }}>
-                      {getSuccessRateText(source.success_rate)} success
-                    </div>
+                    {/* Show scraping health for scraping sources, article status for RSS */}
+                    {source.monitoring_type === 'SCRAPING' ? (
+                      <div style={{ 
+                        fontSize: '0.9rem',
+                        fontWeight: 'bold',
+                        color: getScrapingHealthColor(source),
+                        marginBottom: '8px'
+                      }}>
+                        {getScrapingHealthText(source)}
+                      </div>
+                    ) : (
+                      <div style={{ 
+                        fontSize: '1rem',
+                        fontWeight: 'bold',
+                        color: getSuccessRateColor(source.success_rate),
+                        marginBottom: '8px'
+                      }}>
+                        {getSuccessRateText(source.success_rate)} success
+                      </div>
+                    )}
                     <div style={{ 
                       fontSize: '0.9rem', 
                       color: source.is_paused ? '#ffc107' : '#28a745',

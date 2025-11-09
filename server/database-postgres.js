@@ -93,6 +93,12 @@ class Database {
         ADD COLUMN IF NOT EXISTS monitoring_type VARCHAR(20) DEFAULT 'RSS'
       `);
 
+      // Add last_scraping_result column to track scraping health
+      await client.query(`
+        ALTER TABLE sources 
+        ADD COLUMN IF NOT EXISTS last_scraping_result JSONB
+      `);
+
       // Create indexes for better performance
       await client.query(`
         CREATE INDEX IF NOT EXISTS idx_articles_status ON articles(status);
@@ -147,6 +153,13 @@ class Database {
     await this.pool.query(
       'UPDATE sources SET last_checked = CURRENT_TIMESTAMP WHERE id = $1',
       [id]
+    );
+  }
+
+  async updateScrapingResult(id, result) {
+    await this.pool.query(
+      'UPDATE sources SET last_scraping_result = $1, last_checked = CURRENT_TIMESTAMP WHERE id = $2',
+      [JSON.stringify(result), id]
     );
   }
 
