@@ -161,12 +161,20 @@ app.post('/api/sources', async (req, res) => {
       console.log(`📝 No RSS/JSON Feed found for ${url}, trying scraping fallback...`);
       monitoringType = 'SCRAPING';
       
-      // Test if scraping works
+      // Test if scraping works (use original URL, not discovered sitemap)
       const testArticles = await webScraper.scrapeArticles({ url, name, category: category || null });
       
       if (testArticles.length === 0) {
+        // Provide more helpful error message
+        let errorMsg = 'No RSS/JSON Feed found and scraping returned no articles.';
+        
+        // Check if a sitemap was found (which is not a feed)
+        if (feedUrl && feedUrl.includes('sitemap.xml')) {
+          errorMsg = 'A sitemap was found, but no RSS/JSON feed was available. The system tried scraping but found no articles. Please check the URL or provide a direct RSS feed URL.';
+        }
+        
         return res.status(400).json({ 
-          error: 'No RSS/JSON Feed found and scraping returned no articles. Please check the URL or provide a direct RSS feed URL.' 
+          error: errorMsg
         });
       }
       

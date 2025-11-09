@@ -39,7 +39,6 @@ class FeedDiscovery {
       '/latest/rss',
       '/feed.rdf',
       '/feed.atom',
-      '/sitemap.xml',
       '/feed/index.xml',
       '/rss/index.xml',
       '/atom/index.xml'
@@ -210,43 +209,78 @@ class FeedDiscovery {
       const res = await this.makeRequestWithRetry(sitemapUrl, { timeout: 8000 });
       if (!res || res.status !== 200 || typeof res.data !== 'string') return [];
       const xml = res.data;
-      const urls = [];
-      // Extract URLs from a simple regex (cheap and sufficient here)
-      const locRegex = /<loc>([^<]+)<\/loc>/gi;
-      let m;
-      while ((m = locRegex.exec(xml)) !== null) {
-        const href = m[1];
-        // Only same-origin URLs
-        try {
-          const v = new URL(href);
-          if (v.origin !== u.origin) continue;
-          urls.push(href);
-        } catch (_) {}
+      
+      // Check if this is a sitemap index (points to other sitemaps)
+      if (xml.includes('<sitemapindex') || xml.includes('<sitemap>')) {
+        // Extract sitemap URLs from index
+        const sitemapRegex = /<loc>([^<]+)<\/loc>/gi;
+        const sitemapUrls = [];
+        let m;
+        while ((m = sitemapRegex.exec(xml)) !== null) {
+          const href = m[1];
+          try {
+            const v = new URL(href);
+            if (v.origin === u.origin && href.includes('sitemap')) {
+              sitemapUrls.push(href);
+            }
+          } catch (_) {}
+        }
+        
+        // Try to parse the first sitemap from the index
+        if (sitemapUrls.length > 0) {
+          try {
+            const sitemapRes = await this.makeRequestWithRetry(sitemapUrls[0], { timeout: 8000 });
+            if (sitemapRes && sitemapRes.status === 200) {
+              return await this.parseSitemapUrls(sitemapRes.data, u.origin);
+            }
+          } catch (_) {}
+        }
       }
-
-      // First pass: direct feed-looking URLs
-      const candidateFeeds = urls.filter(h => /(rss|atom|feed)\.(xml|rss|atom)|\/(rss|atom|feed)(\/|$)/i.test(h));
-      for (const cand of candidateFeeds) {
-        try {
-          const r = await this.makeRequestWithRetry(cand);
-          if (r && r.status === 200 && this.isValidFeed(r.data)) {
-            return [cand];
-          }
-        } catch (_) {}
-      }
-
-      // Second pass: likely sections to probe with common paths
-      const sectionUrls = urls.filter(h => /\/(blog|news|posts|articles|updates)(\/|$)/i.test(h));
-      for (const s of sectionUrls.slice(0, 20)) { // cap to avoid heavy scans
-        try {
-          const found = await this.checkCommonFeedPaths(s.replace(/\/$/, ''));
-          if (found && found.length) return found;
-        } catch (_) {}
-      }
-      return [];
+      
+      // Parse URLs from sitemap
+      return await this.parseSitemapUrls(xml, u.origin);
     } catch (_) {
       return [];
     }
+  }
+
+  // Helper to parse URLs from sitemap XML
+  async parseSitemapUrls(xml, origin) {
+    const urls = [];
+    // Extract URLs from a simple regex (cheap and sufficient here)
+    const locRegex = /<loc>([^<]+)<\/loc>/gi;
+    let m;
+    while ((m = locRegex.exec(xml)) !== null) {
+      const href = m[1];
+      // Only same-origin URLs
+      try {
+        const v = new URL(href);
+        if (v.origin !== origin) continue;
+        urls.push(href);
+      } catch (_) {}
+    }
+
+    // First pass: direct feed-looking URLs - test them
+    const candidateFeeds = urls.filter(h => /(rss|atom|feed)\.(xml|rss|atom)|\/(rss|atom|feed)(\/|$)/i.test(h));
+    for (const cand of candidateFeeds) {
+      try {
+        const r = await this.makeRequestWithRetry(cand);
+        if (r && r.status === 200 && this.isValidFeed(r.data)) {
+          return [cand];
+        }
+      } catch (_) {}
+    }
+
+    // Second pass: likely sections to probe with common paths
+    const sectionUrls = urls.filter(h => /\/(blog|news|posts|articles|updates)(\/|$)/i.test(h));
+    for (const s of sectionUrls.slice(0, 5)) { // Limit to avoid too many requests
+      try {
+        const found = await this.checkCommonFeedPaths(s.replace(/\/$/, ''));
+        if (found && found.length) return found;
+      } catch (_) {}
+    }
+    
+    return [];
   }
 
   normalizeUrl(url) {
@@ -564,9 +598,16 @@ class FeedDiscovery {
       return false;
     }
 
-    // RSS/Atom/XML signatures near the top
-    const xmlSignatures = ['<rss', '<feed', '<rdf:rdf', '<channel', '<?xml'];
-    if (xmlSignatures.some(sig => snippet.includes(sig))) {
+    // Explicitly reject sitemaps (they're not feeds!)
+    if (snippet.includes('<sitemap') || snippet.includes('<sitemapindex') || 
+        snippet.includes('<urlset') || snippet.includes('xmlns="http://www.sitemaps.org')) {
+      return false;
+    }
+
+    // RSS/Atom/XML signatures near the top (but not sitemaps)
+    // Must have feed-specific tags, not just <?xml
+    const feedSignatures = ['<rss', '<feed', '<rdf:rdf', '<channel'];
+    if (feedSignatures.some(sig => snippet.includes(sig))) {
       return true;
     }
 
