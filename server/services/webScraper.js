@@ -379,18 +379,42 @@ class WebScraper {
       }
       
       // Wait for any lazy-loaded content (especially important for Next.js)
-      await page.waitForTimeout(3000); // Increased wait time for JS-rendered content
+      await page.waitForTimeout(3000); // Initial wait for JS to execute
       
       // For Next.js apps, wait for content to appear (not just spinner)
+      // Try multiple strategies to detect when content is loaded
       try {
-        // Wait for content containers to appear (common patterns)
-        await page.waitForSelector('article, [class*="post"], [class*="blog"], [class*="card"]', { 
-          timeout: 5000 
-        }).catch(() => {
-          // If no articles found, that's OK - we'll try to extract what we can
+        // Strategy 1: Wait for loading spinner to disappear
+        await page.waitForFunction(() => {
+          const spinner = document.querySelector('.animate-spin, [class*="spinner"], [class*="loading"]');
+          return !spinner || spinner.offsetParent === null; // Spinner is hidden or doesn't exist
+        }, { timeout: 10000 }).catch(() => {
+          // Spinner might not exist or already gone
         });
+        
+        // Strategy 2: Wait for content containers to appear
+        await page.waitForSelector('a[href*="/blog/"], article, [class*="post"], [class*="blog"], [class*="card"], [class*="grid"]', { 
+          timeout: 10000 
+        }).catch(() => {
+          // If no specific selector found, continue anyway
+        });
+        
+        // Strategy 3: Wait for links that look like blog posts
+        await page.waitForFunction(() => {
+          const links = Array.from(document.querySelectorAll('a[href]'));
+          return links.some(link => {
+            const href = link.href;
+            return href.includes('/blog/') || href.includes('/post/') || href.includes('/article/');
+          });
+        }, { timeout: 10000 }).catch(() => {
+          // No blog links found yet, continue anyway
+        });
+        
+        // Additional wait for any API calls to complete
+        await page.waitForTimeout(2000);
       } catch (e) {
-        // No specific selector found - continue anyway
+        // Continue even if waiting fails
+        console.log('⚠️ Content loading detection completed, proceeding with extraction...');
       }
       
       // Get source domain for filtering
@@ -442,21 +466,34 @@ class WebScraper {
           const href = link.href;
           if (!href || !isSameDomain(href)) return;
           
-          // Skip navigation and footer links
-          if (href.includes('#') || href.endsWith('/') && !href.includes('/blog/') && !href.includes('/post/')) {
-            // Check if it's actually a blog post link
-            if (!href.match(/\/(blog|post|article)\/[^\/]+/i)) return;
+          // Focus on blog post URLs (most reliable indicator)
+          // Look for URLs like /blog/slug, /post/slug, /article/slug
+          const isBlogPostUrl = href.match(/\/(blog|post|article)\/[^\/\?#]+/i);
+          if (!isBlogPostUrl) {
+            // Skip if it's not a blog post URL and doesn't look like one
+            if (!href.includes('/blog/') && !href.includes('/post/') && !href.includes('/article/')) {
+              return;
+            }
+          }
+          
+          // Skip navigation, footer, and obvious non-article links
+          if (href.includes('#') || 
+              href === window.location.href || 
+              href.endsWith('/blog') || 
+              href.endsWith('/blog/')) {
+            return;
           }
           
           // Look for title in the link or its parent container
           let title = link.textContent.trim();
           let dateText = null;
+          let description = '';
           
           // Check parent container for title and date
-          let container = link.closest('div, article, section, li');
+          let container = link.closest('div, article, section, li, [class*="card"], [class*="post"]');
           if (container) {
             // Look for title in container (headings, or text with title-like characteristics)
-            const titleElement = container.querySelector('h1, h2, h3, h4, h5, h6, [class*="title"], [class*="headline"]');
+            const titleElement = container.querySelector('h1, h2, h3, h4, h5, h6, [class*="title"], [class*="headline"], [class*="name"]');
             if (titleElement) {
               title = titleElement.textContent.trim();
             }
@@ -466,10 +503,13 @@ class WebScraper {
             if (dateElement) {
               dateText = dateElement.getAttribute('datetime') || dateElement.textContent.trim();
             } else {
-              // Try to find date in text content
+              // Try to find date in text content (look for patterns like "06-Nov-25")
               const containerText = container.textContent || '';
               dateText = extractDate(containerText) || null;
             }
+            
+            // Extract description
+            description = (container.querySelector('[class*="excerpt"], [class*="summary"], [class*="description"], p')?.textContent.trim() || '').substring(0, 300);
             
             // If no title found, try to extract from link's accessible text or aria-label
             if (!title || title.length < 10) {
@@ -477,14 +517,21 @@ class WebScraper {
             }
           }
           
-          // Filter: Must have a meaningful title and be a blog-related URL
-          if (title && title.length > 10 && 
-              (href.includes('/blog/') || href.includes('/post/') || href.includes('/article/') || 
-               href.match(/\/blog\/[^\/]+/) || title.length > 20)) {
+          // Filter: Must have a meaningful title
+          if (title && title.length > 10) {
             // Skip if it's clearly not an article (navigation, buttons, etc.)
-            if (title.toLowerCase().includes('read more') || 
-                title.toLowerCase().includes('learn more') ||
+            const lowerTitle = title.toLowerCase();
+            if (lowerTitle.includes('read more') || 
+                lowerTitle.includes('learn more') ||
+                lowerTitle === 'blog' ||
+                lowerTitle === 'about' ||
                 title.length < 15) {
+              return;
+            }
+            
+            // For blog post URLs, be more lenient with title length
+            const minTitleLength = isBlogPostUrl ? 10 : 20;
+            if (title.length < minTitleLength) {
               return;
             }
             
@@ -493,7 +540,7 @@ class WebScraper {
               results.push({
                 url: href,
                 title: title,
-                description: container ? (container.querySelector('[class*="excerpt"], [class*="summary"], p')?.textContent.trim() || '').substring(0, 300) : '',
+                description: description,
                 datePublished: dateText
               });
             }
