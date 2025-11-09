@@ -9,11 +9,7 @@ services:
         value: production
       - key: REACT_APP_API_BASE_URL
         value: https://distroblog.onrender.com
-      - key: DATABASE_URL
-        fromDatabase:
-          name: distroblog-db
-          property: connectionString
-
-databases:
-  - name: distroblog-db
-    plan: free
+      # DATABASE_URL should be set manually in Render dashboard to your Supabase connection string
+      # Format: postgresql://postgres.fwikafkqhwxqusniiqzk:[YOUR-PASSWORD]@aws-1-us-east-1.pooler.supabase.com:6543/postgres
+      # Or use the direct connection: postgresql://postgres:[YOUR-PASSWORD]@db.fwikafkqhwxqusniiqzk.supabase.co:5432/postgres
+      # Note: Use pooler (port 6543) for external connections from Render
