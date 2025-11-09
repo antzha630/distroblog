@@ -2,7 +2,7 @@ services:
   - type: web
     name: distroblog
     env: node
-    buildCommand: npm install && cd client && npm install && cd .. && PLAYWRIGHT_BROWSERS_PATH=/opt/render/project/.cache/playwright npx playwright install chromium 2>&1 | (grep -v "su:" || true) && npm run build
+    buildCommand: npm install && cd client && npm install && cd .. && (PLAYWRIGHT_BROWSERS_PATH=/opt/render/project/.cache/playwright npx playwright install chromium 2>&1 | grep -v "su:" | grep -v "Authentication failure" | grep -v "Switching to root" || true) && npm run build
     startCommand: npm start
     envVars:
       - key: NODE_ENV
