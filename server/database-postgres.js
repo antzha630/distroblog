@@ -2,7 +2,34 @@ const { Pool } = require('pg');
 
 class Database {
   constructor() {
-    const connectionString = process.env.DATABASE_URL || 'postgresql://localhost:5432/distroblog';
+    let connectionString = process.env.DATABASE_URL || 'postgresql://localhost:5432/distroblog';
+    
+    // Check if using Supabase and fix connection string if needed
+    // Supabase direct connections (port 5432) don't work from Render - must use pooler (port 6543)
+    if (connectionString.includes('supabase.co') && connectionString.includes(':5432')) {
+      console.log('⚠️ WARNING: Detected Supabase direct connection (port 5432). This may not work from Render.');
+      console.log('   Please use the Connection Pooler URL (port 6543) from Supabase dashboard.');
+      console.log('   Format: postgresql://postgres.xxx:[PASSWORD]@aws-1-us-east-1.pooler.supabase.com:6543/postgres');
+      
+      // Try to auto-fix: replace direct connection with pooler
+      try {
+        const url = new URL(connectionString);
+        if (url.hostname.includes('db.') && url.hostname.includes('.supabase.co')) {
+          // Extract project ref from hostname (e.g., db.abc123xyz.supabase.co -> abc123xyz)
+          const projectRef = url.hostname.match(/db\.([^.]+)\.supabase\.co/)?.[1];
+          if (projectRef) {
+            // Construct pooler URL
+            const poolerHost = `aws-1-us-east-1.pooler.supabase.com`; // Default region, adjust if needed
+            const poolerUrl = `${url.protocol}//postgres.${projectRef}:${url.password}@${poolerHost}:6543${url.pathname}${url.search}`;
+            console.log(`🔄 Attempting to use pooler connection instead...`);
+            connectionString = poolerUrl;
+          }
+        }
+      } catch (e) {
+        // URL parsing failed, keep original
+        console.log('⚠️ Could not auto-fix connection string. Please use pooler URL manually.');
+      }
+    }
     
     // Configure pool for Supabase/Render with better connection handling
     this.pool = new Pool({
@@ -13,7 +40,9 @@ class Database {
       idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
       connectionTimeoutMillis: 10000, // Return an error after 10 seconds if connection cannot be established
       // Handle connection errors gracefully
-      allowExitOnIdle: false
+      allowExitOnIdle: false,
+      // Force IPv4 (avoid IPv6 issues on Render)
+      family: 4
     });
 
     // Handle pool errors (don't crash the app)
@@ -27,13 +56,39 @@ class Database {
     let retries = 3;
     let lastError = null;
     
+    // Log connection info for debugging
+    const connectionString = process.env.DATABASE_URL || '';
+    if (connectionString) {
+      try {
+        const url = new URL(connectionString);
+        const host = url.hostname;
+        const port = url.port || (url.protocol === 'postgresql:' ? '5432' : '5432');
+        console.log(`🔌 Attempting to connect to database: ${host}:${port}`);
+        
+        // Check if using correct port for Supabase
+        if (host.includes('supabase')) {
+          if (port === '5432') {
+            console.error('❌ ERROR: Using direct connection (port 5432) to Supabase from Render.');
+            console.error('   Render cannot connect to Supabase direct connections.');
+            console.error('   Please use the Connection Pooler URL (port 6543) from Supabase dashboard.');
+            console.error('   Go to: Supabase Dashboard → Settings → Database → Connection Pooling');
+            console.error('   Use: Transaction mode connection string with port 6543');
+          } else if (port === '6543') {
+            console.log('✅ Using Supabase connection pooler (correct for Render)');
+          }
+        }
+      } catch (e) {
+        // URL parsing failed, continue anyway
+      }
+    }
+    
     while (retries > 0) {
       try {
         // Test connection with timeout
         const client = await Promise.race([
           this.pool.connect(),
           new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Connection timeout')), 10000)
+            setTimeout(() => reject(new Error('Connection timeout')), 15000)
           )
         ]);
         
@@ -47,7 +102,18 @@ class Database {
       } catch (err) {
         lastError = err;
         retries--;
-        console.error(`Database connection failed (${retries} retries left):`, err.message);
+        
+        // Provide helpful error messages
+        if (err.code === 'ENETUNREACH' && err.address && err.port === 5432) {
+          console.error(`❌ Database connection failed (${retries} retries left): Network unreachable on port 5432`);
+          console.error('   This usually means you are using Supabase direct connection instead of pooler.');
+          console.error('   SOLUTION: Use Connection Pooler URL (port 6543) from Supabase dashboard.');
+        } else {
+          console.error(`Database connection failed (${retries} retries left):`, err.message);
+          if (err.code) {
+            console.error(`   Error code: ${err.code}`);
+          }
+        }
         
         if (retries > 0) {
           // Wait before retrying (exponential backoff)
@@ -60,6 +126,19 @@ class Database {
     
     // If we get here, all retries failed
     console.error('Database connection failed after retries:', lastError);
+    if (lastError && lastError.code === 'ENETUNREACH' && lastError.port === 5432) {
+      console.error('');
+      console.error('═══════════════════════════════════════════════════════════════');
+      console.error('FIX: Use Supabase Connection Pooler (port 6543)');
+      console.error('═══════════════════════════════════════════════════════════════');
+      console.error('1. Go to: https://app.supabase.com → Your Project → Settings → Database');
+      console.error('2. Scroll to "Connection string" section');
+      console.error('3. Select "Connection pooling" → "Transaction" mode');
+      console.error('4. Copy the connection string (should have port 6543)');
+      console.error('5. Update DATABASE_URL in Render dashboard with this connection string');
+      console.error('6. Make sure password is URL-encoded (@ → %40)');
+      console.error('═══════════════════════════════════════════════════════════════');
+    }
     throw lastError;
   }
 
