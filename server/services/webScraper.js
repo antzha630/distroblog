@@ -1,4 +1,5 @@
-const { chromium } = require('playwright');
+// Playwright is optional - only needed for JS-rendered sites
+// Static scraping works for most sites, so we make Playwright optional
 const FeedDiscovery = require('./feedDiscovery');
 
 class WebScraper {
@@ -299,13 +300,9 @@ class WebScraper {
    * Playwright-based scraping for JS-rendered sites
    */
   async scrapeWithPlaywright(url) {
-    // Check if Playwright is available first
-    if (!playwrightAvailable) {
-      throw new Error('Playwright not installed - static scraping should be used instead');
-    }
-    
     let browser = null;
     try {
+      // Try to require Playwright (might not be installed)
       const { chromium } = require('playwright');
       
       // Launch browser (reuse if possible)
