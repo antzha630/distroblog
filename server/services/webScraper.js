@@ -140,48 +140,59 @@ class WebScraper {
             articleUrl = articleUrl.replace(/\/post\//, '/posts/');
           }
           
-          // Fetch full content for each article (reuse existing method)
-          let fullContent = null;
-          try {
-            fullContent = await feedMonitor.fetchFullArticleContent(articleUrl);
-          } catch (err) {
-            // Handle 403 (Cloudflare) gracefully - just use scraped content
-            if (err.response && err.response.status === 403) {
-              console.log(`⚠️ 403 Forbidden for ${articleUrl} (Cloudflare protection), using scraped content`);
-            }
-            // If 404, try alternative URL patterns
-            else if (err.response && err.response.status === 404) {
-              console.log(`⚠️ 404 for ${articleUrl}, trying alternative URLs...`);
+              // Fetch full content for each article (reuse existing method)
+              // NOTE: For initial scraping, we skip full content fetch to avoid timeouts
+              // Full content will be fetched later when articles are processed individually
+              let fullContent = null;
               
-              // Try alternative URL patterns (only if same domain)
-              const urlVariations = [
-                articleUrl.replace('/posts/', '/post/'),
-                articleUrl.replace('/post/', '/posts/'),
-                articleUrl.replace('/posts/', '/blog/'),
-                articleUrl.replace('/post/', '/blog/'),
-              ].filter(url => this.isSameDomain(url, source.url));
-              
-              for (const altUrl of urlVariations) {
+              // Only fetch full content for the first few articles to avoid timeouts
+              // When adding a new source, we only process 3 articles anyway
+              if (enhancedArticles.length < 5) {
                 try {
-                  fullContent = await feedMonitor.fetchFullArticleContent(altUrl);
-                  if (fullContent && fullContent.length > 100) {
-                    articleUrl = altUrl; // Use the working URL
-                    break;
+                  fullContent = await feedMonitor.fetchFullArticleContent(articleUrl);
+                } catch (err) {
+                  // Handle 403 (Cloudflare) gracefully - just use scraped content
+                  if (err.response && err.response.status === 403) {
+                    console.log(`⚠️ 403 Forbidden for ${articleUrl} (Cloudflare protection), using scraped content`);
                   }
-                } catch (e) {
-                  // Continue to next variation
+                  // If 404, try alternative URL patterns
+                  else if (err.response && err.response.status === 404) {
+                    console.log(`⚠️ 404 for ${articleUrl}, trying alternative URLs...`);
+                    
+                    // Try alternative URL patterns (only if same domain)
+                    const urlVariations = [
+                      articleUrl.replace('/posts/', '/post/'),
+                      articleUrl.replace('/post/', '/posts/'),
+                      articleUrl.replace('/posts/', '/blog/'),
+                      articleUrl.replace('/post/', '/blog/'),
+                    ].filter(url => this.isSameDomain(url, source.url));
+                    
+                    for (const altUrl of urlVariations) {
+                      try {
+                        fullContent = await feedMonitor.fetchFullArticleContent(altUrl);
+                        if (fullContent && fullContent.length > 100) {
+                          articleUrl = altUrl; // Use the working URL
+                          break;
+                        }
+                      } catch (e) {
+                        // Continue to next variation
+                      }
+                    }
+                  }
+                  
+                  // If still no content, use what we have from scraping
+                  if (!fullContent) {
+                    // Don't log if it's a 403 - we already logged that
+                    if (!err.response || err.response.status !== 403) {
+                      console.log(`⚠️ Could not fetch full content for ${articleUrl}, using scraped content`);
+                    }
+                  }
                 }
+              } else {
+                // For articles beyond the first 5, skip full content fetch to save time
+                // Full content will be fetched later when needed
+                fullContent = null;
               }
-            }
-            
-            // If still no content, use what we have from scraping
-            if (!fullContent) {
-              // Don't log if it's a 403 - we already logged that
-              if (!err.response || err.response.status !== 403) {
-                console.log(`⚠️ Could not fetch full content for ${articleUrl}, using scraped content`);
-              }
-            }
-          }
           
           // Extract publication date from article page (more comprehensive than list page)
           let pubDate = article.datePublished ? new Date(article.datePublished) : null;
@@ -266,13 +277,31 @@ class WebScraper {
       
       // Sort by date (newest first)
       enhancedArticles.sort((a, b) => {
+        // Articles with dates come first
+        if (a.pubDate && !b.pubDate) return -1;
+        if (!a.pubDate && b.pubDate) return 1;
+        
+        // If both have dates, sort by date (newest first)
         if (a.pubDate && b.pubDate) {
-          return new Date(b.pubDate) - new Date(a.pubDate);
+          try {
+            const dateA = new Date(a.pubDate);
+            const dateB = new Date(b.pubDate);
+            if (!isNaN(dateA.getTime()) && !isNaN(dateB.getTime())) {
+              return dateB - dateA; // Newest first
+            }
+          } catch (e) {
+            // Invalid date, keep original order
+          }
         }
         return 0;
       });
       
-      return enhancedArticles;
+      // Limit to most recent 20 articles to avoid processing too many
+      // When adding a new source, only 3 will be used anyway
+      const limitedArticles = enhancedArticles.slice(0, 20);
+      
+      console.log(`✅ Scraping completed: ${limitedArticles.length} articles (from ${enhancedArticles.length} total, showing most recent)`);
+      return limitedArticles;
     } catch (error) {
       console.error(`❌ Error scraping ${source.url}:`, error.message);
       return [];
@@ -640,8 +669,34 @@ class WebScraper {
         return true;
       });
       
-      console.log(`✅ Playwright found ${unique.length} articles`);
-      return unique;
+      // Sort by date (newest first) - articles with dates come first
+      unique.sort((a, b) => {
+        // Articles with dates come first
+        if (a.datePublished && !b.datePublished) return -1;
+        if (!a.datePublished && b.datePublished) return 1;
+        
+        // If both have dates, sort by date
+        if (a.datePublished && b.datePublished) {
+          try {
+            const dateA = new Date(a.datePublished);
+            const dateB = new Date(b.datePublished);
+            if (!isNaN(dateA.getTime()) && !isNaN(dateB.getTime())) {
+              return dateB - dateA; // Newest first
+            }
+          } catch (e) {
+            // Invalid date, keep original order
+          }
+        }
+        
+        return 0;
+      });
+      
+      // Limit to most recent 20 articles (enough for initial fetch, but not too many)
+      // The workflow will further limit to 3 when adding a new source
+      const limited = unique.slice(0, 20);
+      
+      console.log(`✅ Playwright found ${limited.length} articles (from ${unique.length} total, showing most recent)`);
+      return limited;
       
     } catch (error) {
       // Clean up page if it was created
