@@ -6,28 +6,53 @@ class Database {
     
     // Check if using Supabase and fix connection string if needed
     // Supabase direct connections (port 5432) don't work from Render - must use pooler (port 6543)
-    if (connectionString.includes('supabase.co') && connectionString.includes(':5432')) {
-      console.log('⚠️ WARNING: Detected Supabase direct connection (port 5432). This may not work from Render.');
-      console.log('   Please use the Connection Pooler URL (port 6543) from Supabase dashboard.');
-      console.log('   Format: postgresql://postgres.xxx:[PASSWORD]@aws-1-us-east-1.pooler.supabase.com:6543/postgres');
-      
-      // Try to auto-fix: replace direct connection with pooler
+    if (connectionString.includes('supabase')) {
       try {
         const url = new URL(connectionString);
-        if (url.hostname.includes('db.') && url.hostname.includes('.supabase.co')) {
+        const port = url.port || '5432';
+        
+        // If using pooler hostname but wrong port, fix it
+        if (url.hostname.includes('pooler.supabase.com') && port === '5432') {
+          console.log('⚠️ WARNING: Detected pooler hostname but port 5432. Auto-fixing to port 6543...');
+          // Reconstruct URL with correct port
+          const fixedUrl = new URL(connectionString);
+          fixedUrl.port = '6543';
+          connectionString = fixedUrl.toString();
+          console.log('✅ Auto-fixed: Changed port from 5432 to 6543');
+          console.log(`   New connection: ${fixedUrl.hostname}:6543`);
+        }
+        // If using direct connection (db.supabase.co), convert to pooler
+        else if (url.hostname.includes('db.') && url.hostname.includes('.supabase.co') && port === '5432') {
+          console.log('⚠️ WARNING: Detected Supabase direct connection (port 5432). Converting to pooler...');
+          
           // Extract project ref from hostname (e.g., db.abc123xyz.supabase.co -> abc123xyz)
           const projectRef = url.hostname.match(/db\.([^.]+)\.supabase\.co/)?.[1];
           if (projectRef) {
-            // Construct pooler URL
-            const poolerHost = `aws-1-us-east-1.pooler.supabase.com`; // Default region, adjust if needed
-            const poolerUrl = `${url.protocol}//postgres.${projectRef}:${url.password}@${poolerHost}:6543${url.pathname}${url.search}`;
-            console.log(`🔄 Attempting to use pooler connection instead...`);
+            // Construct pooler URL - try to detect region from hostname or use default
+            let poolerHost = 'aws-1-us-east-1.pooler.supabase.com'; // Default region
+            // Try to extract region if present in original hostname
+            const regionMatch = url.hostname.match(/\.([a-z0-9-]+)\.supabase\.co/);
+            if (regionMatch && regionMatch[1] !== projectRef) {
+              // If region is in hostname, use it
+              poolerHost = `aws-1-${regionMatch[1]}.pooler.supabase.com`;
+            }
+            
+            // Build pooler URL with correct format
+            const password = url.password ? `:${url.password}` : '';
+            const poolerUrl = `${url.protocol}//postgres.${projectRef}${password}@${poolerHost}:6543${url.pathname}${url.search || ''}`;
+            console.log(`🔄 Converting to pooler connection: ${poolerHost}:6543`);
             connectionString = poolerUrl;
+          } else {
+            console.log('⚠️ Could not extract project ref from hostname. Please use pooler URL manually.');
           }
         }
       } catch (e) {
-        // URL parsing failed, keep original
-        console.log('⚠️ Could not auto-fix connection string. Please use pooler URL manually.');
+        // URL parsing failed, check if we can still detect the issue
+        if (connectionString.includes(':5432') && connectionString.includes('supabase')) {
+          console.log('⚠️ WARNING: Supabase connection string contains port 5432.');
+          console.log('   Please update DATABASE_URL to use port 6543 (connection pooler).');
+          console.log('   Format: postgresql://postgres.xxx:[PASSWORD]@aws-1-us-east-1.pooler.supabase.com:6543/postgres');
+        }
       }
     }
     
