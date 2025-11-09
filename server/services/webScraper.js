@@ -397,7 +397,7 @@ class WebScraper {
       const sourceUrlObj = new URL(url);
       const sourceDomain = sourceUrlObj.hostname.replace(/^www\./, '').toLowerCase();
       
-      // Extract articles using multiple strategies
+      // Extract articles using multiple strategies (optimized for Next.js and modern React apps)
       const articles = await page.evaluate((sourceDomain) => {
         const results = [];
         
@@ -412,79 +412,170 @@ class WebScraper {
           }
         };
         
-        // Strategy 1: Look for article elements
-        const articleElements = document.querySelectorAll('article, [class*="article"], [class*="post"], [class*="blog-post"]');
-        articleElements.forEach(el => {
-          const link = el.querySelector('a');
-          const title = el.querySelector('h1, h2, h3, h4, [class*="title"], [class*="headline"]');
-          const date = el.querySelector('time, [class*="date"], [datetime]');
-          
-          if (link && title && isSameDomain(link.href)) {
-            results.push({
-              url: link.href,
-              title: title.textContent.trim(),
-              description: el.querySelector('[class*="excerpt"], [class*="summary"], p')?.textContent.trim() || '',
-              datePublished: date?.getAttribute('datetime') || date?.textContent.trim() || null
-            });
-          }
-        });
-        
-        // Strategy 2: Look for headings with nearby links
-        const headings = document.querySelectorAll('h1, h2, h3, h4, h5, h6');
-        headings.forEach(heading => {
-          const text = heading.textContent.trim();
-          // Skip if it's a section heading (short) or navigation
-          if (text.length < 30 || text.length > 200) return;
-          
-          // Look for link in parent or sibling
-          let link = null;
-          const parent = heading.parentElement;
-          const headingLink = parent.querySelector('a');
-          if (headingLink) {
-            link = headingLink.href;
-          } else {
-            // Check siblings
-            let next = heading.nextElementSibling;
-            for (let i = 0; i < 3 && next; i++) {
-              const siblingLink = next.querySelector('a');
-              if (siblingLink) {
-                link = siblingLink.href;
-                break;
+        // Helper to extract date from text (handles formats like "06-Nov-25", "November 6, 2025", etc.)
+        const extractDate = (text) => {
+          if (!text) return null;
+          // Try to parse common date formats
+          const datePatterns = [
+            /(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})/, // DD-MM-YY or DD/MM/YYYY
+            /(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}/i,
+            /(\d{4})[-/](\d{1,2})[-/](\d{1,2})/ // YYYY-MM-DD
+          ];
+          for (const pattern of datePatterns) {
+            const match = text.match(pattern);
+            if (match) {
+              try {
+                const date = new Date(match[0]);
+                if (!isNaN(date.getTime())) return date.toISOString();
+              } catch (e) {
+                // Continue to next pattern
               }
-              next = next.nextElementSibling;
+            }
+          }
+          return null;
+        };
+        
+        // Strategy 1: Look for article cards (common in Next.js/blog layouts)
+        // Look for elements that contain both a link and text that looks like a title
+        const allLinks = document.querySelectorAll('a[href]');
+        allLinks.forEach(link => {
+          const href = link.href;
+          if (!href || !isSameDomain(href)) return;
+          
+          // Skip navigation and footer links
+          if (href.includes('#') || href.endsWith('/') && !href.includes('/blog/') && !href.includes('/post/')) {
+            // Check if it's actually a blog post link
+            if (!href.match(/\/(blog|post|article)\/[^\/]+/i)) return;
+          }
+          
+          // Look for title in the link or its parent container
+          let title = link.textContent.trim();
+          let dateText = null;
+          
+          // Check parent container for title and date
+          let container = link.closest('div, article, section, li');
+          if (container) {
+            // Look for title in container (headings, or text with title-like characteristics)
+            const titleElement = container.querySelector('h1, h2, h3, h4, h5, h6, [class*="title"], [class*="headline"]');
+            if (titleElement) {
+              title = titleElement.textContent.trim();
+            }
+            
+            // Look for date in container
+            const dateElement = container.querySelector('time, [class*="date"], [datetime], [class*="time"]');
+            if (dateElement) {
+              dateText = dateElement.getAttribute('datetime') || dateElement.textContent.trim();
+            } else {
+              // Try to find date in text content
+              const containerText = container.textContent || '';
+              dateText = extractDate(containerText) || null;
+            }
+            
+            // If no title found, try to extract from link's accessible text or aria-label
+            if (!title || title.length < 10) {
+              title = link.getAttribute('aria-label') || link.title || link.textContent.trim();
             }
           }
           
-          if (link && isSameDomain(link) && (link.includes('blog') || link.includes('post') || link.includes('article'))) {
-            // Check if we already have this URL
-            if (!results.some(r => r.url === link)) {
-              results.push({
-                url: link,
-                title: text,
-                description: '',
-                datePublished: null
-              });
+          // Filter: Must have a meaningful title and be a blog-related URL
+          if (title && title.length > 10 && 
+              (href.includes('/blog/') || href.includes('/post/') || href.includes('/article/') || 
+               href.match(/\/blog\/[^\/]+/) || title.length > 20)) {
+            // Skip if it's clearly not an article (navigation, buttons, etc.)
+            if (title.toLowerCase().includes('read more') || 
+                title.toLowerCase().includes('learn more') ||
+                title.length < 15) {
+              return;
             }
-          }
-        });
-        
-        // Strategy 3: Look for links in blog containers
-        const blogContainers = document.querySelectorAll('[class*="blog"], [id*="blog"], [class*="post-list"]');
-        blogContainers.forEach(container => {
-          const links = container.querySelectorAll('a[href*="/blog/"], a[href*="/post/"], a[href*="/article/"]');
-          links.forEach(link => {
-            const href = link.href;
-            if (!isSameDomain(href)) return; // Filter by domain
             
-            const title = link.textContent.trim() || link.querySelector('h1, h2, h3, h4')?.textContent.trim();
-            
-            if (title && title.length > 10 && !results.some(r => r.url === href)) {
+            // Check if we already have this URL
+            if (!results.some(r => r.url === href)) {
               results.push({
                 url: href,
                 title: title,
-                description: '',
-                datePublished: null
+                description: container ? (container.querySelector('[class*="excerpt"], [class*="summary"], p')?.textContent.trim() || '').substring(0, 300) : '',
+                datePublished: dateText
               });
+            }
+          }
+        });
+        
+        // Strategy 2: Look for structured data (JSON-LD) in the page
+        const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
+        jsonLdScripts.forEach(script => {
+          try {
+            const data = JSON.parse(script.textContent);
+            if (data['@type'] === 'Blog' || data['@type'] === 'BlogPosting' || 
+                (Array.isArray(data) && data.some(item => item['@type'] === 'BlogPosting'))) {
+              const items = Array.isArray(data) ? data : [data];
+              items.forEach(item => {
+                if (item['@type'] === 'BlogPosting' && item.url && isSameDomain(item.url)) {
+                  if (!results.some(r => r.url === item.url)) {
+                    results.push({
+                      url: item.url,
+                      title: item.headline || item.name || '',
+                      description: item.description || '',
+                      datePublished: item.datePublished || item.dateCreated || null
+                    });
+                  }
+                }
+              });
+            }
+          } catch (e) {
+            // Invalid JSON, skip
+          }
+        });
+        
+        // Strategy 3: Look for article elements with proper structure
+        const articleElements = document.querySelectorAll('article, [class*="article"], [class*="post"], [class*="blog-post"], [class*="card"]');
+        articleElements.forEach(el => {
+          const link = el.querySelector('a[href]');
+          if (!link || !isSameDomain(link.href)) return;
+          
+          const title = el.querySelector('h1, h2, h3, h4, h5, h6, [class*="title"], [class*="headline"]')?.textContent.trim() ||
+                       link.textContent.trim();
+          const date = el.querySelector('time, [class*="date"], [datetime]');
+          
+          if (title && title.length > 10 && 
+              (link.href.includes('/blog/') || link.href.includes('/post/') || link.href.includes('/article/'))) {
+            const dateText = date?.getAttribute('datetime') || date?.textContent.trim() || 
+                            extractDate(el.textContent);
+            
+            if (!results.some(r => r.url === link.href)) {
+              results.push({
+                url: link.href,
+                title: title,
+                description: el.querySelector('[class*="excerpt"], [class*="summary"], p')?.textContent.trim() || '',
+                datePublished: dateText
+              });
+            }
+          }
+        });
+        
+        // Strategy 4: Look for grid/list items that contain blog posts
+        // Common patterns: grid containers with cards
+        const gridContainers = document.querySelectorAll('[class*="grid"], [class*="list"], [class*="posts"], [class*="articles"]');
+        gridContainers.forEach(container => {
+          const items = container.querySelectorAll('div, li, article, section');
+          items.forEach(item => {
+            const link = item.querySelector('a[href]');
+            if (!link || !isSameDomain(link.href)) return;
+            
+            // Check if this looks like a blog post item
+            const hasTitle = item.querySelector('h1, h2, h3, h4, h5, h6, [class*="title"]');
+            const hasDate = item.textContent.match(/\d{1,2}[-/]\d{1,2}[-/]\d{2,4}/) || 
+                          item.querySelector('time, [class*="date"]');
+            
+            if (hasTitle && (link.href.includes('/blog/') || link.href.includes('/post/') || hasDate)) {
+              const title = hasTitle.textContent.trim() || link.textContent.trim();
+              if (title && title.length > 10 && !results.some(r => r.url === link.href)) {
+                results.push({
+                  url: link.href,
+                  title: title,
+                  description: item.querySelector('[class*="excerpt"], [class*="summary"], p')?.textContent.trim() || '',
+                  datePublished: extractDate(item.textContent)
+                });
+              }
             }
           });
         });
