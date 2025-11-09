@@ -309,22 +309,48 @@ class WebScraper {
    */
   async scrapeWithPlaywright(url) {
     let browser = null;
+    let page = null;
     try {
       // Try to require Playwright (might not be installed)
       const { chromium } = require('playwright');
       
       // Launch browser (reuse if possible)
       if (!this.browser) {
-        this.browser = await chromium.launch({
-          headless: true,
-          args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-        });
+        try {
+          this.browser = await chromium.launch({
+            headless: true,
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+          });
+          if (!this.browser) {
+            throw new Error('Browser launch returned null');
+          }
+        } catch (launchError) {
+          // Browser launch failed - likely missing system dependencies
+          if (launchError.message.includes('Executable doesn\'t exist') || 
+              launchError.message.includes('browserType.launch')) {
+            throw new Error('Playwright browsers not installed. Run "npx playwright install chromium" during build.');
+          }
+          throw launchError;
+        }
       }
       
-      const page = await this.browser.newPage();
+      // Create new page
+      try {
+        page = await this.browser.newPage();
+        if (!page || typeof page.setUserAgent !== 'function') {
+          throw new Error('Failed to create page object or page.setUserAgent is not a function');
+        }
+      } catch (pageError) {
+        throw new Error(`Failed to create Playwright page: ${pageError.message}`);
+      }
       
-      // Set user agent
-      await page.setUserAgent('Mozilla/5.0 (compatible; RSS Feed Discovery Bot)');
+      // Set user agent (with error handling)
+      try {
+        await page.setUserAgent('Mozilla/5.0 (compatible; RSS Feed Discovery Bot)');
+      } catch (uaError) {
+        // If setUserAgent fails, continue anyway (some Playwright versions might not support it)
+        console.log('⚠️ Could not set user agent, continuing...');
+      }
       
       // Navigate and wait for content to load
       await page.goto(url, { 
@@ -448,6 +474,14 @@ class WebScraper {
       return unique;
       
     } catch (error) {
+      // Clean up page if it was created
+      if (page) {
+        try {
+          await page.close();
+        } catch (e) {
+          // Ignore cleanup errors
+        }
+      }
       // Re-throw the error so caller can handle it appropriately
       throw error;
     }
