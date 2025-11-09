@@ -337,29 +337,61 @@ class WebScraper {
       // Create new page
       try {
         page = await this.browser.newPage();
-        if (!page || typeof page.setUserAgent !== 'function') {
-          throw new Error('Failed to create page object or page.setUserAgent is not a function');
+        if (!page) {
+          throw new Error('Browser.newPage() returned null or undefined');
+        }
+        
+        // Verify page object has expected methods
+        if (typeof page.goto !== 'function') {
+          throw new Error('Page object does not have goto method - Playwright may not be installed correctly');
         }
       } catch (pageError) {
         throw new Error(`Failed to create Playwright page: ${pageError.message}`);
       }
       
-      // Set user agent (with error handling)
+      // Set user agent (optional - some Playwright versions handle this differently)
       try {
-        await page.setUserAgent('Mozilla/5.0 (compatible; RSS Feed Discovery Bot)');
+        if (typeof page.setUserAgent === 'function') {
+          await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+        } else if (typeof page.setExtraHTTPHeaders === 'function') {
+          // Alternative: set user agent via headers
+          await page.setExtraHTTPHeaders({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+          });
+        }
       } catch (uaError) {
-        // If setUserAgent fails, continue anyway (some Playwright versions might not support it)
-        console.log('⚠️ Could not set user agent, continuing...');
+        // If setUserAgent fails, continue anyway - not critical
+        console.log('⚠️ Could not set user agent, continuing without it...');
       }
       
-      // Navigate and wait for content to load
+      // Navigate and wait for content to load (important for JS-rendered sites like Next.js)
       await page.goto(url, { 
-        waitUntil: 'networkidle',
+        waitUntil: 'domcontentloaded', // Start with domcontentloaded, then wait for network
         timeout: 30000 
       });
       
-      // Wait a bit for any lazy-loaded content
-      await page.waitForTimeout(2000);
+      // Wait for network to be idle (all AJAX/fetch requests complete)
+      try {
+        await page.waitForLoadState('networkidle', { timeout: 10000 });
+      } catch (e) {
+        // Network idle timeout is OK - continue anyway
+        console.log('⚠️ Network did not become idle, continuing...');
+      }
+      
+      // Wait for any lazy-loaded content (especially important for Next.js)
+      await page.waitForTimeout(3000); // Increased wait time for JS-rendered content
+      
+      // For Next.js apps, wait for content to appear (not just spinner)
+      try {
+        // Wait for content containers to appear (common patterns)
+        await page.waitForSelector('article, [class*="post"], [class*="blog"], [class*="card"]', { 
+          timeout: 5000 
+        }).catch(() => {
+          // If no articles found, that's OK - we'll try to extract what we can
+        });
+      } catch (e) {
+        // No specific selector found - continue anyway
+      }
       
       // Get source domain for filtering
       const sourceUrlObj = new URL(url);
