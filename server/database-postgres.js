@@ -3,6 +3,8 @@ const { Pool } = require('pg');
 class Database {
   constructor() {
     let connectionString = process.env.DATABASE_URL || 'postgresql://localhost:5432/distroblog';
+    this.originalConnectionString = connectionString; // Store original for logging
+    this.fixedConnectionString = null; // Will store the fixed connection string
     
     // Check if using Supabase and fix connection string if needed
     // Supabase direct connections (port 5432) don't work from Render - must use pooler (port 6543)
@@ -18,6 +20,7 @@ class Database {
           const fixedUrl = new URL(connectionString);
           fixedUrl.port = '6543';
           connectionString = fixedUrl.toString();
+          this.fixedConnectionString = connectionString; // Store fixed connection string
           console.log('✅ Auto-fixed: Changed port from 5432 to 6543');
           console.log(`   New connection: ${fixedUrl.hostname}:6543`);
         }
@@ -42,6 +45,7 @@ class Database {
             const poolerUrl = `${url.protocol}//postgres.${projectRef}${password}@${poolerHost}:6543${url.pathname}${url.search || ''}`;
             console.log(`🔄 Converting to pooler connection: ${poolerHost}:6543`);
             connectionString = poolerUrl;
+            this.fixedConnectionString = connectionString; // Store fixed connection string
           } else {
             console.log('⚠️ Could not extract project ref from hostname. Please use pooler URL manually.');
           }
@@ -81,29 +85,29 @@ class Database {
     let retries = 3;
     let lastError = null;
     
-    // Log connection info for debugging
-    const connectionString = process.env.DATABASE_URL || '';
-    if (connectionString) {
+    // Log connection info for debugging (use the fixed connection string, not the original)
+    const connectionStringToLog = this.fixedConnectionString || this.pool.options.connectionString || process.env.DATABASE_URL || '';
+    if (connectionStringToLog) {
       try {
-        const url = new URL(connectionString);
+        const url = new URL(connectionStringToLog);
         const host = url.hostname;
-        const port = url.port || (url.protocol === 'postgresql:' ? '5432' : '5432');
+        const port = url.port || (url.protocol.includes('postgres') ? '5432' : '5432');
         console.log(`🔌 Attempting to connect to database: ${host}:${port}`);
         
         // Check if using correct port for Supabase
         if (host.includes('supabase')) {
-          if (port === '5432') {
-            console.error('❌ ERROR: Using direct connection (port 5432) to Supabase from Render.');
-            console.error('   Render cannot connect to Supabase direct connections.');
-            console.error('   Please use the Connection Pooler URL (port 6543) from Supabase dashboard.');
-            console.error('   Go to: Supabase Dashboard → Settings → Database → Connection Pooling');
-            console.error('   Use: Transaction mode connection string with port 6543');
-          } else if (port === '6543') {
-            console.log('✅ Using Supabase connection pooler (correct for Render)');
+          if (port === '6543') {
+            console.log('✅ Using Supabase connection pooler on port 6543 (correct for Render)');
+          } else if (port === '5432') {
+            console.error('❌ ERROR: Still using port 5432 after auto-fix attempt.');
+            console.error('   Please update DATABASE_URL in Render dashboard to use port 6543.');
+          } else {
+            console.log(`⚠️ Using port ${port} for Supabase (expected 6543 for pooler)`);
           }
         }
       } catch (e) {
         // URL parsing failed, continue anyway
+        console.log('🔌 Attempting to connect to database (connection string format unclear)');
       }
     }
     
