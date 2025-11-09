@@ -760,6 +760,36 @@ app.get('/api/articles/recent/:days', async (req, res) => {
   }
 });
 
+// Get all articles (for verification/debugging)
+app.get('/api/articles/all', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 50;
+    const articles = await database.getAllArticles(limit);
+    
+    // Format articles for display
+    const formattedArticles = articles.map(article => ({
+      id: article.id,
+      title: article.title,
+      link: article.link,
+      pub_date: article.pub_date,
+      created_at: article.created_at,
+      source_name: article.source_name || 'Unknown',
+      category: article.category,
+      status: article.status,
+      has_content: !!(article.content && article.content.length > 0),
+      content_length: article.content ? article.content.length : 0
+    }));
+    
+    res.json({
+      total: formattedArticles.length,
+      articles: formattedArticles
+    });
+  } catch (error) {
+    console.error('Error fetching all articles:', error);
+    res.status(500).json({ error: 'Failed to fetch articles' });
+  }
+});
+
 // Get sent articles
 app.get('/api/articles/sent', async (req, res) => {
   try {
