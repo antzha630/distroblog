@@ -30,34 +30,37 @@ class WebScraper {
   /**
    * Scrape articles from a website (fallback when RSS/JSON Feed not found)
    * Returns articles in RSS-like format for compatibility
-   * Strategy: Try static scraping first (fast), then Playwright if needed (slower but handles JS)
+   * Strategy: Try Playwright first (more reliable, handles JS), then static scraping as fallback (faster)
    */
   async scrapeArticles(source) {
     try {
       console.log(`🌐 Scraping articles from: ${source.url}`);
       
-      // Try static scraping first (faster, no browser needed)
-      let articles = await this.scrapeStatic(source.url);
+      // Try Playwright first (more reliable, handles JS-rendered sites)
+      let articles = [];
+      try {
+        console.log(`📱 Trying Playwright first for reliable JS-rendered content extraction...`);
+        articles = await this.scrapeWithPlaywright(source.url);
+        if (articles.length > 0) {
+          console.log(`✅ Playwright found ${articles.length} articles`);
+        }
+      } catch (playwrightError) {
+        // Playwright failed - log error and fall back to static scraping
+        if (playwrightError.message && playwrightError.message.includes('Executable doesn\'t exist')) {
+          console.log(`⚠️ Playwright browsers not installed, falling back to static scraping...`);
+        } else if (playwrightError.message && playwrightError.message.includes('Cannot find module')) {
+          console.log(`⚠️ Playwright not installed, falling back to static scraping...`);
+        } else {
+          console.log(`⚠️ Playwright scraping failed: ${playwrightError.message}, falling back to static scraping...`);
+        }
+      }
       
-      // If no articles found, try with Playwright (for JS-rendered sites)
+      // If Playwright found nothing or failed, try static scraping as fallback
       if (articles.length === 0) {
-        console.log(`📱 No articles found with static scraping, trying Playwright for JS-rendered content...`);
-        try {
-          articles = await this.scrapeWithPlaywright(source.url);
-          if (articles.length > 0) {
-            console.log(`✅ Playwright found ${articles.length} articles from JS-rendered page`);
-          }
-        } catch (playwrightError) {
-          // Log error but don't fail completely
-          if (playwrightError.message && playwrightError.message.includes('Executable doesn\'t exist')) {
-            console.error(`❌ Playwright browsers not installed. Please run "npx playwright install chromium" during build.`);
-            console.error(`   This site appears to be JS-rendered and requires Playwright to scrape.`);
-          } else if (playwrightError.message && playwrightError.message.includes('Cannot find module')) {
-            console.error(`❌ Playwright not installed. Please install it: npm install playwright`);
-          } else {
-            console.error(`❌ Playwright scraping failed: ${playwrightError.message}`);
-          }
-          // Keep articles as empty array - both methods failed
+        console.log(`📄 Trying static scraping as fallback...`);
+        articles = await this.scrapeStatic(source.url);
+        if (articles.length > 0) {
+          console.log(`✅ Static scraping found ${articles.length} articles`);
         }
       }
       
