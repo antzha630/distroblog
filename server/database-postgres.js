@@ -365,13 +365,28 @@ class Database {
   }
 
   async getArticlesByDateRange(days) {
+    // Get articles where pub_date is within the last N days
+    // If pub_date is null, use created_at instead
     const result = await this.pool.query(`
       SELECT a.*, s.name as source_name 
       FROM articles a 
       LEFT JOIN sources s ON a.source_id = s.id 
-      WHERE a.pub_date >= NOW() - INTERVAL '${days} days'
-      ORDER BY a.pub_date DESC
+      WHERE (a.pub_date IS NOT NULL AND a.pub_date >= NOW() - INTERVAL '${days} days')
+         OR (a.pub_date IS NULL AND a.created_at >= NOW() - INTERVAL '${days} days')
+      ORDER BY COALESCE(a.pub_date, a.created_at) DESC
     `);
+    return result.rows;
+  }
+  
+  // Get all articles (for verification/debugging)
+  async getAllArticles(limit = 100) {
+    const result = await this.pool.query(`
+      SELECT a.*, s.name as source_name 
+      FROM articles a 
+      LEFT JOIN sources s ON a.source_id = s.id 
+      ORDER BY COALESCE(a.pub_date, a.created_at) DESC
+      LIMIT $1
+    `, [limit]);
     return result.rows;
   }
 

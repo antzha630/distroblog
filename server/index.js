@@ -707,6 +707,8 @@ app.get('/api/articles/recent/:days', async (req, res) => {
     
     const articles = await database.getArticlesByDateRange(days);
     
+    console.log(`📊 Found ${articles.length} articles from last ${days} days`);
+    
     // Format articles for professional display
     const formattedArticles = articles.map(article => {
       // Priority: AI summary > author's note (publisher_description) > preview > fallback
