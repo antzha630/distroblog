@@ -40,19 +40,24 @@ class WebScraper {
       let articles = await this.scrapeStatic(source.url);
       
       // If no articles found, try with Playwright (for JS-rendered sites)
-      // Only if Playwright is available (gracefully skip if not installed)
       if (articles.length === 0) {
+        console.log(`📱 No articles found with static scraping, trying Playwright for JS-rendered content...`);
         try {
-          console.log(`📱 No articles found with static scraping, trying Playwright...`);
           articles = await this.scrapeWithPlaywright(source.url);
-        } catch (playwrightError) {
-          // Playwright not available or failed - this is OK, static scraping is preferred anyway
-          if (playwrightError.message && playwrightError.message.includes('Executable doesn\'t exist')) {
-            console.log(`ℹ️ Playwright browsers not installed. Static scraping is sufficient for most sites.`);
-          } else {
-            console.log(`ℹ️ Playwright unavailable: ${playwrightError.message}. Continuing with static scraping results.`);
+          if (articles.length > 0) {
+            console.log(`✅ Playwright found ${articles.length} articles from JS-rendered page`);
           }
-          // Keep articles as empty array - static scraping didn't find anything
+        } catch (playwrightError) {
+          // Log error but don't fail completely
+          if (playwrightError.message && playwrightError.message.includes('Executable doesn\'t exist')) {
+            console.error(`❌ Playwright browsers not installed. Please run "npx playwright install chromium" during build.`);
+            console.error(`   This site appears to be JS-rendered and requires Playwright to scrape.`);
+          } else if (playwrightError.message && playwrightError.message.includes('Cannot find module')) {
+            console.error(`❌ Playwright not installed. Please install it: npm install playwright`);
+          } else {
+            console.error(`❌ Playwright scraping failed: ${playwrightError.message}`);
+          }
+          // Keep articles as empty array - both methods failed
         }
       }
       
@@ -440,15 +445,8 @@ class WebScraper {
       return unique;
       
     } catch (error) {
-      // If browser isn't installed, log helpful message and return empty
-      if (error.message.includes('Executable doesn\'t exist') || 
-          error.message.includes('browserType.launch') ||
-          error.message.includes('Cannot find module')) {
-        console.log('ℹ️ Playwright not available. This is normal - static scraping works for most sites.');
-        return [];
-      }
-      console.error('Error in Playwright scraping:', error.message);
-      return [];
+      // Re-throw the error so caller can handle it appropriately
+      throw error;
     }
   }
 

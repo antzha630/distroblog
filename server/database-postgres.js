@@ -2,26 +2,65 @@ const { Pool } = require('pg');
 
 class Database {
   constructor() {
+    const connectionString = process.env.DATABASE_URL || 'postgresql://localhost:5432/distroblog';
+    
+    // Configure pool for Supabase/Render with better connection handling
     this.pool = new Pool({
-      connectionString: process.env.DATABASE_URL || 'postgresql://localhost:5432/distroblog',
-      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+      connectionString: connectionString,
+      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+      // Connection pool settings for Supabase
+      max: 10, // Maximum number of clients in the pool
+      idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
+      connectionTimeoutMillis: 10000, // Return an error after 10 seconds if connection cannot be established
+      // Handle connection errors gracefully
+      allowExitOnIdle: false
+    });
+
+    // Handle pool errors (don't crash the app)
+    this.pool.on('error', (err) => {
+      console.error('Unexpected error on idle client', err);
+      // Don't throw - let the pool handle reconnection
     });
   }
 
   async init() {
-    try {
-      // Test connection
-      const client = await this.pool.connect();
-      console.log('PostgreSQL connected successfully');
-      client.release();
+    let retries = 3;
+    let lastError = null;
+    
+    while (retries > 0) {
+      try {
+        // Test connection with timeout
+        const client = await Promise.race([
+          this.pool.connect(),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Connection timeout')), 10000)
+          )
+        ]);
+        
+        console.log('PostgreSQL connected successfully');
+        client.release();
 
-      // Create tables
-      await this.createTables();
-      console.log('Database tables created/verified');
-    } catch (err) {
-      console.error('Database connection failed:', err);
-      throw err;
+        // Create tables
+        await this.createTables();
+        console.log('Database tables created/verified');
+        return; // Success!
+      } catch (err) {
+        lastError = err;
+        retries--;
+        console.error(`Database connection failed (${retries} retries left):`, err.message);
+        
+        if (retries > 0) {
+          // Wait before retrying (exponential backoff)
+          const delay = (4 - retries) * 1000; // 1s, 2s, 3s
+          console.log(`Retrying database connection in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
     }
+    
+    // If we get here, all retries failed
+    console.error('Database connection failed after retries:', lastError);
+    throw lastError;
   }
 
   async createTables() {

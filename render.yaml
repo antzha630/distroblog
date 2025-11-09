@@ -2,7 +2,7 @@ services:
   - type: web
     name: distroblog
     env: node
-    buildCommand: npm install && cd client && npm install && cd .. && (npx playwright install chromium || echo "Playwright installation skipped - static scraping will be used") && npm run build
+    buildCommand: npm install && cd client && npm install && cd .. && npx playwright install chromium && npm run build
     startCommand: npm start
     envVars:
       - key: NODE_ENV
