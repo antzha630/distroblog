@@ -909,23 +909,100 @@ class FeedMonitor {
         'meta[name="article:published_time"]',
         'meta[property="og:article:published_time"]',
         'time[datetime]',
+        'time',
+        '[datetime]',
         '.published-date',
         '.post-date',
-        '.article-date'
+        '.article-date',
+        '[class*="date"]',
+        '[class*="published"]'
       ];
 
-      for (const selector of dateSelectors) {
-        const dateEl = $(selector);
-        if (dateEl.length) {
-          const dateValue = dateEl.attr('content') || dateEl.attr('datetime') || dateEl.text();
-          if (dateValue) {
-            const parsed = new Date(dateValue);
-            if (!isNaN(parsed.getTime())) {
-              pubDate = parsed.toISOString();
-              break;
+      // Helper to parse date in various formats including "06-Nov-25"
+      const parseDate = (dateStr) => {
+        if (!dateStr) return null;
+        
+        // First try standard Date parsing
+        try {
+          const standardDate = new Date(dateStr);
+          if (!isNaN(standardDate.getTime())) {
+            const now = new Date();
+            const yearDiff = standardDate.getFullYear() - now.getFullYear();
+            // Validate date is reasonable (not in distant future/past)
+            if (yearDiff >= -10 && yearDiff <= 5) {
+              return standardDate.toISOString();
+            }
+          }
+        } catch (e) {
+          // Continue to pattern matching
+        }
+        
+        // Try pattern matching for formats like "06-Nov-25"
+        const datePatterns = [
+          // DD-MMM-YY format (e.g., "06-Nov-25")
+          /\b(\d{1,2})[-/](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[-/](\d{2,4})\b/i,
+          // DD-MM-YY or DD/MM/YYYY
+          /\b(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})\b/,
+          // Full month name
+          /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b/i,
+          // YYYY-MM-DD
+          /\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b/
+        ];
+        
+        for (const pattern of datePatterns) {
+          const match = dateStr.match(pattern);
+          if (match) {
+            try {
+              let dateStrFormatted = match[0];
+              
+              // Handle DD-MMM-YY format specifically
+              if (match[2] && /[A-Za-z]{3}/.test(match[2])) {
+                const day = match[1];
+                const month = match[2];
+                const year = match[3].length === 2 ? `20${match[3]}` : match[3];
+                dateStrFormatted = `${day}-${month}-${year}`;
+              }
+              
+              const parsed = new Date(dateStrFormatted);
+              if (!isNaN(parsed.getTime())) {
+                const now = new Date();
+                const yearDiff = parsed.getFullYear() - now.getFullYear();
+                if (yearDiff >= -10 && yearDiff <= 5) {
+                  return parsed.toISOString();
+                }
+              }
+            } catch (e) {
+              // Continue to next pattern
             }
           }
         }
+        
+        return null;
+      };
+
+      // Try structured selectors first
+      for (const selector of dateSelectors) {
+        const dateEl = $(selector);
+        if (dateEl.length) {
+          // Try content attribute first (for meta tags)
+          let dateValue = dateEl.attr('content') || dateEl.attr('datetime') || dateEl.attr('date');
+          
+          // If no attribute, try text content
+          if (!dateValue) {
+            dateValue = dateEl.text().trim();
+          }
+          
+          if (dateValue) {
+            pubDate = parseDate(dateValue);
+            if (pubDate) break;
+          }
+        }
+      }
+      
+      // If no structured date found, search entire page for date patterns
+      if (!pubDate) {
+        const pageText = $('body').text();
+        pubDate = parseDate(pageText);
       }
 
       // Extract content using the same logic as fetchFullArticleContent
