@@ -865,6 +865,22 @@ class FeedMonitor {
       // Extract title
       let title = $('title').text() || $('h1').first().text() || 'Untitled';
       title = title.replace(/\s+/g, ' ').trim();
+      
+      // Clean up title: Remove site name suffixes (e.g., "| Olas", "- Olas Network")
+      // Common patterns: "Title | Site", "Title - Site", "Title | Site Name"
+      title = title.replace(/\s*[|\-–—]\s*(Olas|Olas Network|Blog|News).*$/i, '').trim();
+      
+      // Also try to get title from h1 if page title includes site name
+      const h1Title = $('h1').first().text().trim();
+      if (h1Title && h1Title.length > 10 && 
+          !h1Title.toLowerCase().includes('blog') &&
+          !h1Title.toLowerCase().includes('all posts') &&
+          h1Title.length < 200) {
+        // Prefer h1 if it's a valid article title and page title has site name
+        if (title.includes('|') || title.includes('-')) {
+          title = h1Title;
+        }
+      }
 
       // Extract source name from URL domain
       const urlObj = new URL(url);
