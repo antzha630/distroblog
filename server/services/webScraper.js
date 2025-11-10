@@ -649,70 +649,69 @@ class WebScraper {
           }
           
           if (container) {
-            // Strategy 1: Look for title in the link itself or immediate children
-            // Often the title is the link text or in a child element of the link
-            const linkTitle = link.querySelector('h1, h2, h3, h4, h5, h6, [class*="title"], [class*="headline"]');
-            if (linkTitle) {
-              title = linkTitle.textContent.trim();
-            } else if (link.textContent.trim().length > 15) {
-              // Use link text if it's substantial
-              const linkText = link.textContent.trim();
-              if (!linkText.toLowerCase().includes('read more') && 
-                  !linkText.toLowerCase().includes('learn more') &&
-                  !linkText.toLowerCase().includes('blog')) {
-                title = linkText;
+            // CRITICAL: Extract title ONLY from within this specific container
+            // Do NOT use page-level headings - they will be the same for all articles
+            
+            // Strategy 1: Look for headings WITHIN the container (not page-level)
+            // Get all headings in the container, but prioritize ones that are NOT in the link
+            const containerHeadings = Array.from(container.querySelectorAll('h1, h2, h3, h4, h5, h6'));
+            
+            // Filter out headings that are page-level (usually h1 at the top of the page)
+            // Prefer headings that are NOT the first h1 on the page or are within the card structure
+            for (const heading of containerHeadings) {
+              // Skip if this heading is NOT actually inside our container
+              if (!container.contains(heading)) continue;
+              
+              // Skip if this is likely a page-level heading (first h1, or in header/nav)
+              const headingParent = heading.closest('header, nav, [class*="header"], [class*="nav"]');
+              if (headingParent && !container.contains(headingParent)) continue;
+              
+              const headingText = heading.textContent.trim();
+              
+              // Skip if it's too short, generic, or looks like a section header
+              if (headingText.length > 15 && 
+                  headingText.length < 200 &&
+                  !headingText.toLowerCase().includes('blog') &&
+                  !headingText.toLowerCase().includes('all posts') &&
+                  !headingText.toLowerCase().includes('quarterly updates') &&
+                  !headingText.toLowerCase().includes('case studies') &&
+                  !headingText.toLowerCase().includes('read more')) {
+                title = headingText;
+                break; // Use the first valid heading we find in this container
               }
             }
             
-            // Strategy 2: Look for title in container (but not page-level headings)
+            // Strategy 2: Look for title in class-based elements WITHIN container
             if (!title || title.length < 10) {
-              // Get all text nodes and headings in the container
-              const allElements = container.querySelectorAll('h1, h2, h3, h4, h5, h6, [class*="title"], [class*="headline"], [class*="name"], a');
-              
-              // Find the element that contains our link
-              let linkParent = link.parentElement;
-              let depth = 0;
-              
-              // Walk up to find the article card container
-              while (linkParent && depth < 3) {
-                if (linkParent === container) break;
-                linkParent = linkParent.parentElement;
-                depth++;
-              }
-              
-              // Look for titles near the link (siblings or close parents)
-              for (const el of allElements) {
-                if (!container.contains(el)) continue;
+              const titleEls = container.querySelectorAll('[class*="title"]:not([class*="page"]):not([class*="site"]), [class*="headline"], [class*="name"]');
+              for (const titleEl of titleEls) {
+                // Make sure it's actually in our container
+                if (!container.contains(titleEl)) continue;
                 
-                // Check if this element is close to our link
-                const isNearLink = linkParent && (
-                  linkParent.contains(el) || 
-                  el.contains(link) ||
-                  (el.parentElement && el.parentElement === linkParent)
-                );
-                
-                if (isNearLink || !linkParent) {
-                  const text = el.textContent.trim();
-                  // Skip if it's the page title, section heading, or too generic
-                  if (text.length > 15 && 
-                      text.length < 200 &&
-                      !text.toLowerCase().includes('blog') &&
-                      !text.toLowerCase().includes('all posts') &&
-                      !text.toLowerCase().includes('quarterly updates') &&
-                      !text.toLowerCase().includes('case studies')) {
-                    // Check if this looks like an article title (not navigation)
-                    if (el.tagName.match(/^H[1-6]$/) || 
-                        el.className.toLowerCase().includes('title') ||
-                        el.className.toLowerCase().includes('headline')) {
-                      title = text;
-                      break;
-                    }
-                  }
+                const titleText = titleEl.textContent.trim();
+                if (titleText.length > 15 && titleText.length < 200) {
+                  title = titleText;
+                  break;
                 }
               }
             }
             
-            // Strategy 3: Look for title in data attributes or aria-label
+            // Strategy 3: Look for title in the link itself (but only if it's substantial)
+            if (!title || title.length < 10) {
+              const linkTitle = link.querySelector('h1, h2, h3, h4, h5, h6, [class*="title"], [class*="headline"]');
+              if (linkTitle) {
+                title = linkTitle.textContent.trim();
+              } else if (link.textContent.trim().length > 15) {
+                const linkText = link.textContent.trim();
+                if (!linkText.toLowerCase().includes('read more') && 
+                    !linkText.toLowerCase().includes('learn more') &&
+                    !linkText.toLowerCase().includes('blog')) {
+                  title = linkText;
+                }
+              }
+            }
+            
+            // Strategy 4: Look for title in data attributes or aria-label
             if (!title || title.length < 10) {
               title = link.getAttribute('aria-label') || 
                      link.getAttribute('title') ||
