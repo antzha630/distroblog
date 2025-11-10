@@ -202,27 +202,45 @@ class WebScraper {
           // Extract publication date from article page (more comprehensive than list page)
           let pubDate = article.datePublished ? new Date(article.datePublished) : null;
           
-          // Try to extract metadata from article page for first 3 articles (to get better title and date)
-          // This is important because the listing page might have duplicate/generic titles
+          // ALWAYS try to extract metadata from article page for first 3 articles
+          // This is critical because the listing page titles/dates might be wrong
           if (i < 3) {
             try {
+              console.log(`🔍 Fetching article page for better title/date: ${articleUrl.substring(0, 60)}...`);
               const metadata = await feedMonitor.extractArticleMetadata(articleUrl);
               
-              // Use article page title if it's better (more specific, longer)
-              if (metadata.title && metadata.title.length > article.title.length && 
-                  !metadata.title.toLowerCase().includes('blog') &&
-                  !metadata.title.toLowerCase().includes('all posts')) {
-                article.title = metadata.title;
-                console.log(`📝 Updated title from article page: "${article.title}"`);
+              // ALWAYS use article page title if available (it's more reliable)
+              if (metadata.title && metadata.title.trim().length > 10) {
+                const newTitle = metadata.title.trim();
+                // Only use if it's different and not generic
+                if (newTitle !== article.title && 
+                    !newTitle.toLowerCase().includes('blog') &&
+                    !newTitle.toLowerCase().includes('all posts') &&
+                    !newTitle.toLowerCase().includes('olas network')) {
+                  article.title = newTitle;
+                  console.log(`📝 Updated title from article page: "${article.title}"`);
+                } else if (newTitle.length > article.title.length) {
+                  // Use if it's longer (more complete)
+                  article.title = newTitle;
+                  console.log(`📝 Using longer title from article page: "${article.title}"`);
+                }
               }
               
-              // Use article page date if available
-              if (metadata.pubDate && (!pubDate || isNaN(pubDate.getTime()))) {
-                pubDate = new Date(metadata.pubDate);
-                console.log(`📅 Found date from article page: ${pubDate.toISOString()}`);
+              // ALWAYS use article page date if available (it's more reliable)
+              if (metadata.pubDate) {
+                try {
+                  const articlePageDate = new Date(metadata.pubDate);
+                  if (!isNaN(articlePageDate.getTime())) {
+                    pubDate = articlePageDate;
+                    console.log(`📅 Found date from article page: ${pubDate.toISOString()}`);
+                  }
+                } catch (e) {
+                  // Invalid date, skip
+                }
               }
             } catch (err) {
-              // If extraction fails (especially 403), keep existing title/date
+              // If extraction fails (especially 403), log but continue
+              console.log(`⚠️ Could not fetch article page metadata: ${err.message}`);
               // This is OK - we'll use what we scraped from the listing page
             }
           }
@@ -528,18 +546,43 @@ class WebScraper {
         // Helper to extract date from text (handles formats like "06-Nov-25", "November 6, 2025", etc.)
         const extractDate = (text) => {
           if (!text) return null;
+          
           // Try to parse common date formats
           const datePatterns = [
-            /(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})/, // DD-MM-YY or DD/MM/YYYY
-            /(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}/i,
-            /(\d{4})[-/](\d{1,2})[-/](\d{1,2})/ // YYYY-MM-DD
+            // DD-MMM-YY format (e.g., "06-Nov-25", "03-Nov-25")
+            /\b(\d{1,2})[-/](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[-/](\d{2,4})\b/i,
+            // DD-MM-YY or DD/MM/YYYY
+            /\b(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})\b/,
+            // Full month name (e.g., "November 6, 2025")
+            /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b/i,
+            // YYYY-MM-DD
+            /\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b/
           ];
+          
           for (const pattern of datePatterns) {
             const match = text.match(pattern);
             if (match) {
               try {
-                const date = new Date(match[0]);
-                if (!isNaN(date.getTime())) return date.toISOString();
+                let dateStr = match[0];
+                
+                // Handle DD-MMM-YY format specifically (e.g., "06-Nov-25")
+                if (match[2] && /[A-Za-z]{3}/.test(match[2])) {
+                  // Convert "06-Nov-25" to a parseable format
+                  const day = match[1];
+                  const month = match[2];
+                  const year = match[3].length === 2 ? `20${match[3]}` : match[3];
+                  dateStr = `${day}-${month}-${year}`;
+                }
+                
+                const date = new Date(dateStr);
+                if (!isNaN(date.getTime())) {
+                  // Validate the date is reasonable (not in the distant future/past)
+                  const now = new Date();
+                  const yearDiff = date.getFullYear() - now.getFullYear();
+                  if (yearDiff >= -10 && yearDiff <= 5) {
+                    return date.toISOString();
+                  }
+                }
               } catch (e) {
                 // Continue to next pattern
               }
@@ -606,60 +649,109 @@ class WebScraper {
           }
           
           if (container) {
-            // Look for title ONLY within this container (not from page-level headings)
-            // Prefer headings that are direct children or close descendants
-            const titleSelectors = [
-              'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-              '[class*="title"]:not([class*="page"]):not([class*="site"])',
-              '[class*="headline"]',
-              '[class*="name"]'
-            ];
+            // Strategy 1: Look for title in the link itself or immediate children
+            // Often the title is the link text or in a child element of the link
+            const linkTitle = link.querySelector('h1, h2, h3, h4, h5, h6, [class*="title"], [class*="headline"]');
+            if (linkTitle) {
+              title = linkTitle.textContent.trim();
+            } else if (link.textContent.trim().length > 15) {
+              // Use link text if it's substantial
+              const linkText = link.textContent.trim();
+              if (!linkText.toLowerCase().includes('read more') && 
+                  !linkText.toLowerCase().includes('learn more') &&
+                  !linkText.toLowerCase().includes('blog')) {
+                title = linkText;
+              }
+            }
             
-            for (const selector of titleSelectors) {
-              const titleElements = container.querySelectorAll(selector);
-              // Find the title element that's closest to our link
-              for (const titleEl of titleElements) {
-                // Make sure this title is actually within our container and close to the link
-                if (container.contains(titleEl)) {
-                  const titleText = titleEl.textContent.trim();
-                  // Skip if it's the page title or section heading (too short or generic)
-                  if (titleText.length > 15 && 
-                      titleText.length < 200 &&
-                      !titleText.toLowerCase().includes('blog') &&
-                      !titleText.toLowerCase().includes('all posts')) {
-                    title = titleText;
-                    break;
+            // Strategy 2: Look for title in container (but not page-level headings)
+            if (!title || title.length < 10) {
+              // Get all text nodes and headings in the container
+              const allElements = container.querySelectorAll('h1, h2, h3, h4, h5, h6, [class*="title"], [class*="headline"], [class*="name"], a');
+              
+              // Find the element that contains our link
+              let linkParent = link.parentElement;
+              let depth = 0;
+              
+              // Walk up to find the article card container
+              while (linkParent && depth < 3) {
+                if (linkParent === container) break;
+                linkParent = linkParent.parentElement;
+                depth++;
+              }
+              
+              // Look for titles near the link (siblings or close parents)
+              for (const el of allElements) {
+                if (!container.contains(el)) continue;
+                
+                // Check if this element is close to our link
+                const isNearLink = linkParent && (
+                  linkParent.contains(el) || 
+                  el.contains(link) ||
+                  (el.parentElement && el.parentElement === linkParent)
+                );
+                
+                if (isNearLink || !linkParent) {
+                  const text = el.textContent.trim();
+                  // Skip if it's the page title, section heading, or too generic
+                  if (text.length > 15 && 
+                      text.length < 200 &&
+                      !text.toLowerCase().includes('blog') &&
+                      !text.toLowerCase().includes('all posts') &&
+                      !text.toLowerCase().includes('quarterly updates') &&
+                      !text.toLowerCase().includes('case studies')) {
+                    // Check if this looks like an article title (not navigation)
+                    if (el.tagName.match(/^H[1-6]$/) || 
+                        el.className.toLowerCase().includes('title') ||
+                        el.className.toLowerCase().includes('headline')) {
+                      title = text;
+                      break;
+                    }
                   }
                 }
               }
-              if (title) break;
             }
             
-            // If no title found in container, try the link's text (but only if it's substantial)
+            // Strategy 3: Look for title in data attributes or aria-label
             if (!title || title.length < 10) {
-              const linkText = link.textContent.trim();
-              // Only use link text if it's substantial and not just "read more"
-              if (linkText.length > 15 && 
-                  !linkText.toLowerCase().includes('read more') &&
-                  !linkText.toLowerCase().includes('learn more')) {
-                title = linkText;
-              } else {
-                // Try aria-label or title attribute
-                title = link.getAttribute('aria-label') || link.title || null;
-              }
+              title = link.getAttribute('aria-label') || 
+                     link.getAttribute('title') ||
+                     container.getAttribute('aria-label') ||
+                     null;
             }
             
             // Look for date in container - check multiple patterns
-            const dateElement = container.querySelector('time[datetime], time, [datetime], [class*="date"]:not([class*="update"]), [class*="time"]');
-            if (dateElement) {
-              dateText = dateElement.getAttribute('datetime') || 
-                        dateElement.getAttribute('date') ||
-                        dateElement.textContent.trim();
+            // First, look for date elements
+            const dateSelectors = [
+              'time[datetime]',
+              'time',
+              '[datetime]',
+              '[class*="date"]',
+              '[class*="time"]',
+              '[class*="published"]',
+              '[class*="pub-date"]'
+            ];
+            
+            for (const selector of dateSelectors) {
+              const dateEl = container.querySelector(selector);
+              if (dateEl) {
+                dateText = dateEl.getAttribute('datetime') || 
+                          dateEl.getAttribute('date') ||
+                          dateEl.getAttribute('data-date') ||
+                          dateEl.textContent.trim();
+                if (dateText) break;
+              }
             }
             
-            // If no date element, try to extract from text content
+            // If no date element found, look for date patterns in text
             if (!dateText) {
-              const containerText = container.textContent || '';
+              // Get all text from container (but exclude link text to avoid false matches)
+              const containerClone = container.cloneNode(true);
+              // Remove the link to avoid duplicate text
+              containerClone.querySelectorAll('a').forEach(a => a.remove());
+              const containerText = containerClone.textContent || container.textContent || '';
+              
+              // Look for date patterns in the text
               dateText = extractDate(containerText);
             }
             
