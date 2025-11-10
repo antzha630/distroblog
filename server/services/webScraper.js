@@ -1032,7 +1032,17 @@ class WebScraper {
       // The workflow will further limit to 3 when adding a new source
       const limited = unique.slice(0, 20);
       
-      console.log(`✅ Playwright found ${limited.length} articles (from ${unique.length} total, showing most recent)`);
+      if (limited.length === 0) {
+        console.log(`⚠️ Playwright found 0 articles. This might be because:`);
+        console.log(`   - Content is loaded via JavaScript that needs more time`);
+        console.log(`   - URL structure doesn't match expected patterns (/articles/slug)`);
+        console.log(`   - Page structure is different than expected`);
+        console.log(`   - Site might be blocking scrapers`);
+        console.log(`   - Articles might be loaded via API calls after page load`);
+        console.log(`💡 Check the browser console logs above for debug info about links found`);
+      } else {
+        console.log(`✅ Playwright found ${limited.length} articles (from ${unique.length} total, showing most recent)`);
+      }
       return limited;
       
     } catch (error) {
