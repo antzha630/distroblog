@@ -783,11 +783,27 @@ class WebScraper {
             
             // Check if we already have this URL
             if (!results.some(r => r.url === href)) {
+              // Parse dateText to ISO string if it's a string
+              let datePublished = null;
+              if (dateText) {
+                if (typeof dateText === 'string') {
+                  datePublished = extractDate(dateText);
+                } else {
+                  try {
+                    datePublished = new Date(dateText).toISOString();
+                  } catch (e) {
+                    datePublished = extractDate(dateText.toString());
+                  }
+                }
+              }
+              
               results.push({
                 url: href,
+                link: href,
                 title: title,
-                description: description,
-                datePublished: dateText
+                description: description || '',
+                content: description || '',
+                datePublished: datePublished
               });
             }
           }
