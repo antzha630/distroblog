@@ -189,6 +189,11 @@ class Database {
       } catch (error) {
         lastError = error;
         
+        // Don't retry for unique constraint violations (23505) - these are expected errors
+        if (error.code === '23505') {
+          throw error; // Re-throw immediately, let caller handle it
+        }
+        
         // If it's a connection error, wait longer before retrying
         if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT' || error.message.includes('timeout')) {
           const delay = 2000 * (i + 1); // 2s, 4s, 6s
