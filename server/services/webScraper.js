@@ -561,36 +561,100 @@ class WebScraper {
           }
           
           // Look for title in the link or its parent container
-          let title = link.textContent.trim();
+          // IMPORTANT: Get title from the specific card/article container, not from page-level elements
+          let title = null;
           let dateText = null;
           let description = '';
           
-          // Check parent container for title and date
-          let container = link.closest('div, article, section, li, [class*="card"], [class*="post"]');
-          if (container) {
-            // Look for title in container (headings, or text with title-like characteristics)
-            const titleElement = container.querySelector('h1, h2, h3, h4, h5, h6, [class*="title"], [class*="headline"], [class*="name"]');
-            if (titleElement) {
-              title = titleElement.textContent.trim();
+          // Find the specific card/article container for this link
+          // Walk up the DOM to find the closest card/article container
+          let container = link.closest('div, article, section, li');
+          let maxDepth = 5; // Limit depth to avoid going too far up
+          let depth = 0;
+          
+          // Find the actual card container (not the whole page)
+          while (container && depth < maxDepth) {
+            // Check if this container looks like an article card
+            const hasMultipleLinks = container.querySelectorAll('a[href]').length;
+            const containerClasses = container.className || '';
+            const containerId = container.id || '';
+            
+            // If this container has only 1-2 links and looks like a card, it's likely the article card
+            if (hasMultipleLinks <= 2 && 
+                (containerClasses.includes('card') || 
+                 containerClasses.includes('post') || 
+                 containerClasses.includes('article') ||
+                 container.tagName === 'ARTICLE')) {
+              break; // Found the article card container
             }
             
-            // Look for date in container
-            const dateElement = container.querySelector('time, [class*="date"], [datetime], [class*="time"]');
+            container = container.parentElement;
+            depth++;
+          }
+          
+          if (container) {
+            // Look for title ONLY within this container (not from page-level headings)
+            // Prefer headings that are direct children or close descendants
+            const titleSelectors = [
+              'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+              '[class*="title"]:not([class*="page"]):not([class*="site"])',
+              '[class*="headline"]',
+              '[class*="name"]'
+            ];
+            
+            for (const selector of titleSelectors) {
+              const titleElements = container.querySelectorAll(selector);
+              // Find the title element that's closest to our link
+              for (const titleEl of titleElements) {
+                // Make sure this title is actually within our container and close to the link
+                if (container.contains(titleEl)) {
+                  const titleText = titleEl.textContent.trim();
+                  // Skip if it's the page title or section heading (too short or generic)
+                  if (titleText.length > 15 && 
+                      titleText.length < 200 &&
+                      !titleText.toLowerCase().includes('blog') &&
+                      !titleText.toLowerCase().includes('all posts')) {
+                    title = titleText;
+                    break;
+                  }
+                }
+              }
+              if (title) break;
+            }
+            
+            // If no title found in container, try the link's text (but only if it's substantial)
+            if (!title || title.length < 10) {
+              const linkText = link.textContent.trim();
+              // Only use link text if it's substantial and not just "read more"
+              if (linkText.length > 15 && 
+                  !linkText.toLowerCase().includes('read more') &&
+                  !linkText.toLowerCase().includes('learn more')) {
+                title = linkText;
+              } else {
+                // Try aria-label or title attribute
+                title = link.getAttribute('aria-label') || link.title || null;
+              }
+            }
+            
+            // Look for date in container - check multiple patterns
+            const dateElement = container.querySelector('time[datetime], time, [datetime], [class*="date"]:not([class*="update"]), [class*="time"]');
             if (dateElement) {
-              dateText = dateElement.getAttribute('datetime') || dateElement.textContent.trim();
-            } else {
-              // Try to find date in text content (look for patterns like "06-Nov-25")
+              dateText = dateElement.getAttribute('datetime') || 
+                        dateElement.getAttribute('date') ||
+                        dateElement.textContent.trim();
+            }
+            
+            // If no date element, try to extract from text content
+            if (!dateText) {
               const containerText = container.textContent || '';
-              dateText = extractDate(containerText) || null;
+              dateText = extractDate(containerText);
             }
             
             // Extract description
             description = (container.querySelector('[class*="excerpt"], [class*="summary"], [class*="description"], p')?.textContent.trim() || '').substring(0, 300);
-            
-            // If no title found, try to extract from link's accessible text or aria-label
-            if (!title || title.length < 10) {
-              title = link.getAttribute('aria-label') || link.title || link.textContent.trim();
-            }
+          } else {
+            // Fallback: use link text if container not found
+            title = link.textContent.trim();
           }
           
           // Filter: Must have a meaningful title
@@ -601,6 +665,7 @@ class WebScraper {
                 lowerTitle.includes('learn more') ||
                 lowerTitle === 'blog' ||
                 lowerTitle === 'about' ||
+                lowerTitle.includes('all posts') ||
                 title.length < 15) {
               return;
             }

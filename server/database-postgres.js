@@ -367,6 +367,7 @@ class Database {
   async getArticlesByDateRange(days) {
     // Get articles where pub_date is within the last N days
     // If pub_date is null, use created_at instead
+    // This allows articles without publication dates to still show up if they were added recently
     const result = await this.pool.query(`
       SELECT a.*, s.name as source_name 
       FROM articles a 
@@ -375,6 +376,15 @@ class Database {
          OR (a.pub_date IS NULL AND a.created_at >= NOW() - INTERVAL '${days} days')
       ORDER BY COALESCE(a.pub_date, a.created_at) DESC
     `);
+    
+    // Log for debugging
+    console.log(`📊 Database query: Found ${result.rows.length} articles from last ${days} days`);
+    if (result.rows.length > 0) {
+      const withDates = result.rows.filter(a => a.pub_date).length;
+      const withoutDates = result.rows.length - withDates;
+      console.log(`   - ${withDates} with pub_date, ${withoutDates} using created_at`);
+    }
+    
     return result.rows;
   }
   

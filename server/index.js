@@ -211,26 +211,34 @@ app.post('/api/sources', async (req, res) => {
           try {
             const exists = await database.articleExists(article.link);
             if (!exists) {
-              // Generate AI-enhanced content (same as RSS)
+              // Use the scraped article title directly (don't let AI modify it)
+              // The enhanceArticleContent might modify titles, so we preserve the original
+              const originalTitle = article.title || 'Untitled';
+              
+              // Generate AI-enhanced content for preview/summary only
               const enhancedContent = await feedMonitor.enhanceArticleContent(article);
               
               const articleObj = {
                 sourceId: sourceId,
-                title: enhancedContent.title || article.title || 'Untitled',
+                title: originalTitle, // Use original scraped title, not enhanced title
                 link: article.link,
                 content: enhancedContent.content || article.content || '',
-                preview: enhancedContent.preview || article.preview || '',
+                preview: enhancedContent.preview || article.description || article.contentSnippet || '',
                 pubDate: article.pubDate || article.isoDate || null,
                 sourceName: name,
                 category: categoryName || 'General',
                 status: 'new'
               };
               
+              // Log for debugging
+              console.log(`📄 Adding article: "${articleObj.title}" | Date: ${articleObj.pubDate || 'null'} | Link: ${articleObj.link}`);
+              
               if (articleObj.title !== 'Untitled' && articleObj.link) {
                 await database.addArticle(articleObj);
               }
             }
           } catch (err) {
+            console.error('Error adding article:', err.message);
             // Skip duplicates or errors
           }
         }
