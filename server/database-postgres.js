@@ -67,11 +67,14 @@ class Database {
       // Connection pool settings for Supabase
       max: 10, // Maximum number of clients in the pool
       idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
-      connectionTimeoutMillis: 10000, // Return an error after 10 seconds if connection cannot be established
+      connectionTimeoutMillis: 20000, // Increased to 20 seconds for Supabase pooler
       // Handle connection errors gracefully
       allowExitOnIdle: false,
       // Force IPv4 (avoid IPv6 issues on Render)
-      family: 4
+      family: 4,
+      // Additional settings for better reliability
+      keepAlive: true,
+      keepAliveInitialDelayMillis: 10000
     });
 
     // Handle pool errors (don't crash the app)
@@ -693,21 +696,22 @@ class Database {
 
   // Categories methods
   async getAllCategories() {
-    const result = await this.pool.query('SELECT * FROM categories ORDER BY name');
+    const result = await this.queryWithRetry('SELECT * FROM categories ORDER BY name');
     return result.rows;
   }
 
   async addCategory(name) {
     try {
-      const result = await this.pool.query(
+      // Use retry logic for category insertion
+      const result = await this.queryWithRetry(
         'INSERT INTO categories (name) VALUES ($1) RETURNING *',
         [name]
       );
       return result.rows[0];
     } catch (error) {
       if (error.code === '23505') { // Unique constraint violation
-        // Category already exists, return it
-        const result = await this.pool.query('SELECT * FROM categories WHERE name = $1', [name]);
+        // Category already exists, return it (with retry)
+        const result = await this.queryWithRetry('SELECT * FROM categories WHERE name = $1', [name]);
         return result.rows[0];
       }
       throw error;
