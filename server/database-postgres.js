@@ -174,6 +174,38 @@ class Database {
     throw lastError;
   }
 
+  async queryWithRetry(query, params = [], retries = 3) {
+    let lastError = null;
+    
+    for (let i = 0; i < retries; i++) {
+      try {
+        // Add timeout to individual queries
+        return await Promise.race([
+          this.pool.query(query, params),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Query timeout')), 30000)
+          )
+        ]);
+      } catch (error) {
+        lastError = error;
+        
+        // If it's a connection error, wait longer before retrying
+        if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT' || error.message.includes('timeout')) {
+          const delay = 2000 * (i + 1); // 2s, 4s, 6s
+          console.log(`⚠️ Database query failed (attempt ${i + 1}/${retries}): ${error.message}`);
+          console.log(`   Retrying in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        } else if (i < retries - 1) {
+          // For other errors, shorter delay
+          await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
+        }
+      }
+    }
+    
+    console.error(`❌ Database query failed after ${retries} retries:`, lastError.message);
+    throw lastError;
+  }
+
   async createTables() {
     const client = await this.pool.connect();
     try {
@@ -267,12 +299,12 @@ class Database {
 
   // Sources methods
   async getAllSources() {
-    const result = await this.pool.query('SELECT * FROM sources ORDER BY name');
+    const result = await this.queryWithRetry('SELECT * FROM sources ORDER BY name');
     return result.rows;
   }
 
   async addSource(name, url, category = null, monitoringType = 'RSS') {
-    const result = await this.pool.query(
+    const result = await this.queryWithRetry(
       'INSERT INTO sources (name, url, category, monitoring_type) VALUES ($1, $2, $3, $4) RETURNING *',
       [name, url, category, monitoringType]
     );
