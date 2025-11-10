@@ -536,6 +536,7 @@ class WebScraper {
       // Extract articles using multiple strategies (optimized for Next.js and modern React apps)
       const articles = await page.evaluate((sourceDomain) => {
         const results = [];
+        const debug = []; // Debug info
         
         // Helper to check if URL is from same domain
         const isSameDomain = (urlString) => {
@@ -547,6 +548,13 @@ class WebScraper {
             return false;
           }
         };
+        
+        // Check if we're on an articles listing page
+        const currentUrl = window.location.href;
+        const isArticlesListingPage = currentUrl.includes('/articles') || 
+                                      currentUrl.includes('/blog') ||
+                                      currentUrl.includes('/posts') ||
+                                      currentUrl.includes('/news');
         
         // Helper to extract date from text (handles formats like "06-Nov-25", "November 6, 2025", etc.)
         const extractDate = (text) => {
@@ -599,27 +607,50 @@ class WebScraper {
         // Strategy 1: Look for article cards (common in Next.js/blog layouts)
         // Look for elements that contain both a link and text that looks like a title
         const allLinks = document.querySelectorAll('a[href]');
+        debug.push(`Found ${allLinks.length} total links on page`);
+        
+        let linksChecked = 0;
+        let linksSameDomain = 0;
+        let linksWithPattern = 0;
+        
         allLinks.forEach(link => {
           const href = link.href;
           if (!href || !isSameDomain(href)) return;
+          linksSameDomain++;
           
           // Focus on blog post URLs (most reliable indicator)
           // Look for URLs like /blog/slug, /post/slug, /article/slug, /articles/slug
           // Also handle plural forms and variations
           const isBlogPostUrl = href.match(/\/(blog|post|article|articles|news|updates|story|stories)\/[^\/\?#]+/i);
+          
+          // If we're on an articles listing page, be more lenient - accept any link that:
+          // 1. Matches article URL patterns, OR
+          // 2. Has a substantial title and looks like an article
           if (!isBlogPostUrl) {
-            // Skip if it's not a blog post URL and doesn't look like one
             // Check for plural forms and other common patterns
-            if (!href.includes('/blog/') && 
-                !href.includes('/post/') && 
-                !href.includes('/article/') && 
-                !href.includes('/articles/') &&
-                !href.includes('/news/') &&
-                !href.includes('/updates/') &&
-                !href.includes('/story/') &&
-                !href.includes('/stories/')) {
-              return;
+            const hasArticlePattern = href.includes('/blog/') || 
+                                     href.includes('/post/') || 
+                                     href.includes('/article/') || 
+                                     href.includes('/articles/') ||
+                                     href.includes('/news/') ||
+                                     href.includes('/updates/') ||
+                                     href.includes('/story/') ||
+                                     href.includes('/stories/');
+            
+            // If we're on an articles listing page, be more lenient
+            // Accept links that don't match patterns IF they look like articles
+            if (!hasArticlePattern && !isArticlesListingPage) {
+              return; // Skip if not on listing page and doesn't match pattern
             }
+            
+            // If on listing page but no pattern match, we'll check later if it looks like an article
+            if (!hasArticlePattern && isArticlesListingPage) {
+              // Will check later if title/container looks like an article
+            }
+          }
+          
+          if (isBlogPostUrl || isArticlesListingPage) {
+            linksWithPattern++;
           }
           
           // Skip navigation, footer, and obvious non-article links
@@ -813,12 +844,19 @@ class WebScraper {
             // 1. Date is present, OR
             // 2. Title is substantial (longer than 30 chars), OR
             // 3. Description is present
+            // BUT: if we're on an articles listing page, be more lenient
             if (!isBlogPostUrl && !isArticlesPage) {
               const hasSubstantialContent = title.length > 30 || description.length > 50 || dateText;
               if (!hasSubstantialContent) {
                 // Skip links that don't look like articles
                 return;
               }
+            }
+            
+            // On articles listing pages, accept links even if URL pattern doesn't match
+            // as long as they have a good title and aren't navigation
+            if (isArticlesListingPage && !isBlogPostUrl) {
+              // Already validated title length above, so accept it
             }
             
             // Check if we already have this URL
@@ -943,6 +981,16 @@ class WebScraper {
               }
             }
           });
+        });
+        
+        // Log debug info
+        console.log('🔍 Scraper debug:', {
+          totalLinks: allLinks.length,
+          sameDomainLinks: linksSameDomain,
+          linksWithPattern: linksWithPattern,
+          articlesFound: results.length,
+          currentUrl: currentUrl,
+          isArticlesListingPage: isArticlesListingPage
         });
         
         return results;
