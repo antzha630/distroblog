@@ -918,66 +918,6 @@ class FeedMonitor {
         }
       }
 
-      // Extract publication date
-      let pubDate = null;
-      const dateSelectors = [
-        'meta[property="article:published_time"]',
-        'meta[name="article:published_time"]',
-        'meta[property="og:article:published_time"]',
-        'meta[property="article:published"]',
-        'meta[name="publishdate"]',
-        'meta[name="pubdate"]',
-        'meta[name="date"]',
-        'time[datetime]',
-        'time',
-        '[datetime]',
-        '[data-date]',
-        '[data-published]',
-        '.published-date',
-        '.post-date',
-        '.article-date',
-        '.date',
-        '.publish-date',
-        '[class*="date"]',
-        '[class*="published"]',
-        '[class*="publish"]',
-        '[id*="date"]',
-        '[id*="published"]'
-      ];
-      
-      // Also check JSON-LD structured data for dates
-      try {
-        const jsonLdScripts = $('script[type="application/ld+json"]');
-        jsonLdScripts.each((i, script) => {
-          try {
-            const data = JSON.parse($(script).html());
-            if (data['@type'] === 'Article' || data['@type'] === 'BlogPosting' || data['@type'] === 'NewsArticle') {
-              if (data.datePublished) {
-                pubDate = parseDate(data.datePublished);
-                if (pubDate) return false; // Break loop
-              }
-              if (data.dateCreated && !pubDate) {
-                pubDate = parseDate(data.dateCreated);
-                if (pubDate) return false; // Break loop
-              }
-            }
-            // Handle arrays of structured data
-            if (Array.isArray(data)) {
-              data.forEach(item => {
-                if ((item['@type'] === 'Article' || item['@type'] === 'BlogPosting') && item.datePublished) {
-                  pubDate = parseDate(item.datePublished);
-                  if (pubDate) return false; // Break loop
-                }
-              });
-            }
-          } catch (e) {
-            // Invalid JSON, skip
-          }
-        });
-      } catch (e) {
-        // JSON-LD parsing failed, continue
-      }
-
       // Helper to parse date in various formats including "06-Nov-25"
       const parseDate = (dateStr) => {
         if (!dateStr) return null;
@@ -1039,6 +979,66 @@ class FeedMonitor {
         
         return null;
       };
+
+      // Extract publication date
+      let pubDate = null;
+      const dateSelectors = [
+        'meta[property="article:published_time"]',
+        'meta[name="article:published_time"]',
+        'meta[property="og:article:published_time"]',
+        'meta[property="article:published"]',
+        'meta[name="publishdate"]',
+        'meta[name="pubdate"]',
+        'meta[name="date"]',
+        'time[datetime]',
+        'time',
+        '[datetime]',
+        '[data-date]',
+        '[data-published]',
+        '.published-date',
+        '.post-date',
+        '.article-date',
+        '.date',
+        '.publish-date',
+        '[class*="date"]',
+        '[class*="published"]',
+        '[class*="publish"]',
+        '[id*="date"]',
+        '[id*="published"]'
+      ];
+      
+      // Also check JSON-LD structured data for dates
+      try {
+        const jsonLdScripts = $('script[type="application/ld+json"]');
+        jsonLdScripts.each((i, script) => {
+          try {
+            const data = JSON.parse($(script).html());
+            if (data['@type'] === 'Article' || data['@type'] === 'BlogPosting' || data['@type'] === 'NewsArticle') {
+              if (data.datePublished) {
+                pubDate = parseDate(data.datePublished);
+                if (pubDate) return false; // Break loop
+              }
+              if (data.dateCreated && !pubDate) {
+                pubDate = parseDate(data.dateCreated);
+                if (pubDate) return false; // Break loop
+              }
+            }
+            // Handle arrays of structured data
+            if (Array.isArray(data)) {
+              data.forEach(item => {
+                if ((item['@type'] === 'Article' || item['@type'] === 'BlogPosting') && item.datePublished) {
+                  pubDate = parseDate(item.datePublished);
+                  if (pubDate) return false; // Break loop
+                }
+              });
+            }
+          } catch (e) {
+            // Invalid JSON, skip
+          }
+        });
+      } catch (e) {
+        // JSON-LD parsing failed, continue
+      }
 
       // Try structured selectors first
       for (const selector of dateSelectors) {
