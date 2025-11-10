@@ -500,7 +500,7 @@ class WebScraper {
         });
         
         // Strategy 2: Wait for content containers to appear
-        await page.waitForSelector('a[href*="/blog/"], article, [class*="post"], [class*="blog"], [class*="card"], [class*="grid"]', { 
+        await page.waitForSelector('a[href*="/blog/"], a[href*="/articles/"], a[href*="/post/"], article, [class*="post"], [class*="blog"], [class*="card"], [class*="grid"]', { 
           timeout: 10000 
         }).catch(() => {
           // If no specific selector found, continue anyway
@@ -511,7 +511,12 @@ class WebScraper {
           const links = Array.from(document.querySelectorAll('a[href]'));
           return links.some(link => {
             const href = link.href;
-            return href.includes('/blog/') || href.includes('/post/') || href.includes('/article/');
+            return href.includes('/blog/') || 
+                   href.includes('/post/') || 
+                   href.includes('/article/') ||
+                   href.includes('/articles/') ||
+                   href.includes('/news/') ||
+                   href.includes('/updates/');
           });
         }, { timeout: 10000 }).catch(() => {
           // No blog links found yet, continue anyway
@@ -599,20 +604,40 @@ class WebScraper {
           if (!href || !isSameDomain(href)) return;
           
           // Focus on blog post URLs (most reliable indicator)
-          // Look for URLs like /blog/slug, /post/slug, /article/slug
-          const isBlogPostUrl = href.match(/\/(blog|post|article)\/[^\/\?#]+/i);
+          // Look for URLs like /blog/slug, /post/slug, /article/slug, /articles/slug
+          // Also handle plural forms and variations
+          const isBlogPostUrl = href.match(/\/(blog|post|article|articles|news|updates|story|stories)\/[^\/\?#]+/i);
           if (!isBlogPostUrl) {
             // Skip if it's not a blog post URL and doesn't look like one
-            if (!href.includes('/blog/') && !href.includes('/post/') && !href.includes('/article/')) {
+            // Check for plural forms and other common patterns
+            if (!href.includes('/blog/') && 
+                !href.includes('/post/') && 
+                !href.includes('/article/') && 
+                !href.includes('/articles/') &&
+                !href.includes('/news/') &&
+                !href.includes('/updates/') &&
+                !href.includes('/story/') &&
+                !href.includes('/stories/')) {
               return;
             }
           }
           
           // Skip navigation, footer, and obvious non-article links
+          // But allow articles listing pages if they have individual article slugs
           if (href.includes('#') || 
-              href === window.location.href || 
-              href.endsWith('/blog') || 
-              href.endsWith('/blog/')) {
+              href === window.location.href) {
+            return;
+          }
+          
+          // Skip listing pages (like /blog, /articles) but only if they don't have a slug
+          // If the URL has a slug after /articles or /blog, it's an individual article
+          const isListingPage = (href.endsWith('/blog') || 
+                                 href.endsWith('/blog/') ||
+                                 href.endsWith('/articles') ||
+                                 href.endsWith('/articles/') ||
+                                 href.endsWith('/posts') ||
+                                 href.endsWith('/posts/'));
+          if (isListingPage) {
             return;
           }
           
@@ -769,15 +794,31 @@ class WebScraper {
                 lowerTitle.includes('learn more') ||
                 lowerTitle === 'blog' ||
                 lowerTitle === 'about' ||
+                lowerTitle === 'articles' ||
+                lowerTitle === 'posts' ||
                 lowerTitle.includes('all posts') ||
-                title.length < 15) {
+                lowerTitle.includes('view all')) {
               return;
             }
             
             // For blog post URLs, be more lenient with title length
-            const minTitleLength = isBlogPostUrl ? 10 : 20;
+            // Also be lenient if we're on an articles listing page (URL contains /articles)
+            const isArticlesPage = window.location.href.includes('/articles');
+            const minTitleLength = (isBlogPostUrl || isArticlesPage) ? 10 : 20;
             if (title.length < minTitleLength) {
               return;
+            }
+            
+            // Additional validation: if not a known article URL pattern, require either:
+            // 1. Date is present, OR
+            // 2. Title is substantial (longer than 30 chars), OR
+            // 3. Description is present
+            if (!isBlogPostUrl && !isArticlesPage) {
+              const hasSubstantialContent = title.length > 30 || description.length > 50 || dateText;
+              if (!hasSubstantialContent) {
+                // Skip links that don't look like articles
+                return;
+              }
             }
             
             // Check if we already have this URL
@@ -843,9 +884,17 @@ class WebScraper {
           const title = el.querySelector('h1, h2, h3, h4, h5, h6, [class*="title"], [class*="headline"]')?.textContent.trim() ||
                        link.textContent.trim();
           const date = el.querySelector('time, [class*="date"], [datetime]');
+          const hasDate = date || extractDate(el.textContent);
           
-          if (title && title.length > 10 && 
-              (link.href.includes('/blog/') || link.href.includes('/post/') || link.href.includes('/article/'))) {
+          // Check if this looks like an article (has title and is from article-like URLs or has date)
+          const isArticleUrl = link.href.includes('/blog/') || 
+                              link.href.includes('/post/') || 
+                              link.href.includes('/article/') ||
+                              link.href.includes('/articles/') ||
+                              link.href.includes('/news/') ||
+                              link.href.includes('/updates/');
+          
+          if (title && title.length > 10 && (isArticleUrl || hasDate)) {
             const dateText = date?.getAttribute('datetime') || date?.textContent.trim() || 
                             extractDate(el.textContent);
             
@@ -874,7 +923,15 @@ class WebScraper {
             const hasDate = item.textContent.match(/\d{1,2}[-/]\d{1,2}[-/]\d{2,4}/) || 
                           item.querySelector('time, [class*="date"]');
             
-            if (hasTitle && (link.href.includes('/blog/') || link.href.includes('/post/') || hasDate)) {
+            // Check if this looks like an article (has title and is from article-like URLs or has date)
+            const isArticleUrl = link.href.includes('/blog/') || 
+                                link.href.includes('/post/') || 
+                                link.href.includes('/article/') ||
+                                link.href.includes('/articles/') ||
+                                link.href.includes('/news/') ||
+                                link.href.includes('/updates/');
+            
+            if (hasTitle && (isArticleUrl || hasDate)) {
               const title = hasTitle.textContent.trim() || link.textContent.trim();
               if (title && title.length > 10 && !results.some(r => r.url === link.href)) {
                 results.push({
