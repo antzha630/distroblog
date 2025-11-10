@@ -249,21 +249,27 @@ class FeedMonitor {
           
           if (monitoringType === 'SCRAPING') {
             // Scraping: get articles and check for new ones
+            console.log(`🔍 Checking scraping source: ${source.name} (${source.url})`);
             const articles = await this.webScraper.scrapeArticles(source);
+            
+            console.log(`📰 Found ${articles.length} articles from ${source.name}, checking for new ones...`);
             
             for (const article of articles) {
               try {
                 const exists = await database.articleExists(article.link);
                 if (!exists) {
-                  // Generate AI-enhanced content (same as RSS)
+                  // Use original scraped title (don't let AI modify it)
+                  const originalTitle = article.title || 'Untitled';
+                  
+                  // Generate AI-enhanced content for preview/summary only
                   const enhancedContent = await this.enhanceArticleContent(article);
                   
                   const articleObj = {
                     sourceId: source.id,
-                    title: enhancedContent.title || article.title || 'Untitled',
+                    title: originalTitle, // Use original scraped title
                     link: article.link,
                     content: enhancedContent.content || article.content || '',
-                    preview: enhancedContent.preview || article.preview || '',
+                    preview: enhancedContent.preview || article.description || article.contentSnippet || '',
                     pubDate: article.pubDate || article.isoDate || null,
                     sourceName: source.name || 'Unknown Source',
                     category: source.category || 'General',
@@ -275,13 +281,27 @@ class FeedMonitor {
                     newArticles.push({
                       id: articleObj.sourceId,
                       title: articleObj.title,
-                      link: articleObj.link
+                      link: articleObj.link,
+                      pubDate: articleObj.pubDate
                     });
+                    
+                    // Log new article found
+                    console.log(`✨ NEW ARTICLE: "${articleObj.title}" | Date: ${articleObj.pubDate || 'NO DATE'} | Link: ${articleObj.link.substring(0, 60)}...`);
                   }
+                } else {
+                  // Article already exists - skip
+                  console.log(`⏭️  Article already exists: ${article.link.substring(0, 60)}...`);
                 }
               } catch (err) {
+                console.error(`Error processing article from ${source.name}:`, err.message);
                 // Skip duplicates or errors
               }
+            }
+            
+            if (newArticles.length > 0) {
+              console.log(`✅ Added ${newArticles.length} new article(s) from ${source.name}`);
+            } else {
+              console.log(`ℹ️  No new articles found for ${source.name} (${articles.length} articles checked, all already in database)`);
             }
             
             // Update last_checked timestamp (scraping result is already stored by webScraper)

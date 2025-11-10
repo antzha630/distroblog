@@ -715,7 +715,7 @@ app.get('/api/articles/recent/:days', async (req, res) => {
     
     const articles = await database.getArticlesByDateRange(days);
     
-    console.log(`📊 Found ${articles.length} articles from last ${days} days`);
+    console.log(`📊 Found ${articles.length} articles with pub_date from last ${days} days (articles without dates are excluded)`);
     
     // Format articles for professional display
     const formattedArticles = articles.map(article => {
@@ -785,16 +785,81 @@ app.get('/api/articles/all', async (req, res) => {
       category: article.category,
       status: article.status,
       has_content: !!(article.content && article.content.length > 0),
-      content_length: article.content ? article.content.length : 0
+      content_length: article.content ? article.content.length : 0,
+      has_pub_date: !!article.pub_date,
+      days_ago: article.pub_date ? Math.floor((new Date() - new Date(article.pub_date)) / (1000 * 60 * 60 * 24)) : null
     }));
+    
+    // Count articles with/without pub_date
+    const withDates = formattedArticles.filter(a => a.has_pub_date).length;
+    const withoutDates = formattedArticles.length - withDates;
     
     res.json({
       total: formattedArticles.length,
+      with_pub_date: withDates,
+      without_pub_date: withoutDates,
       articles: formattedArticles
     });
   } catch (error) {
     console.error('Error fetching all articles:', error);
     res.status(500).json({ error: 'Failed to fetch articles' });
+  }
+});
+
+// Get scraping status for a source (for verification)
+app.get('/api/sources/:id/scraping-status', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const source = await database.getSourceById(parseInt(id));
+    
+    if (!source) {
+      return res.status(404).json({ error: 'Source not found' });
+    }
+    
+    // Get recent articles from this source
+    const recentArticles = await database.pool.query(`
+      SELECT id, title, link, pub_date, created_at, status
+      FROM articles
+      WHERE source_id = $1
+      ORDER BY created_at DESC
+      LIMIT 10
+    `, [id]);
+    
+    // Parse scraping result if available
+    let scrapingResult = null;
+    if (source.last_scraping_result) {
+      try {
+        scrapingResult = typeof source.last_scraping_result === 'string' 
+          ? JSON.parse(source.last_scraping_result)
+          : source.last_scraping_result;
+      } catch (e) {
+        // Invalid JSON, ignore
+      }
+    }
+    
+    res.json({
+      source: {
+        id: source.id,
+        name: source.name,
+        url: source.url,
+        monitoring_type: source.monitoring_type,
+        last_checked: source.last_checked,
+        is_paused: source.is_paused
+      },
+      scraping_result: scrapingResult,
+      recent_articles: recentArticles.rows.map(a => ({
+        id: a.id,
+        title: a.title,
+        link: a.link,
+        pub_date: a.pub_date,
+        created_at: a.created_at,
+        status: a.status,
+        has_pub_date: !!a.pub_date
+      }))
+    });
+  } catch (error) {
+    console.error('Error fetching scraping status:', error);
+    res.status(500).json({ error: 'Failed to fetch scraping status' });
   }
 });
 
