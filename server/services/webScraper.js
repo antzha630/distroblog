@@ -202,15 +202,28 @@ class WebScraper {
           // Extract publication date from article page (more comprehensive than list page)
           let pubDate = article.datePublished ? new Date(article.datePublished) : null;
           
-          // Only try to extract metadata from article page for first 3 articles (to save time)
-          if (i < 3 && (!pubDate || isNaN(pubDate.getTime())) && fullContent) {
+          // Try to extract metadata from article page for first 3 articles (to get better title and date)
+          // This is important because the listing page might have duplicate/generic titles
+          if (i < 3) {
             try {
               const metadata = await feedMonitor.extractArticleMetadata(articleUrl);
-              if (metadata.pubDate) {
+              
+              // Use article page title if it's better (more specific, longer)
+              if (metadata.title && metadata.title.length > article.title.length && 
+                  !metadata.title.toLowerCase().includes('blog') &&
+                  !metadata.title.toLowerCase().includes('all posts')) {
+                article.title = metadata.title;
+                console.log(`📝 Updated title from article page: "${article.title}"`);
+              }
+              
+              // Use article page date if available
+              if (metadata.pubDate && (!pubDate || isNaN(pubDate.getTime()))) {
                 pubDate = new Date(metadata.pubDate);
+                console.log(`📅 Found date from article page: ${pubDate.toISOString()}`);
               }
             } catch (err) {
-              // If extraction fails (especially 403), keep existing date or null
+              // If extraction fails (especially 403), keep existing title/date
+              // This is OK - we'll use what we scraped from the listing page
             }
           }
           
