@@ -221,16 +221,6 @@ function App() {
                 Sources
               </button>
             )}
-            {activeTab === 'sources' && (
-              <button 
-                className="nav-link check-now-btn"
-                onClick={handleCheckNow}
-                disabled={isCheckingFeeds}
-                title="Check all sources for new articles immediately"
-              >
-                {isCheckingFeeds ? '⏳ Checking...' : '🔍 Check Now'}
-              </button>
-            )}
           </nav>
         </div>
       </header>
