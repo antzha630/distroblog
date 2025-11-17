@@ -205,26 +205,32 @@ function App() {
             <p className="header-stats">news monitoring tool for journalists</p>
           </div>
           <nav className="header-nav">
-            <button 
-              className={`nav-link ${activeTab === 'distro-scout' ? 'active' : ''}`}
-              onClick={() => setActiveTab('distro-scout')}
-            >
-              Distro Scout
-            </button>
-            <button 
-              className={`nav-link ${activeTab === 'sources' ? 'active' : ''}`}
-              onClick={() => setActiveTab('sources')}
-            >
-              Sources
-            </button>
-            <button 
-              className="nav-link check-now-btn"
-              onClick={handleCheckNow}
-              disabled={isCheckingFeeds}
-              title="Check all sources for new articles immediately"
-            >
-              {isCheckingFeeds ? '⏳ Checking...' : '🔍 Check Now'}
-            </button>
+            {activeTab === 'sources' && (
+              <button 
+                className="nav-link"
+                onClick={() => setActiveTab('distro-scout')}
+              >
+                Dashboard
+              </button>
+            )}
+            {activeTab === 'distro-scout' && (
+              <button 
+                className="nav-link"
+                onClick={() => setActiveTab('sources')}
+              >
+                Sources
+              </button>
+            )}
+            {activeTab === 'sources' && (
+              <button 
+                className="nav-link check-now-btn"
+                onClick={handleCheckNow}
+                disabled={isCheckingFeeds}
+                title="Check all sources for new articles immediately"
+              >
+                {isCheckingFeeds ? '⏳ Checking...' : '🔍 Check Now'}
+              </button>
+            )}
           </nav>
         </div>
       </header>
@@ -233,6 +239,8 @@ function App() {
         {activeTab === 'distro-scout' && distroScoutStep === 'landing' && (
           <DistroScoutLanding 
             onArticlesSelected={handleDistroScoutArticlesSelected}
+            onCheckNow={handleCheckNow}
+            isCheckingFeeds={isCheckingFeeds}
           />
         )}
         {activeTab === 'distro-scout' && distroScoutStep === 'edit-send' && (

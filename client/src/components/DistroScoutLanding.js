@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import config from '../config';
 
-function DistroScoutLanding({ onArticlesSelected }) {
+function DistroScoutLanding({ onArticlesSelected, onCheckNow, isCheckingFeeds }) {
   const [articles, setArticles] = useState([]);
   const [filteredArticles, setFilteredArticles] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -78,26 +78,32 @@ function DistroScoutLanding({ onArticlesSelected }) {
     setFilteredArticles(filtered);
   };
 
-  const handleRefresh = async () => {
+  const handleCheckNow = async () => {
     setIsRefreshing(true);
     try {
-      // Trigger immediate feed check
-      const response = await fetch(`${config.API_BASE_URL}/api/monitor/trigger`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
+      // Use the prop if provided, otherwise use local implementation
+      if (onCheckNow) {
+        await onCheckNow();
+      } else {
+        // Fallback: trigger immediate feed check
+        const response = await fetch(`${config.API_BASE_URL}/api/monitor/trigger`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+        if (!response.ok) {
+          throw new Error('Failed to trigger feed check');
         }
-      });
-      
-      if (response.ok) {
-        // Wait a moment for feeds to process, then refresh articles
-        setTimeout(() => {
-          fetchArticles();
-        }, 2000);
       }
+      
+      // Wait a moment for feeds to process, then refresh articles
+      setTimeout(() => {
+        fetchArticles();
+        setIsRefreshing(false);
+      }, 2000);
     } catch (error) {
-      console.error('Error triggering refresh:', error);
-    } finally {
+      console.error('Error triggering check now:', error);
       setIsRefreshing(false);
     }
   };
@@ -238,11 +244,11 @@ function DistroScoutLanding({ onArticlesSelected }) {
             </button>
           </div>
           <button 
-            onClick={handleRefresh}
-            disabled={isRefreshing}
+            onClick={handleCheckNow}
+            disabled={isRefreshing || isCheckingFeeds}
             className="refresh-btn"
           >
-            {isRefreshing ? 'Refreshing...' : 'Refresh'}
+            {isRefreshing || isCheckingFeeds ? '⏳ Checking...' : '🔍 Check Now'}
           </button>
         </div>
       </div>
