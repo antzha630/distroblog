@@ -126,22 +126,23 @@ app.post('/api/scrape/test', async (req, res) => {
   }
 });
 
-// Add a new source to monitor
-app.post('/api/sources', async (req, res) => {
+// Check if a URL has an RSS feed (step 1 of multi-step flow)
+// IMPORTANT: This endpoint does NOT use Playwright to avoid memory issues
+app.post('/api/sources/check-feed', async (req, res) => {
   try {
-    const { url, name, category } = req.body;
+    const { url } = req.body;
     
-    if (!url || !name) {
-      return res.status(400).json({ error: 'URL and name are required' });
+    if (!url) {
+      return res.status(400).json({ error: 'URL is required' });
     }
 
-    let monitoringType = 'RSS';
     let feedUrl = url;
+    let isValid = false;
     
-    // Try RSS/JSON Feed first
-    let isValid = await feedMonitor.validateFeed(url);
+    // Try RSS/JSON Feed first (no Playwright, just HTTP requests)
+    isValid = await feedMonitor.validateFeed(url);
     
-    // If direct URL is not a feed, try to discover one
+    // If direct URL is not a feed, try to discover one (also no Playwright)
     if (!isValid) {
       const feedDiscovery = new FeedDiscovery();
       const discoveredFeed = await feedDiscovery.discoverFeedUrl(url);
@@ -150,7 +151,6 @@ app.post('/api/sources', async (req, res) => {
         // Double-check: reject sitemaps (they're not feeds!)
         if (discoveredFeed.includes('sitemap.xml') || discoveredFeed.includes('sitemap')) {
           console.log(`⚠️ Rejecting discovered sitemap URL: ${discoveredFeed}`);
-          discoveredFeed = null; // Don't use sitemap as feed
         } else {
           feedUrl = discoveredFeed;
           isValid = await feedMonitor.validateFeed(discoveredFeed);
@@ -158,37 +158,40 @@ app.post('/api/sources', async (req, res) => {
             const isJSON = await feedMonitor.isJSONFeed(discoveredFeed);
             console.log(`✅ Discovered ${isJSON ? 'JSON' : 'RSS'} feed: ${discoveredFeed}`);
           } else {
-            // If discovered feed is invalid, don't use it
-            console.log(`⚠️ Discovered feed is invalid: ${discoveredFeed}`);
             feedUrl = url; // Use original URL instead
           }
         }
       }
     }
 
-    // If still no feed found, try scraping as fallback
-    if (!isValid) {
-      console.log(`📝 No RSS/JSON Feed found for ${url}, trying scraping fallback...`);
-      monitoringType = 'SCRAPING';
-      
-      // Test if scraping works (use original URL, not discovered sitemap)
-      const testArticles = await webScraper.scrapeArticles({ url, name, category: category || null });
-      
-      if (testArticles.length === 0) {
-        // Provide more helpful error message
-        let errorMsg = 'No RSS/JSON Feed found and scraping returned no articles.';
-        
-        // Check if a sitemap was found (which is not a feed)
-        if (feedUrl && feedUrl.includes('sitemap.xml')) {
-          errorMsg = 'A sitemap was found, but no RSS/JSON feed was available. The system tried scraping but found no articles. Please check the URL or provide a direct RSS feed URL.';
-        }
-        
-        return res.status(400).json({ 
-          error: errorMsg
-        });
-      }
-      
-      console.log(`✅ Scraping found ${testArticles.length} articles, using scraping fallback`);
+    if (isValid) {
+      return res.json({
+        success: true,
+        hasFeed: true,
+        feedUrl: feedUrl,
+        message: "OK, you're all set!"
+      });
+    } else {
+      return res.json({
+        success: true,
+        hasFeed: false,
+        message: "We did not find an RSS feed for this source. Would you like us to proceed with setting up a scraping for this source?"
+      });
+    }
+  } catch (error) {
+    console.error('Error checking feed:', error);
+    res.status(500).json({ error: 'Failed to check for RSS feed' });
+  }
+});
+
+// Set up scraping for a source (step 2 of multi-step flow)
+// IMPORTANT: This endpoint includes explicit browser cleanup to prevent memory issues
+app.post('/api/sources/setup-scraping', async (req, res) => {
+  try {
+    const { url, name, category } = req.body;
+    
+    if (!url || !name) {
+      return res.status(400).json({ error: 'URL and name are required' });
     }
 
     // Add category if provided
@@ -198,65 +201,165 @@ app.post('/api/sources', async (req, res) => {
       categoryName = categoryRecord.name;
     }
 
-    const source = await database.addSource(name, feedUrl || url, categoryName, monitoringType);
+    // Add source with SCRAPING monitoring type first
+    const source = await database.addSource(name, url, categoryName, 'SCRAPING');
     const sourceId = source.id;
     
-    // Fetch 3 most recent articles from the new source
+    // Scrape articles ONCE (test and fetch in one go, like old workflow)
+    // This avoids double browser usage that could cause memory issues
+    let scrapingError = null;
+    let articles = [];
     try {
-      if (monitoringType === 'SCRAPING') {
-        // Scraping: get 3 most recent articles
-        const articles = await webScraper.scrapeArticles({ id: sourceId, url, name, category: categoryName });
-        
-        for (const article of articles.slice(0, 3)) {
-          try {
-            const exists = await database.articleExists(article.link);
-            if (!exists) {
-              // Use the scraped article title directly (don't let AI modify it)
-              // The enhanceArticleContent might modify titles, so we preserve the original
-              const originalTitle = article.title || 'Untitled';
-              
-              // Generate AI-enhanced content for preview/summary only
-              const enhancedContent = await feedMonitor.enhanceArticleContent(article);
-              
-              const articleObj = {
-                sourceId: sourceId,
-                title: originalTitle, // Use original scraped title, not enhanced title
-                link: article.link,
-                content: enhancedContent.content || article.content || '',
-                preview: enhancedContent.preview || article.description || article.contentSnippet || '',
-                pubDate: article.pubDate || article.isoDate || null,
-                sourceName: name,
-                category: categoryName || 'General',
-                status: 'new'
-              };
-              
-              // Log for debugging
-              console.log(`📄 Adding article: "${articleObj.title}" | Date: ${articleObj.pubDate || 'null'} | Link: ${articleObj.link}`);
-              
-              if (articleObj.title !== 'Untitled' && articleObj.link) {
-                await database.addArticle(articleObj);
-              }
-            }
-          } catch (err) {
-            console.error('Error adding article:', err.message);
-            // Skip duplicates or errors
-          }
-        }
-        
-        console.log(`✅ Added ${Math.min(articles.length, 3)} most recent articles from scraping: ${name}`);
-      } else {
-        // RSS/JSON Feed
-        await feedMonitor.checkFeedLimited({ id: sourceId, url: feedUrl, name, category: categoryName }, 3);
-        console.log(`✅ Added 3 most recent articles from RSS/JSON Feed: ${name}`);
+      articles = await webScraper.scrapeArticles({ id: sourceId, url, name, category: categoryName });
+      
+      // Explicit cleanup: Close browser pages after scraping to free memory
+      // The browser instance itself stays open for reuse, but we ensure pages are closed
+      // This matches the old working version's behavior
+    } catch (scrapeErr) {
+      scrapingError = scrapeErr;
+      console.log(`⚠️ Scraping failed: ${scrapeErr.message}`);
+      
+      // If scraping fails, remove the source we just created
+      try {
+        await database.removeSource(sourceId);
+      } catch (deleteErr) {
+        console.error('Error deleting source after scraping failure:', deleteErr.message);
       }
+    }
+    
+    // Check if scraping worked
+    if (articles.length === 0) {
+      // Provide more helpful error message
+      let errorMsg = 'Unfortunately, we were unable to set up scraping for this source.';
+      let errorDetails = null;
+      
+      if (scrapingError) {
+        const errorMessage = scrapingError.message || scrapingError.toString();
+        
+        // Check for specific error types
+        if (errorMessage.includes('403') || errorMessage.includes('Forbidden')) {
+          errorMsg = 'This website is blocking automated access (403 Forbidden).';
+          errorDetails = 'The site may be using Cloudflare or similar security measures that prevent scraping.';
+        } else if (errorMessage.includes('timeout') || errorMessage.includes('timed out')) {
+          errorMsg = 'Scraping timed out while trying to access the website.';
+          errorDetails = 'The site may be slow or unresponsive. Please try again later.';
+        } else if (errorMessage.includes('memory') || errorMessage.includes('Memory')) {
+          errorMsg = 'Insufficient memory to scrape this source.';
+          errorDetails = 'The server is running low on memory. This may be a temporary issue.';
+        } else if (errorMessage.includes('ECONNREFUSED') || errorMessage.includes('ENOTFOUND')) {
+          errorMsg = 'Could not connect to the website.';
+          errorDetails = 'The URL may be incorrect or the site may be down.';
+        } else if (errorMessage.includes('No articles found')) {
+          errorMsg = 'No articles were found on this page.';
+          errorDetails = 'The scraper could not detect any articles. The page structure may be different than expected.';
+        } else {
+          errorMsg = `Scraping failed: ${errorMessage}`;
+          errorDetails = 'Please check the URL and try again.';
+        }
+      } else {
+        errorMsg = 'No articles were found on this page.';
+        errorDetails = 'The scraper could not detect any articles. The page structure may be different than expected, or the site may require JavaScript rendering.';
+      }
+      
+      return res.status(400).json({ 
+        success: false,
+        error: errorMsg,
+        errorDetails: errorDetails,
+        errorType: scrapingError ? 'scraping_error' : 'no_articles'
+      });
+    }
+    
+    console.log(`✅ Scraping found ${articles.length} articles, proceeding with setup`);
+    
+    // Add the 3 most recent articles from the scraping result
+    try {
+      for (const article of articles.slice(0, 3)) {
+        try {
+          const exists = await database.articleExists(article.link);
+          if (!exists) {
+            const originalTitle = article.title || 'Untitled';
+            
+            await database.addArticle(
+              originalTitle,
+              article.link,
+              article.content || '',
+              article.description || article.contentSnippet || '',
+              article.pubDate || null,
+              sourceId,
+              source.name,
+              categoryName,
+              'new'
+            );
+          }
+        } catch (articleError) {
+          console.error(`Error adding article ${article.link}:`, articleError.message);
+        }
+      }
+    } catch (fetchError) {
+      console.error('Error fetching initial articles:', fetchError.message);
+      // Don't fail the whole operation if we can't fetch articles
+    }
+
+    return res.json({
+      success: true,
+      message: "OK, you're all set!",
+      source: source
+    });
+  } catch (error) {
+    console.error('Error setting up scraping:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to set up scraping' 
+    });
+  }
+});
+
+// Add a new source to monitor (for RSS feeds found in step 1)
+// This endpoint is now only for adding RSS feeds (scraping is handled by /api/sources/setup-scraping)
+app.post('/api/sources', async (req, res) => {
+  try {
+    const { url, name, category, feedUrl } = req.body;
+    
+    if (!url || !name) {
+      return res.status(400).json({ error: 'URL and name are required' });
+    }
+
+    // This endpoint is now only for adding RSS feeds
+    // feedUrl should be provided from the check-feed endpoint
+    const finalFeedUrl = feedUrl || url;
+    
+    // Validate the feed one more time
+    const isValid = await feedMonitor.validateFeed(finalFeedUrl);
+    if (!isValid) {
+      return res.status(400).json({ 
+        error: 'Invalid RSS feed. Please check the URL and try again.' 
+      });
+    }
+
+    // Add category if provided
+    let categoryName = null;
+    if (category && category.trim()) {
+      const categoryRecord = await database.addCategory(category.trim());
+      categoryName = categoryRecord.name;
+    }
+
+    // Add RSS feed source
+    const source = await database.addSource(name, finalFeedUrl, categoryName, 'RSS');
+    const sourceId = source.id;
+    
+    // Fetch 3 most recent articles from the new RSS feed
+    try {
+      await feedMonitor.checkFeedLimited({ id: sourceId, url: finalFeedUrl, name, category: categoryName }, 3);
+      console.log(`✅ Added 3 most recent articles from RSS/JSON Feed: ${name}`);
     } catch (error) {
       console.log('Could not fetch recent articles for new source:', error.message);
     }
     
     res.json({ 
+      success: true,
       id: sourceId, 
-      message: 'Source added successfully',
-      monitoring_type: monitoringType
+      message: "OK, you're all set!",
+      source: source
     });
   } catch (error) {
     console.error('Error adding source:', error);

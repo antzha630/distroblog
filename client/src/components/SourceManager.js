@@ -15,6 +15,10 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
   const [detectedFeeds, setDetectedFeeds] = useState([]);
   const [isDetecting, setIsDetecting] = useState(false);
   const [showDetectedFeeds, setShowDetectedFeeds] = useState(false);
+  // Multi-step workflow state
+  const [feedCheckResult, setFeedCheckResult] = useState(null);
+  const [isCheckingFeed, setIsCheckingFeed] = useState(false);
+  const [isSettingUpScraping, setIsSettingUpScraping] = useState(false);
   const [showRemoveConfirm, setShowRemoveConfirm] = useState(null);
   const [isRemoving, setIsRemoving] = useState(false);
   const [categories, setCategories] = useState([]);
@@ -137,29 +141,67 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
     }
   };
 
-  const handleAddSource = async (e) => {
+  // Step 1: Check for RSS feed
+  const handleCheckFeed = async (e) => {
     e.preventDefault();
+    setIsCheckingFeed(true);
+    setValidationError('');
+    setFeedCheckResult(null);
+
+    try {
+      const response = await axios.post('/api/sources/check-feed', {
+        url: newSource.url.trim()
+      });
+
+      setFeedCheckResult(response.data);
+
+      if (response.data.hasFeed) {
+        // RSS feed found - add it directly
+        await handleAddRSSSource(response.data.feedUrl);
+      }
+      // If no feed found, show the scraping option (handled in UI)
+    } catch (error) {
+      console.error('Error checking feed:', error);
+      // If check-feed fails, assume no feed and show scraping option
+      setFeedCheckResult({
+        success: true,
+        hasFeed: false,
+        message: "We did not find an RSS feed for this source. Would you like us to proceed with setting up a scraping for this source?"
+      });
+    } finally {
+      setIsCheckingFeed(false);
+    }
+  };
+
+  // Add RSS source (when feed is found)
+  const handleAddRSSSource = async (feedUrl) => {
     setIsValidating(true);
     setValidationError('');
 
     try {
-      await axios.post('/api/sources', newSource);
-      
+      const response = await axios.post('/api/sources', {
+        url: newSource.url.trim(),
+        name: newSource.name.trim(),
+        category: newSource.category.trim() || '',
+        feedUrl: feedUrl
+      });
+
+      // Show success message
+      alert(response.data.message || "OK, you're all set!");
+
       // Refresh sources list and categories
       await fetchSources();
       await fetchCategories();
-      
-      // Notify parent component that source was added
+
+      // Notify parent component
       if (onSourceAdded) {
         onSourceAdded();
       }
-      
+
       // Reset form
       setNewSource({ url: '', name: '', category: '' });
       setShowAddForm(false);
-      setDetectedFeeds([]);
-      setShowDetectedFeeds(false);
-      
+      setFeedCheckResult(null);
     } catch (error) {
       setValidationError(
         error.response?.data?.error || 'Failed to add source'
@@ -167,6 +209,57 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
     } finally {
       setIsValidating(false);
     }
+  };
+
+  // Step 2: Set up scraping (when user confirms)
+  const handleSetupScraping = async () => {
+    setIsSettingUpScraping(true);
+    setValidationError('');
+
+    try {
+      const response = await axios.post('/api/sources/setup-scraping', {
+        url: newSource.url.trim(),
+        name: newSource.name.trim(),
+        category: newSource.category.trim() || ''
+      });
+
+      // Show success message
+      alert(response.data.message || "OK, you're all set!");
+
+      // Refresh sources list and categories
+      await fetchSources();
+      await fetchCategories();
+
+      // Notify parent component
+      if (onSourceAdded) {
+        onSourceAdded();
+      }
+
+      // Reset form
+      setNewSource({ url: '', name: '', category: '' });
+      setShowAddForm(false);
+      setFeedCheckResult(null);
+    } catch (error) {
+      const errorData = error.response?.data || {};
+      const errorMsg = errorData.error || 'Failed to set up scraping';
+      const errorDetails = errorData.errorDetails || null;
+      
+      // Show detailed error message
+      const fullErrorMsg = errorDetails 
+        ? `${errorMsg}\n\n${errorDetails}`
+        : errorMsg;
+      
+      setValidationError(fullErrorMsg);
+      alert(fullErrorMsg);
+    } finally {
+      setIsSettingUpScraping(false);
+    }
+  };
+
+  // Cancel scraping setup
+  const handleCancelScraping = () => {
+    setFeedCheckResult(null);
+    setValidationError('');
   };
 
   const handleRemoveSource = async (sourceId, sourceName) => {
@@ -328,16 +421,19 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
             border: '1px solid #e9ecef'
           }}>
             <h3 style={{ marginTop: 0 }}>Add Source</h3>
-            <form onSubmit={handleAddSource}>
+            <form onSubmit={handleCheckFeed}>
               <div className="form-group">
-                <label className="form-label">Website *</label>
+                <label className="form-label">Website URL *</label>
+                <div style={{ fontSize: '0.85rem', color: '#666', marginBottom: '8px' }}>
+                  💡 Tip: Enter the blog URL (e.g., https://example.com/blog) for better results
+                </div>
                 <div style={{ display: 'flex', gap: '8px' }}>
                   <input
                     type="url"
                     className="form-input"
                     value={newSource.url}
                     onChange={(e) => setNewSource({ ...newSource, url: e.target.value })}
-                    placeholder="https://example.com"
+                    placeholder="https://example.com/blog"
                     required
                     style={{ flex: 1 }}
                   />
@@ -517,19 +613,64 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
                 </div>
               )}
 
+              {/* Show scraping option if no RSS feed found */}
+              {feedCheckResult && !feedCheckResult.hasFeed && (
+                <div style={{ 
+                  padding: '16px', 
+                  background: '#fff3cd', 
+                  border: '1px solid #ffc107',
+                  borderRadius: '4px', 
+                  marginBottom: '16px'
+                }}>
+                  <div style={{ marginBottom: '12px', fontWeight: '500' }}>
+                    {feedCheckResult.message}
+                  </div>
+                  <div style={{ display: 'flex', gap: '12px' }}>
+                    <button 
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={handleSetupScraping}
+                      disabled={isSettingUpScraping}
+                    >
+                      {isSettingUpScraping ? (
+                        <>
+                          <div className="spinner"></div>
+                          Setting up scraping...
+                        </>
+                      ) : (
+                        'Yes, proceed with scraping'
+                      )}
+                    </button>
+                    <button 
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={handleCancelScraping}
+                      disabled={isSettingUpScraping}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div style={{ display: 'flex', gap: '12px' }}>
                 <button 
                   type="submit" 
                   className="btn btn-primary"
-                  disabled={isValidating || !newSource.url || !newSource.name}
+                  disabled={isCheckingFeed || isValidating || !newSource.url || !newSource.name}
                 >
-                  {isValidating ? (
+                  {isCheckingFeed ? (
                     <>
                       <div className="spinner"></div>
-                      Validating Feed...
+                      Checking for RSS feed...
+                    </>
+                  ) : isValidating ? (
+                    <>
+                      <div className="spinner"></div>
+                      Adding source...
                     </>
                   ) : (
-                    'Add Source'
+                    'Check for RSS Feed'
                   )}
                 </button>
                 <button 
@@ -538,6 +679,7 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
                   onClick={() => {
                     setShowAddForm(false);
                     setValidationError('');
+                    setFeedCheckResult(null);
                   }}
                 >
                   Cancel
