@@ -510,38 +510,58 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
                 </div>
               )}
 
-              <div style={{ display: 'flex', gap: '12px' }}>
-                <button 
-                  type="submit" 
-                  className="btn btn-primary"
-                  disabled={isCheckingFeed || isValidating || !newSource.url || !newSource.name}
-                >
-                  {isCheckingFeed ? (
-                    <>
-                      <div className="spinner"></div>
-                      Checking for RSS feed...
-                    </>
-                  ) : isValidating ? (
-                    <>
-                      <div className="spinner"></div>
-                      Adding source...
-                    </>
-                  ) : (
-                    'Check for RSS Feed'
-                  )}
-                </button>
-                <button 
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => {
-                    setShowAddForm(false);
-                    setValidationError('');
-                    setFeedCheckResult(null);
-                  }}
-                >
-                  Cancel
-                </button>
-              </div>
+              {/* Only show "Check for RSS Feed" button if we haven't checked yet */}
+              {!feedCheckResult && (
+                <div style={{ display: 'flex', gap: '12px' }}>
+                  <button 
+                    type="submit" 
+                    className="btn btn-primary"
+                    disabled={isCheckingFeed || isValidating || !newSource.url || !newSource.name}
+                  >
+                    {isCheckingFeed ? (
+                      <>
+                        <div className="spinner"></div>
+                        Checking for RSS feed...
+                      </>
+                    ) : isValidating ? (
+                      <>
+                        <div className="spinner"></div>
+                        Adding source...
+                      </>
+                    ) : (
+                      'Check for RSS Feed'
+                    )}
+                  </button>
+                  <button 
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      setShowAddForm(false);
+                      setValidationError('');
+                      setFeedCheckResult(null);
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
+              
+              {/* Show Cancel button when feed check is complete (for RSS feeds found or scraping option shown) */}
+              {feedCheckResult && feedCheckResult.hasFeed && (
+                <div style={{ display: 'flex', gap: '12px' }}>
+                  <button 
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      setShowAddForm(false);
+                      setValidationError('');
+                      setFeedCheckResult(null);
+                    }}
+                  >
+                    Close
+                  </button>
+                </div>
+              )}
             </form>
           </div>
         )}
