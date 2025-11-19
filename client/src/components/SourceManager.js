@@ -12,9 +12,6 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
   });
   const [isValidating, setIsValidating] = useState(false);
   const [validationError, setValidationError] = useState('');
-  const [detectedFeeds, setDetectedFeeds] = useState([]);
-  const [isDetecting, setIsDetecting] = useState(false);
-  const [showDetectedFeeds, setShowDetectedFeeds] = useState(false);
   // Multi-step workflow state
   const [feedCheckResult, setFeedCheckResult] = useState(null);
   const [isCheckingFeed, setIsCheckingFeed] = useState(false);
@@ -58,47 +55,6 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
     }
   };
 
-  const handleDetectFeeds = async () => {
-    if (!newSource.url.trim()) {
-      setValidationError('Please enter a website URL first');
-      return;
-    }
-
-    setIsDetecting(true);
-    setValidationError('');
-    setDetectedFeeds([]);
-
-    try {
-      const response = await axios.post('/api/sources/detect', {
-        url: newSource.url.trim()
-      });
-
-      // Only show feeds that the server marked as valid
-      const validFeeds = (response.data.feeds || []).filter(f => f.status === 'valid');
-      setDetectedFeeds(validFeeds);
-      setShowDetectedFeeds(true);
-
-      if (validFeeds.length === 0) {
-        setValidationError('No valid RSS feeds found. Try entering the direct RSS URL.');
-      }
-    } catch (error) {
-      setValidationError(
-        error.response?.data?.error || 'Failed to detect RSS feeds'
-      );
-    } finally {
-      setIsDetecting(false);
-    }
-  };
-
-  const handleSelectDetectedFeed = (feed) => {
-    setNewSource({
-      ...newSource,
-      url: feed.url,
-      name: newSource.name || feed.title
-    });
-    setShowDetectedFeeds(false);
-    setDetectedFeeds([]);
-  };
 
   const handleCategoryChange = (e) => {
     const value = e.target.value;
@@ -427,118 +383,19 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
                 <div style={{ fontSize: '0.85rem', color: '#666', marginBottom: '8px' }}>
                   💡 Tip: Enter the blog URL (e.g., https://example.com/blog) for better results
                 </div>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <input
-                    type="url"
-                    className="form-input"
-                    value={newSource.url}
-                    onChange={(e) => setNewSource({ ...newSource, url: e.target.value })}
-                    placeholder="https://example.com/blog"
-                    required
-                    style={{ flex: 1 }}
-                  />
-                  <button
-                    type="button"
-                    onClick={handleDetectFeeds}
-                    disabled={isDetecting || !newSource.url.trim()}
-                    style={{
-                      padding: '10px 16px',
-                      background: '#17a2b8',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                      fontSize: '0.9rem',
-                      whiteSpace: 'nowrap'
-                    }}
-                  >
-                    {isDetecting ? (
-                      <>
-                        <div className="spinner" style={{ width: '12px', height: '12px', marginRight: '4px' }}></div>
-                        Detecting...
-                      </>
-                    ) : (
-                      '🔍 Find Feeds'
-                    )}
-                  </button>
-                </div>
+                <input
+                  type="url"
+                  className="form-input"
+                  value={newSource.url}
+                  onChange={(e) => setNewSource({ ...newSource, url: e.target.value })}
+                  placeholder="https://example.com/blog"
+                  required
+                />
                 <div style={{ fontSize: '0.8rem', color: '#6c757d', marginTop: '4px' }}>
-                  Enter a website URL (like https://techcrunch.com) and we'll find RSS feeds for you.
+                  Enter a website URL and click "Check for RSS Feed" below to see if it has an RSS feed or needs scraping.
                 </div>
               </div>
 
-              {showDetectedFeeds && detectedFeeds.length > 0 && (
-                <div style={{ 
-                  marginBottom: '20px',
-                  padding: '16px',
-                  background: '#e3f2fd',
-                  borderRadius: '4px',
-                  border: '1px solid #bbdefb'
-                }}>
-                  <h4 style={{ margin: '0 0 12px 0', color: '#1976d2' }}>
-                    Found {detectedFeeds.length} RSS Feed{detectedFeeds.length > 1 ? 's' : ''}:
-                  </h4>
-                  {detectedFeeds.map((feed, index) => (
-                    <div 
-                      key={index}
-                      style={{
-                        padding: '12px',
-                        background: 'white',
-                        borderRadius: '4px',
-                        marginBottom: '8px',
-                        cursor: 'pointer',
-                        border: index === 0 ? '2px solid #4caf50' : '1px solid #e0e0e0',
-                        borderLeft: index === 0 ? '4px solid #4caf50' : '1px solid #e0e0e0',
-                        transition: 'all 0.2s',
-                        position: 'relative'
-                      }}
-                      onClick={() => handleSelectDetectedFeed(feed)}
-                      onMouseEnter={(e) => {
-                        if (index !== 0) e.target.style.borderColor = '#1976d2';
-                      }}
-                      onMouseLeave={(e) => {
-                        if (index !== 0) e.target.style.borderColor = '#e0e0e0';
-                      }}
-                    >
-                      {index === 0 && (
-                        <div style={{
-                          position: 'absolute',
-                          top: '-1px',
-                          right: '8px',
-                          background: '#4caf50',
-                          color: 'white',
-                          padding: '2px 8px',
-                          borderRadius: '0 0 4px 4px',
-                          fontSize: '0.7rem',
-                          fontWeight: 'bold'
-                        }}>
-                          RECOMMENDED
-                        </div>
-                      )}
-                      <div style={{ 
-                        fontWeight: '500', 
-                        marginBottom: '4px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '8px'
-                      }}>
-                        {feed.title}
-                        {index === 0 && <span style={{ color: '#4caf50', fontSize: '1.2rem' }}>⭐</span>}
-                      </div>
-                      <div style={{ fontSize: '0.8rem', color: '#666', marginBottom: '4px' }}>
-                        {feed.url}
-                      </div>
-                      <div style={{ fontSize: '0.75rem', color: '#999' }}>
-                        {feed.itemCount} articles • {feed.type === 'html_link' ? 'Found in HTML' : 'Common pattern'}
-                        {index === 0 && <span style={{ color: '#4caf50', marginLeft: '8px' }}>• Best choice</span>}
-                      </div>
-                    </div>
-                  ))}
-                  <div style={{ fontSize: '0.8rem', color: '#666', marginTop: '8px' }}>
-                    💡 Click on a feed above to select it
-                  </div>
-                </div>
-              )}
 
               <div className="form-group">
                 <label className="form-label">Source Name *</label>
