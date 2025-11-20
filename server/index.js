@@ -989,25 +989,24 @@ app.get('/api/articles/all', async (req, res) => {
 
 // Re-scrape a source and update existing articles with improved titles/dates
 app.post('/api/sources/:id/re-scrape', async (req, res) => {
+  const { id } = req.params;
+  const source = await database.getSourceById(parseInt(id));
+  
+  if (!source) {
+    return res.status(404).json({ error: 'Source not found' });
+  }
+  
+  if (source.monitoring_type !== 'SCRAPING') {
+    return res.status(400).json({ error: 'Re-scraping is only available for scraping sources' });
+  }
+  
+  console.log(`🔄 Re-scraping source: ${source.name} (${source.url})`);
+  
+  // Set lock to prevent automatic feed monitoring from running during re-scrape
+  feedMonitor.isScrapingInProgress = true;
+  console.log('🔒 Pausing automatic feed monitoring during re-scrape');
+  
   try {
-    const { id } = req.params;
-    const source = await database.getSourceById(parseInt(id));
-    
-    if (!source) {
-      return res.status(404).json({ error: 'Source not found' });
-    }
-    
-    if (source.monitoring_type !== 'SCRAPING') {
-      return res.status(400).json({ error: 'Re-scraping is only available for scraping sources' });
-    }
-    
-    console.log(`🔄 Re-scraping source: ${source.name} (${source.url})`);
-    
-    // Set lock to prevent automatic feed monitoring from running during re-scrape
-    feedMonitor.isScrapingInProgress = true;
-    console.log('🔒 Pausing automatic feed monitoring during re-scrape');
-    
-    try {
       // Scrape articles with improved logic
       const WebScraper = require('./services/webScraper');
       const webScraper = new WebScraper();
