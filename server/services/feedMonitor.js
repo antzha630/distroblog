@@ -867,25 +867,58 @@ class FeedMonitor {
       
       const $ = cheerio.load(resp.data);
 
-      // Extract title
-      let title = $('title').text() || $('h1').first().text() || 'Untitled';
-      title = title.replace(/\s+/g, ' ').trim();
+      // Extract title - prioritize article-specific selectors
+      // Strategy 1: Look for article-specific h1 (not page-level)
+      let title = null;
       
-      // Clean up title: Remove site name suffixes (e.g., "| Olas", "- Olas Network")
-      // Common patterns: "Title | Site", "Title - Site", "Title | Site Name"
-      title = title.replace(/\s*[|\-–—]\s*(Olas|Olas Network|Blog|News).*$/i, '').trim();
-      
-      // Also try to get title from h1 if page title includes site name
-      const h1Title = $('h1').first().text().trim();
-      if (h1Title && h1Title.length > 10 && 
-          !h1Title.toLowerCase().includes('blog') &&
-          !h1Title.toLowerCase().includes('all posts') &&
-          h1Title.length < 200) {
-        // Prefer h1 if it's a valid article title and page title has site name
-        if (title.includes('|') || title.includes('-')) {
-          title = h1Title;
+      // Try article-specific containers first
+      const articleContainers = $('article, [class*="article"], [class*="post-content"], [class*="entry-content"], main article, .post, .blog-post');
+      if (articleContainers.length > 0) {
+        const articleH1 = articleContainers.find('h1').first();
+        if (articleH1.length && articleH1.text().trim().length > 10) {
+          title = articleH1.text().trim();
         }
       }
+      
+      // Strategy 2: Look for main h1 (but filter out generic ones)
+      if (!title) {
+        const allH1s = $('h1');
+        for (let i = 0; i < allH1s.length; i++) {
+          const h1Text = $(allH1s[i]).text().trim();
+          // Skip generic titles
+          if (h1Text.length > 10 && 
+              h1Text.length < 200 &&
+              !h1Text.toLowerCase().includes('blog') &&
+              !h1Text.toLowerCase().includes('all posts') &&
+              !h1Text.toLowerCase().includes('latest') &&
+              !h1Text.toLowerCase().includes('category') &&
+              !h1Text.toLowerCase().includes('tag') &&
+              !h1Text.match(/^(home|about|contact|careers|company|solutions|marketplace)$/i)) {
+            title = h1Text;
+            break;
+          }
+        }
+      }
+      
+      // Strategy 3: Use page title but clean it up
+      if (!title) {
+        title = $('title').text() || 'Untitled';
+        title = title.replace(/\s+/g, ' ').trim();
+        
+        // Remove site name suffixes (e.g., "| Exabits", "- Sapien", "| io.net")
+        // Common patterns: "Title | Site", "Title - Site", "Title | Site Name"
+        title = title.replace(/\s*[|\-–—]\s*([^|–—]+)$/i, '').trim();
+        
+        // If title still contains site name patterns, try to extract just the article part
+        const titleParts = title.split(/[|\-–—]/);
+        if (titleParts.length > 1) {
+          // Use the first part (usually the article title)
+          title = titleParts[0].trim();
+        }
+      }
+      
+      // Final cleanup
+      title = title.replace(/\s+/g, ' ').trim();
 
       // Extract source name from URL domain
       const urlObj = new URL(url);
@@ -942,14 +975,16 @@ class FeedMonitor {
           // Continue to pattern matching
         }
         
-        // Try pattern matching for formats like "06-Nov-25"
+        // Try pattern matching for various date formats
         const datePatterns = [
+          // Full month name: "November 12, 2025" or "November 12 2025"
+          /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b/i,
+          // Short month name: "Nov 12, 2025" or "Nov 12 2025"
+          /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2}),?\s+(\d{4})\b/i,
           // DD-MMM-YY format (e.g., "06-Nov-25")
           /\b(\d{1,2})[-/](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[-/](\d{2,4})\b/i,
           // DD-MM-YY or DD/MM/YYYY
           /\b(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})\b/,
-          // Full month name
-          /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b/i,
           // YYYY-MM-DD
           /\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b/
         ];
@@ -958,17 +993,34 @@ class FeedMonitor {
           const match = dateStr.match(pattern);
           if (match) {
             try {
-              let dateStrFormatted = match[0];
+              let parsed;
               
-              // Handle DD-MMM-YY format specifically
-              if (match[2] && /[A-Za-z]{3}/.test(match[2])) {
+              // Handle full month name: "November 12, 2025"
+              if (match[1] && /^(January|February|March|April|May|June|July|August|September|October|November|December)$/i.test(match[1])) {
+                const month = match[1];
+                const day = match[2];
+                const year = match[3];
+                parsed = new Date(`${month} ${day}, ${year}`);
+              }
+              // Handle short month name: "Nov 12, 2025"
+              else if (match[1] && /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i.test(match[1])) {
+                const month = match[1];
+                const day = match[2];
+                const year = match[3];
+                parsed = new Date(`${month} ${day}, ${year}`);
+              }
+              // Handle DD-MMM-YY format
+              else if (match[2] && /[A-Za-z]{3}/.test(match[2])) {
                 const day = match[1];
                 const month = match[2];
                 const year = match[3].length === 2 ? `20${match[3]}` : match[3];
-                dateStrFormatted = `${day}-${month}-${year}`;
+                parsed = new Date(`${day}-${month}-${year}`);
+              }
+              // Handle numeric formats
+              else {
+                parsed = new Date(match[0]);
               }
               
-              const parsed = new Date(dateStrFormatted);
               if (!isNaN(parsed.getTime())) {
                 const now = new Date();
                 const yearDiff = parsed.getFullYear() - now.getFullYear();
@@ -1060,6 +1112,31 @@ class FeedMonitor {
           if (dateValue) {
             pubDate = parseDate(dateValue);
             if (pubDate) break;
+          }
+        }
+      }
+      
+      // If still no date, look for date patterns in article content
+      // Common patterns: "November 12, 2025", "Nov 12, 2025", "12 November 2025"
+      if (!pubDate) {
+        const articleContent = $('article, [class*="article"], [class*="post-content"], main').first().text() || $('body').text();
+        const datePatterns = [
+          // "November 12, 2025" or "Nov 12, 2025"
+          /\b(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2}),?\s+(\d{4})\b/i,
+          // "12 November 2025"
+          /\b(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})\b/i,
+        ];
+        
+        for (const pattern of datePatterns) {
+          const match = articleContent.match(pattern);
+          if (match) {
+            try {
+              const dateStr = match[0];
+              pubDate = parseDate(dateStr);
+              if (pubDate) break;
+            } catch (e) {
+              // Continue
+            }
           }
         }
       }

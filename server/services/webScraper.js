@@ -202,9 +202,10 @@ class WebScraper {
           // Extract publication date from article page (more comprehensive than list page)
           let pubDate = article.datePublished ? new Date(article.datePublished) : null;
           
-          // ALWAYS try to extract metadata from article page for first 3 articles
+          // Try to extract metadata from article page for ALL articles (but limit concurrent requests)
           // This is critical because the listing page titles/dates might be wrong
-          if (i < 3) {
+          // Process in batches to avoid memory issues
+          const shouldFetchPage = i < 10; // Fetch first 10 articles for better titles/dates
             try {
               console.log(`🔍 Fetching article page for better title/date: ${articleUrl.substring(0, 60)}...`);
               const metadata = await feedMonitor.extractArticleMetadata(articleUrl);
@@ -212,15 +213,20 @@ class WebScraper {
               // ALWAYS use article page title if available (it's more reliable)
               if (metadata.title && metadata.title.trim().length > 10) {
                 const newTitle = metadata.title.trim();
-                // Only use if it's different and not generic
-                if (newTitle !== article.title && 
-                    !newTitle.toLowerCase().includes('blog') &&
-                    !newTitle.toLowerCase().includes('all posts') &&
-                    !newTitle.toLowerCase().includes('olas network')) {
+                // Filter out generic/site-wide titles
+                const isGeneric = newTitle.toLowerCase().includes('blog') ||
+                                 newTitle.toLowerCase().includes('all posts') ||
+                                 newTitle.toLowerCase().includes('latest by topic') ||
+                                 newTitle.toLowerCase().includes('mothership') ||
+                                 newTitle.toLowerCase().includes('backbone of ai infrastructure') ||
+                                 newTitle.toLowerCase().match(/^(home|about|contact|careers|company|solutions|marketplace)$/i);
+                
+                // Always prefer article page title if it's not generic
+                if (!isGeneric) {
                   article.title = newTitle;
                   console.log(`📝 Updated title from article page: "${article.title}"`);
-                } else if (newTitle.length > article.title.length) {
-                  // Use if it's longer (more complete)
+                } else if (newTitle.length > article.title.length && !article.title.toLowerCase().includes('latest by topic')) {
+                  // Use if it's longer and current title is also generic
                   article.title = newTitle;
                   console.log(`📝 Using longer title from article page: "${article.title}"`);
                 }
@@ -669,6 +675,38 @@ class WebScraper {
                                  href.endsWith('/posts') ||
                                  href.endsWith('/posts/'));
           if (isListingPage) {
+            return;
+          }
+          
+          // Skip non-article pages (homepage, contact, about, etc.)
+          // Only skip if URL matches pattern AND doesn't have article path
+          try {
+            const urlObj = new URL(href, window.location.href);
+            const pathname = urlObj.pathname.toLowerCase();
+            
+            // Check if it's a non-article page (but allow if it has /blog/, /post/, etc. in path)
+            const isNonArticlePath = (pathname === '/' || 
+                                     pathname === '/contact' ||
+                                     pathname === '/about' ||
+                                     pathname === '/careers' ||
+                                     pathname === '/company' ||
+                                     pathname === '/solutions' ||
+                                     pathname === '/marketplace' ||
+                                     pathname.startsWith('/press') ||
+                                     pathname.startsWith('/privacy') ||
+                                     pathname.startsWith('/terms') ||
+                                     pathname.startsWith('/cookie') ||
+                                     pathname.startsWith('/brand') ||
+                                     pathname.startsWith('/litepaper') ||
+                                     pathname.startsWith('/faq') ||
+                                     pathname.startsWith('/products')) &&
+                                    !pathname.match(/\/(blog|post|article|articles|news)\//i);
+            
+            if (isNonArticlePath) {
+              return;
+            }
+          } catch (e) {
+            // Invalid URL, skip
             return;
           }
           
