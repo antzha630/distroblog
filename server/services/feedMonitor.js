@@ -13,6 +13,7 @@ class FeedMonitor {
     this.monitoringInterval = null;
     this.feedDiscovery = new FeedDiscovery();
     this.webScraper = new WebScraper();
+    this.isScrapingInProgress = false; // Lock to prevent concurrent scraping
   }
 
   // Detect RSS feeds from a website URL using robust discovery
@@ -216,6 +217,12 @@ class FeedMonitor {
   async checkAllFeeds() {
     if (!this.isMonitoring) {
       console.log('Feed monitoring is stopped, skipping check');
+      return [];
+    }
+    
+    // Skip if scraping is in progress (re-scrape or other scraping operations)
+    if (this.isScrapingInProgress) {
+      console.log('⏸️  Feed monitoring paused: scraping operation in progress');
       return [];
     }
 
