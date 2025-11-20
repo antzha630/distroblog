@@ -259,14 +259,36 @@ class FeedMonitor {
                 const exists = await database.articleExists(article.link);
                 if (!exists) {
                   // Use original scraped title (don't let AI modify it)
-                  const originalTitle = article.title || 'Untitled';
+                  // Ensure title is never null or empty
+                  let originalTitle = article.title;
+                  if (!originalTitle || typeof originalTitle !== 'string' || originalTitle.trim() === '') {
+                    // Try to extract title from URL or use a default
+                    try {
+                      const urlObj = new URL(article.link);
+                      originalTitle = urlObj.pathname.split('/').filter(p => p).pop() || 'Untitled Article';
+                      // Clean up the title (remove extensions, decode, etc.)
+                      originalTitle = decodeURIComponent(originalTitle)
+                        .replace(/\.(html|htm|php|aspx)$/i, '')
+                        .replace(/[-_]/g, ' ')
+                        .trim();
+                      if (originalTitle === '') originalTitle = 'Untitled Article';
+                    } catch (e) {
+                      originalTitle = 'Untitled Article';
+                    }
+                  }
+                  
+                  // Ensure link is valid
+                  if (!article.link || typeof article.link !== 'string') {
+                    console.error(`Skipping article with invalid link from ${source.name}`);
+                    continue;
+                  }
                   
                   // Generate AI-enhanced content for preview/summary only
                   const enhancedContent = await this.enhanceArticleContent(article);
                   
                   const articleObj = {
                     sourceId: source.id,
-                    title: originalTitle, // Use original scraped title
+                    title: originalTitle.trim(), // Use original scraped title, ensure it's not empty
                     link: article.link,
                     content: enhancedContent.content || article.content || '',
                     preview: enhancedContent.preview || article.description || article.contentSnippet || '',
@@ -276,7 +298,7 @@ class FeedMonitor {
                     status: 'new'
                   };
                   
-                  if (articleObj.title !== 'Untitled' && articleObj.link) {
+                  if (articleObj.title && articleObj.title.trim() !== '' && articleObj.link) {
                     await database.addArticle(articleObj);
                     newArticles.push({
                       id: articleObj.sourceId,

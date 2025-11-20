@@ -308,6 +308,14 @@ class Database {
     return result.rows;
   }
 
+  async getSourceByUrl(url) {
+    const result = await this.queryWithRetry(
+      'SELECT * FROM sources WHERE url = $1',
+      [url]
+    );
+    return result.rows[0] || null;
+  }
+
   async addSource(name, url, category = null, monitoringType = 'RSS') {
     const result = await this.queryWithRetry(
       'INSERT INTO sources (name, url, category, monitoring_type) VALUES ($1, $2, $3, $4) RETURNING *',
