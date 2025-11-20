@@ -258,15 +258,20 @@ class FeedMonitor {
               try {
                 const exists = await database.articleExists(article.link);
                 if (!exists) {
-                  // Use original scraped title (don't let AI modify it)
-                  const originalTitle = article.title || 'Untitled';
+                  // Ensure title is never null or empty (simple check)
+                  const originalTitle = (article.title && article.title.trim()) ? article.title.trim() : 'Untitled Article';
+                  
+                  // Skip if link is invalid
+                  if (!article.link || typeof article.link !== 'string') {
+                    continue;
+                  }
                   
                   // Generate AI-enhanced content for preview/summary only
                   const enhancedContent = await this.enhanceArticleContent(article);
                   
                   const articleObj = {
                     sourceId: source.id,
-                    title: originalTitle, // Use original scraped title
+                    title: originalTitle, // Use original scraped title, guaranteed not null/empty
                     link: article.link,
                     content: enhancedContent.content || article.content || '',
                     preview: enhancedContent.preview || article.description || article.contentSnippet || '',
@@ -276,7 +281,7 @@ class FeedMonitor {
                     status: 'new'
                   };
                   
-                  if (articleObj.title !== 'Untitled' && articleObj.link) {
+                  if (articleObj.title && articleObj.title.trim() !== '' && articleObj.link) {
                     await database.addArticle(articleObj);
                     newArticles.push({
                       id: articleObj.sourceId,

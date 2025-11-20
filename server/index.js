@@ -202,8 +202,23 @@ app.post('/api/sources/setup-scraping', async (req, res) => {
     }
 
     // Add source with SCRAPING monitoring type first
-    const source = await database.addSource(name, url, categoryName, 'SCRAPING');
-    const sourceId = source.id;
+    let source;
+    let sourceId;
+    try {
+      source = await database.addSource(name, url, categoryName, 'SCRAPING');
+      sourceId = source.id;
+    } catch (dbError) {
+      // Handle duplicate key error gracefully (no extra query needed)
+      if (dbError.code === '23505' || dbError.message.includes('duplicate key')) {
+        return res.status(400).json({ 
+          success: false,
+          error: 'This source already exists.',
+          errorDetails: `A source with URL "${url}" is already being monitored.`,
+          errorType: 'duplicate_source'
+        });
+      }
+      throw dbError; // Re-throw if it's a different error
+    }
     
     // Scrape articles ONCE (test and fetch in one go, like old workflow)
     // This avoids double browser usage that could cause memory issues
@@ -277,7 +292,13 @@ app.post('/api/sources/setup-scraping', async (req, res) => {
         try {
           const exists = await database.articleExists(article.link);
           if (!exists) {
-            const originalTitle = article.title || 'Untitled';
+            // Ensure title is never null or empty (simple check, no heavy processing)
+            const originalTitle = (article.title && article.title.trim()) ? article.title.trim() : 'Untitled Article';
+            
+            // Skip if link is invalid
+            if (!article.link || typeof article.link !== 'string') {
+              continue;
+            }
             
             await database.addArticle(
               originalTitle,
@@ -307,6 +328,17 @@ app.post('/api/sources/setup-scraping', async (req, res) => {
     });
   } catch (error) {
     console.error('Error setting up scraping:', error);
+    
+    // Handle duplicate source error
+    if (error.code === '23505' || error.message.includes('duplicate key')) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'This source already exists.',
+        errorDetails: `A source with this URL is already being monitored.`,
+        errorType: 'duplicate_source'
+      });
+    }
+    
     res.status(500).json({ 
       success: false,
       error: 'Failed to set up scraping' 
@@ -344,8 +376,23 @@ app.post('/api/sources', async (req, res) => {
     }
 
     // Add RSS feed source
-    const source = await database.addSource(name, finalFeedUrl, categoryName, 'RSS');
-    const sourceId = source.id;
+    let source;
+    let sourceId;
+    try {
+      source = await database.addSource(name, finalFeedUrl, categoryName, 'RSS');
+      sourceId = source.id;
+    } catch (dbError) {
+      // Handle duplicate key error gracefully
+      if (dbError.code === '23505' || dbError.message.includes('duplicate key')) {
+        return res.status(400).json({ 
+          success: false,
+          error: 'This source already exists.',
+          errorDetails: `A source with URL "${finalFeedUrl}" is already being monitored.`,
+          errorType: 'duplicate_source'
+        });
+      }
+      throw dbError;
+    }
     
     // Fetch 3 most recent articles from the new RSS feed
     try {
