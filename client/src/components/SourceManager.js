@@ -222,7 +222,7 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
   };
 
   const handleReScrapeSource = async (sourceId, sourceName) => {
-    if (!confirm(`Re-scrape "${sourceName}"? This will update existing articles with improved titles and dates. This may take a minute.`)) {
+    if (!window.confirm(`Re-scrape "${sourceName}"? This will update existing articles with improved titles and dates. This may take a minute.`)) {
       return;
     }
     
