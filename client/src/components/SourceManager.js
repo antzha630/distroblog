@@ -18,6 +18,7 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
   const [isSettingUpScraping, setIsSettingUpScraping] = useState(false);
   const [showRemoveConfirm, setShowRemoveConfirm] = useState(null);
   const [isRemoving, setIsRemoving] = useState(false);
+  const [reScrapingSource, setReScrapingSource] = useState(null);
   const [categories, setCategories] = useState([]);
   const [showCategorySuggestions, setShowCategorySuggestions] = useState(false);
   const [editingCategory, setEditingCategory] = useState(null);
@@ -725,6 +726,36 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
                       {source.monitoring_type === 'SCRAPING' ? '🌐 Scraping' : '📡 RSS Feed'}
                     </div>
                     <div style={{ display: 'flex', gap: '8px', flexDirection: 'column' }}>
+                      {source.monitoring_type === 'SCRAPING' && (
+                        <button
+                          onClick={() => handleReScrapeSource(source.id, source.name)}
+                          disabled={reScrapingSource === source.id}
+                          style={{
+                            background: reScrapingSource === source.id ? '#6c757d' : '#17a2b8',
+                            color: 'white',
+                            border: 'none',
+                            padding: '6px 12px',
+                            borderRadius: '4px',
+                            fontSize: '0.8rem',
+                            cursor: reScrapingSource === source.id ? 'not-allowed' : 'pointer',
+                            transition: 'background-color 0.2s',
+                            fontWeight: '500',
+                            opacity: reScrapingSource === source.id ? 0.6 : 1
+                          }}
+                          onMouseEnter={(e) => {
+                            if (reScrapingSource !== source.id) {
+                              e.target.style.background = '#138496';
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            if (reScrapingSource !== source.id) {
+                              e.target.style.background = '#17a2b8';
+                            }
+                          }}
+                        >
+                          {reScrapingSource === source.id ? '⏳ Re-scraping...' : '🔄 Re-scrape'}
+                        </button>
+                      )}
                       {source.is_paused ? (
                         <button
                           onClick={() => handleReactivateSource(source.id, source.name)}

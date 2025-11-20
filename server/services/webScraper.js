@@ -202,10 +202,9 @@ class WebScraper {
           // Extract publication date from article page (more comprehensive than list page)
           let pubDate = article.datePublished ? new Date(article.datePublished) : null;
           
-          // Try to extract metadata from article page for ALL articles (but limit concurrent requests)
+          // Try to extract metadata from article page for first 10 articles (to avoid memory issues)
           // This is critical because the listing page titles/dates might be wrong
-          // Process in batches to avoid memory issues
-          const shouldFetchPage = i < 10; // Fetch first 10 articles for better titles/dates
+          if (i < 10) {
             try {
               console.log(`🔍 Fetching article page for better title/date: ${articleUrl.substring(0, 60)}...`);
               const metadata = await feedMonitor.extractArticleMetadata(articleUrl);

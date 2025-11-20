@@ -867,20 +867,70 @@ class FeedMonitor {
       
       const $ = cheerio.load(resp.data);
 
-      // Extract title - prioritize article-specific selectors
-      // Strategy 1: Look for article-specific h1 (not page-level)
+      // Extract title - use multiple strategies for maximum compatibility
       let title = null;
       
-      // Try article-specific containers first
-      const articleContainers = $('article, [class*="article"], [class*="post-content"], [class*="entry-content"], main article, .post, .blog-post');
-      if (articleContainers.length > 0) {
-        const articleH1 = articleContainers.find('h1').first();
-        if (articleH1.length && articleH1.text().trim().length > 10) {
-          title = articleH1.text().trim();
+      // Strategy 1: Check Open Graph and meta tags (most reliable, works across sites)
+      const ogTitle = $('meta[property="og:title"]').attr('content') || 
+                     $('meta[name="og:title"]').attr('content');
+      if (ogTitle && ogTitle.trim().length > 10) {
+        title = ogTitle.trim();
+      }
+      
+      // Strategy 2: Check JSON-LD structured data (very reliable)
+      if (!title) {
+        try {
+          const jsonLdScripts = $('script[type="application/ld+json"]');
+          jsonLdScripts.each((i, script) => {
+            try {
+              const data = JSON.parse($(script).html());
+              if (data.headline || data.name) {
+                const jsonTitle = data.headline || data.name;
+                if (jsonTitle && jsonTitle.trim().length > 10 && jsonTitle.length < 200) {
+                  title = jsonTitle.trim();
+                  return false; // Break
+                }
+              }
+              // Handle arrays
+              if (Array.isArray(data)) {
+                data.forEach(item => {
+                  if (item.headline || item.name) {
+                    const jsonTitle = item.headline || item.name;
+                    if (jsonTitle && jsonTitle.trim().length > 10 && jsonTitle.length < 200) {
+                      title = jsonTitle.trim();
+                      return false;
+                    }
+                  }
+                });
+              }
+            } catch (e) {
+              // Invalid JSON, skip
+            }
+          });
+        } catch (e) {
+          // JSON-LD parsing failed, continue
         }
       }
       
-      // Strategy 2: Look for main h1 (but filter out generic ones)
+      // Strategy 3: Look for article-specific h1 within article containers
+      if (!title) {
+        const articleContainers = $('article, [class*="article"], [class*="post-content"], [class*="entry-content"], main article, .post, .blog-post, [role="article"]');
+        if (articleContainers.length > 0) {
+          const articleH1 = articleContainers.find('h1').first();
+          if (articleH1.length && articleH1.text().trim().length > 10) {
+            const h1Text = articleH1.text().trim();
+            // Filter out generic titles
+            if (!h1Text.toLowerCase().includes('blog') &&
+                !h1Text.toLowerCase().includes('all posts') &&
+                !h1Text.toLowerCase().includes('latest by topic') &&
+                h1Text.length < 200) {
+              title = h1Text;
+            }
+          }
+        }
+      }
+      
+      // Strategy 4: Look for main h1 (but filter out generic ones)
       if (!title) {
         const allH1s = $('h1');
         for (let i = 0; i < allH1s.length; i++) {
@@ -890,35 +940,69 @@ class FeedMonitor {
               h1Text.length < 200 &&
               !h1Text.toLowerCase().includes('blog') &&
               !h1Text.toLowerCase().includes('all posts') &&
-              !h1Text.toLowerCase().includes('latest') &&
+              !h1Text.toLowerCase().includes('latest by topic') &&
               !h1Text.toLowerCase().includes('category') &&
               !h1Text.toLowerCase().includes('tag') &&
-              !h1Text.match(/^(home|about|contact|careers|company|solutions|marketplace)$/i)) {
+              !h1Text.match(/^(home|about|contact|careers|company|solutions|marketplace|latest)$/i)) {
             title = h1Text;
             break;
           }
         }
       }
       
-      // Strategy 3: Use page title but clean it up
+      // Strategy 5: Use page title but clean it up extensively
       if (!title) {
         title = $('title').text() || 'Untitled';
         title = title.replace(/\s+/g, ' ').trim();
         
-        // Remove site name suffixes (e.g., "| Exabits", "- Sapien", "| io.net")
-        // Common patterns: "Title | Site", "Title - Site", "Title | Site Name"
-        title = title.replace(/\s*[|\-–—]\s*([^|–—]+)$/i, '').trim();
+        // Remove common site name patterns
+        // Patterns: "Title | Site", "Title - Site", "Title | Site Name", "Site: Title"
+        title = title
+          .replace(/\s*[|\-–—]\s*([^|–—]+)$/i, '')  // Remove "| Site Name"
+          .replace(/^([^|–—]+)[|\-–—]\s*/i, '')      // Remove "Site | " prefix
+          .replace(/^[^:]+:\s*/i, '')                // Remove "Site: " prefix
+          .trim();
         
-        // If title still contains site name patterns, try to extract just the article part
+        // If title still contains separators, use the longest part (usually the article title)
         const titleParts = title.split(/[|\-–—]/);
         if (titleParts.length > 1) {
-          // Use the first part (usually the article title)
-          title = titleParts[0].trim();
+          // Find the longest part (usually the article title)
+          title = titleParts.reduce((a, b) => a.trim().length > b.trim().length ? a.trim() : b.trim(), '');
         }
       }
       
-      // Final cleanup
+      // Final cleanup - remove extra whitespace and validate
       title = title.replace(/\s+/g, ' ').trim();
+      
+      // Validate title isn't too generic
+      const genericPatterns = [
+        /^latest by topic/i,
+        /^mothership of ai/i,
+        /^backbone of ai infrastructure/i,
+        /^innovations & ideas from/i,
+        /^research by dr/i,
+        /^why we should train ai models/i
+      ];
+      
+      // If title matches generic pattern, try to get a better one
+      if (genericPatterns.some(pattern => pattern.test(title))) {
+        // Try to get title from URL slug as fallback
+        try {
+          const urlObj = new URL(url);
+          const slug = urlObj.pathname.split('/').pop();
+          if (slug && slug.length > 10) {
+            const urlTitle = decodeURIComponent(slug)
+              .replace(/[-_]/g, ' ')
+              .replace(/\.[^.]+$/, '') // Remove file extension
+              .trim();
+            if (urlTitle.length > 10 && urlTitle.length < 200) {
+              title = urlTitle;
+            }
+          }
+        } catch (e) {
+          // URL parsing failed, keep current title
+        }
+      }
 
       // Extract source name from URL domain
       const urlObj = new URL(url);

@@ -987,6 +987,125 @@ app.get('/api/articles/all', async (req, res) => {
   }
 });
 
+// Re-scrape a source and update existing articles with improved titles/dates
+app.post('/api/sources/:id/re-scrape', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const source = await database.getSourceById(parseInt(id));
+    
+    if (!source) {
+      return res.status(404).json({ error: 'Source not found' });
+    }
+    
+    if (source.monitoring_type !== 'SCRAPING') {
+      return res.status(400).json({ error: 'Re-scraping is only available for scraping sources' });
+    }
+    
+    console.log(`🔄 Re-scraping source: ${source.name} (${source.url})`);
+    
+    // Scrape articles with improved logic
+    const webScraper = require('./services/webScraper');
+    const articles = await webScraper.scrapeArticles(source);
+    
+    console.log(`📰 Found ${articles.length} articles, updating existing ones...`);
+    
+    let updated = 0;
+    let errors = 0;
+    const updates = [];
+    
+    // Limit to first 30 articles to avoid memory issues on free tier
+    // Process in smaller batches to prevent memory spikes
+    const articlesToProcess = articles.slice(0, 30);
+    
+    // Process articles in batches of 5 to avoid memory spikes
+    const batchSize = 5;
+    for (let i = 0; i < articlesToProcess.length; i += batchSize) {
+      const batch = articlesToProcess.slice(i, i + batchSize);
+      
+      // Process batch sequentially (not parallel) to control memory
+      for (const article of batch) {
+        try {
+          if (!article.link || !article.title) continue;
+          
+          // Check if article exists
+          const existing = await database.getArticleByLink(article.link);
+          if (!existing) continue; // Skip new articles (they'll be added normally)
+          
+          // Prepare updates
+          const updatesToApply = {};
+          let hasUpdates = false;
+          
+          // Update title if new one is better (longer, not generic)
+          const newTitle = article.title.trim();
+          const currentTitle = existing.title || '';
+          const isGeneric = newTitle.toLowerCase().includes('latest by topic') ||
+                           newTitle.toLowerCase().includes('mothership of ai') ||
+                           newTitle.toLowerCase().includes('backbone of ai infrastructure');
+          
+          if (newTitle && 
+              newTitle.length > 10 && 
+              !isGeneric &&
+              (newTitle !== currentTitle) &&
+              (newTitle.length > currentTitle.length || currentTitle.length < 20)) {
+            updatesToApply.title = newTitle;
+            hasUpdates = true;
+          }
+          
+          // Update date if we found one and existing doesn't have one
+          if (article.pubDate && !existing.pub_date) {
+            try {
+              const pubDate = new Date(article.pubDate);
+              if (!isNaN(pubDate.getTime())) {
+                updatesToApply.pub_date = pubDate.toISOString();
+                hasUpdates = true;
+              }
+            } catch (e) {
+              // Invalid date, skip
+            }
+          }
+          
+          // Apply updates if any
+          if (hasUpdates) {
+            await database.updateArticleByLink(article.link, updatesToApply);
+            updated++;
+            updates.push({
+              link: article.link,
+              title: updatesToApply.title || existing.title,
+              pub_date: updatesToApply.pub_date || existing.pub_date
+            });
+          }
+        } catch (err) {
+          console.error(`Error updating article ${article.link}:`, err.message);
+          errors++;
+        }
+      }
+      
+      // Small delay between batches to prevent memory spikes
+      if (i + batchSize < articlesToProcess.length) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+    
+    console.log(`✅ Re-scraping complete: Updated ${updated} articles, ${errors} errors`);
+    
+    res.json({
+      success: true,
+      message: `Re-scraped ${source.name}`,
+      total_articles_found: articles.length,
+      articles_updated: updated,
+      errors: errors,
+      updates: updates.slice(0, 20) // Return first 20 updates as examples
+    });
+  } catch (error) {
+    console.error('Error re-scraping source:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to re-scrape source',
+      details: error.message
+    });
+  }
+});
+
 // Get scraping status for a source (for verification)
 app.get('/api/sources/:id/scraping-status', async (req, res) => {
   try {
