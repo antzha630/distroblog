@@ -205,6 +205,8 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
         ? `${errorMsg}\n\n${errorDetails}`
         : errorMsg;
       
+      // Clear the feed check result so we don't show "proceed with scraping" after a failure
+      setFeedCheckResult(null);
       setValidationError(fullErrorMsg);
       alert(fullErrorMsg);
     } finally {
@@ -459,14 +461,19 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
 
               {validationError && (
                 <div style={{ 
-                  padding: '12px', 
+                  padding: '16px', 
                   background: '#fee', 
                   border: '1px solid #fcc',
                   borderRadius: '4px', 
                   color: '#c53030',
                   marginBottom: '16px'
                 }}>
-                  {validationError}
+                  <div style={{ fontWeight: '500', marginBottom: '8px' }}>
+                    ⚠️ {validationError}
+                  </div>
+                  <div style={{ fontSize: '0.9rem', color: '#666', marginTop: '8px' }}>
+                    You can try checking for an RSS feed again, or verify the URL is correct.
+                  </div>
                 </div>
               )}
 
