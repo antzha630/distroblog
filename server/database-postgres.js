@@ -426,12 +426,25 @@ class Database {
   // Get all articles (for verification/debugging)
   async getAllArticles(limit = 100) {
     const result = await this.pool.query(`
-      SELECT a.*, s.name as source_name 
+      SELECT a.*, s.name as source_name, s.monitoring_type, s.url as source_url
       FROM articles a 
       LEFT JOIN sources s ON a.source_id = s.id 
       ORDER BY COALESCE(a.pub_date, a.created_at) DESC
       LIMIT $1
     `, [limit]);
+    return result.rows;
+  }
+
+  // Get articles by monitoring type (SCRAPING vs RSS)
+  async getArticlesByMonitoringType(monitoringType, limit = 100) {
+    const result = await this.pool.query(`
+      SELECT a.*, s.name as source_name, s.monitoring_type, s.url as source_url
+      FROM articles a 
+      LEFT JOIN sources s ON a.source_id = s.id 
+      WHERE s.monitoring_type = $1
+      ORDER BY COALESCE(a.pub_date, a.created_at) DESC
+      LIMIT $2
+    `, [monitoringType, limit]);
     return result.rows;
   }
 

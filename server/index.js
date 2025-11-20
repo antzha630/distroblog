@@ -922,7 +922,11 @@ app.get('/api/articles/recent/:days', async (req, res) => {
 app.get('/api/articles/all', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
-    const articles = await database.getAllArticles(limit);
+    const monitoringType = req.query.type; // 'SCRAPING' or 'RSS'
+    
+    const articles = monitoringType 
+      ? await database.getArticlesByMonitoringType(monitoringType, limit)
+      : await database.getAllArticles(limit);
     
     // Format articles for display
     const formattedArticles = articles.map(article => ({
@@ -932,10 +936,13 @@ app.get('/api/articles/all', async (req, res) => {
       pub_date: article.pub_date,
       created_at: article.created_at,
       source_name: article.source_name || 'Unknown',
+      source_url: article.source_url,
+      monitoring_type: article.monitoring_type || 'RSS',
       category: article.category,
       status: article.status,
       has_content: !!(article.content && article.content.length > 0),
       content_length: article.content ? article.content.length : 0,
+      preview_length: article.preview ? article.preview.length : 0,
       has_pub_date: !!article.pub_date,
       days_ago: article.pub_date ? Math.floor((new Date() - new Date(article.pub_date)) / (1000 * 60 * 60 * 24)) : null
     }));
@@ -944,10 +951,34 @@ app.get('/api/articles/all', async (req, res) => {
     const withDates = formattedArticles.filter(a => a.has_pub_date).length;
     const withoutDates = formattedArticles.length - withDates;
     
+    // Group by source
+    const bySource = {};
+    formattedArticles.forEach(article => {
+      const sourceName = article.source_name || 'Unknown';
+      if (!bySource[sourceName]) {
+        bySource[sourceName] = {
+          name: sourceName,
+          url: article.source_url,
+          type: article.monitoring_type,
+          count: 0,
+          with_dates: 0,
+          without_dates: 0
+        };
+      }
+      bySource[sourceName].count++;
+      if (article.has_pub_date) {
+        bySource[sourceName].with_dates++;
+      } else {
+        bySource[sourceName].without_dates++;
+      }
+    });
+    
     res.json({
       total: formattedArticles.length,
       with_pub_date: withDates,
       without_pub_date: withoutDates,
+      filtered_by_type: monitoringType || 'all',
+      by_source: Object.values(bySource),
       articles: formattedArticles
     });
   } catch (error) {
