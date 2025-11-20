@@ -221,6 +221,28 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
     setValidationError('');
   };
 
+  const handleReScrapeSource = async (sourceId, sourceName) => {
+    if (!confirm(`Re-scrape "${sourceName}"? This will update existing articles with improved titles and dates. This may take a minute.`)) {
+      return;
+    }
+    
+    setReScrapingSource(sourceId);
+    
+    try {
+      const response = await axios.post(`/api/sources/${sourceId}/re-scrape`);
+      
+      alert(`Re-scraping complete!\n\nUpdated ${response.data.articles_updated} articles with improved titles/dates.`);
+      
+      // Refresh sources list
+      await fetchSources();
+    } catch (error) {
+      console.error('Error re-scraping source:', error);
+      alert('Failed to re-scrape source: ' + (error.response?.data?.error || error.message));
+    } finally {
+      setReScrapingSource(null);
+    }
+  };
+
   const handleRemoveSource = async (sourceId, sourceName) => {
     setIsRemoving(true);
     
