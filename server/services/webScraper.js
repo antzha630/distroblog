@@ -850,8 +850,45 @@ class WebScraper {
             // Extract description
             description = (container.querySelector('[class*="excerpt"], [class*="summary"], [class*="description"], p')?.textContent.trim() || '').substring(0, 300);
           } else {
-            // Fallback: use link text if container not found
-            title = link.textContent.trim();
+          // Fallback: use link text if container not found
+          title = link.textContent.trim();
+          }
+          
+          // Filter out generic/site-wide titles BEFORE using them
+          if (title) {
+            const titleLower = title.toLowerCase();
+            const isGeneric = titleLower.includes('latest by topic') ||
+                             titleLower.includes('mothership of ai compute') ||
+                             titleLower.includes('backbone of ai infrastructure') ||
+                             titleLower.includes('research by dr. yu sun') ||
+                             titleLower.includes('innovations & ideas from') ||
+                             titleLower.includes('why we should train ai models') ||
+                             titleLower.match(/^(home|about|contact|careers|company|solutions|marketplace|blog|all posts)$/i) ||
+                             titleLower.includes('exabits:') && titleLower.includes('mothership') ||
+                             titleLower.includes('giza') && titleLower.includes('innovations');
+            
+            if (isGeneric) {
+              // Try to extract a better title from the URL slug
+              try {
+                const urlObj = new URL(href, window.location.href);
+                const slug = urlObj.pathname.split('/').pop();
+                if (slug && slug.length > 10) {
+                  const urlTitle = decodeURIComponent(slug)
+                    .replace(/[-_]/g, ' ')
+                    .replace(/\.[^.]+$/, '')
+                    .trim();
+                  if (urlTitle.length > 10 && urlTitle.length < 200) {
+                    title = urlTitle;
+                  } else {
+                    title = null; // Skip this article if we can't get a good title
+                  }
+                } else {
+                  title = null; // Skip if no good title
+                }
+              } catch (e) {
+                title = null; // Skip if URL parsing fails
+              }
+            }
           }
           
           // Filter: Must have a meaningful title

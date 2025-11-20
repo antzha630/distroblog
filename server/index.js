@@ -1004,7 +1004,8 @@ app.post('/api/sources/:id/re-scrape', async (req, res) => {
     console.log(`🔄 Re-scraping source: ${source.name} (${source.url})`);
     
     // Scrape articles with improved logic
-    const webScraper = require('./services/webScraper');
+    const WebScraper = require('./services/webScraper');
+    const webScraper = new WebScraper();
     const articles = await webScraper.scrapeArticles(source);
     
     console.log(`📰 Found ${articles.length} articles, updating existing ones...`);
