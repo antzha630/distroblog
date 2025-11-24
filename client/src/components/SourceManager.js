@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 
 function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
@@ -23,10 +23,18 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
   const [showCategorySuggestions, setShowCategorySuggestions] = useState(false);
   const [editingCategory, setEditingCategory] = useState(null);
   const [newCategory, setNewCategory] = useState('');
+  const abortControllerRef = useRef(null);
 
   useEffect(() => {
     fetchSources();
     fetchCategories();
+
+    // Cleanup: abort any pending requests when component unmounts
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
   }, []);
 
   // Watch for refresh trigger from parent
@@ -173,11 +181,16 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
     setIsSettingUpScraping(true);
     setValidationError('');
 
+    // Create AbortController for this request
+    abortControllerRef.current = new AbortController();
+
     try {
       const response = await axios.post('/api/sources/setup-scraping', {
         url: newSource.url.trim(),
         name: newSource.name.trim(),
         category: newSource.category.trim() || ''
+      }, {
+        signal: abortControllerRef.current.signal
       });
 
       // Show success message
@@ -197,6 +210,12 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
       setShowAddForm(false);
       setFeedCheckResult(null);
     } catch (error) {
+      // Don't show error if request was aborted
+      if (axios.isCancel(error) || error.name === 'AbortError' || error.code === 'ERR_CANCELED') {
+        setValidationError('Scraping setup was stopped.');
+        return;
+      }
+
       const errorData = error.response?.data || {};
       const errorMsg = errorData.error || 'Failed to set up scraping';
       const errorDetails = errorData.errorDetails || null;
@@ -212,10 +231,35 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
       alert(fullErrorMsg);
     } finally {
       setIsSettingUpScraping(false);
+      abortControllerRef.current = null;
     }
   };
 
-  // Cancel scraping setup
+  // Stop scraping setup (cancels the request but keeps form open)
+  const handleStopScraping = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    setIsSettingUpScraping(false);
+    setValidationError('Scraping setup was stopped. You can try again or cancel to go back.');
+  };
+
+  // Cancel and reset form completely
+  const handleCancel = () => {
+    // Abort any pending requests
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    setShowAddForm(false);
+    setNewSource({ url: '', name: '', category: '' });
+    setFeedCheckResult(null);
+    setValidationError('');
+    setIsCheckingFeed(false);
+    setIsSettingUpScraping(false);
+    abortControllerRef.current = null;
+  };
+
+  // Cancel scraping setup (just clears the scraping state, keeps form open)
   const handleCancelScraping = () => {
     setFeedCheckResult(null);
     setValidationError('');
@@ -380,17 +424,27 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
           borderBottom: '1px solid #e9ecef'
         }}>
           <h2 className="card-title" style={{ margin: '0 0 16px 0' }}>Sources</h2>
-          <button 
-            className="btn btn-primary"
-            onClick={() => setShowAddForm(!showAddForm)}
-            style={{
-              padding: '10px 20px',
-              fontSize: '1rem',
-              fontWeight: '500'
-            }}
-          >
-            {showAddForm ? 'Cancel' : '+ Add Source'}
-          </button>
+          {!showAddForm && (
+            <button 
+              className="btn btn-primary"
+              onClick={() => {
+                // Clear any stale state when opening the form
+                setNewSource({ url: '', name: '', category: '' });
+                setFeedCheckResult(null);
+                setValidationError('');
+                setIsCheckingFeed(false);
+                setIsSettingUpScraping(false);
+                setShowAddForm(true);
+              }}
+              style={{
+                padding: '10px 20px',
+                fontSize: '1rem',
+                fontWeight: '500'
+              }}
+            >
+              + Add Source
+            </button>
+          )}
         </div>
 
         {showAddForm && (
@@ -512,30 +566,55 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
                   <div style={{ marginBottom: '12px', fontWeight: '500' }}>
                     {feedCheckResult.message}
                   </div>
-                  <div style={{ display: 'flex', gap: '12px' }}>
-                    <button 
-                      type="button"
-                      className="btn btn-primary"
-                      onClick={handleSetupScraping}
-                      disabled={isSettingUpScraping}
-                    >
-                      {isSettingUpScraping ? (
-                        <>
+                  {!isSettingUpScraping && (
+                    <div style={{ 
+                      fontSize: '0.85rem', 
+                      color: '#856404', 
+                      marginBottom: '12px',
+                      fontStyle: 'italic'
+                    }}>
+                      ⏱️ Note: Setting up scraping may take a while depending on the website.
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                    {!isSettingUpScraping ? (
+                      <>
+                        <button 
+                          type="button"
+                          className="btn btn-primary"
+                          onClick={handleSetupScraping}
+                        >
+                          Yes, proceed with scraping
+                        </button>
+                        <button 
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={handleCancelScraping}
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button 
+                          type="button"
+                          className="btn btn-primary"
+                          disabled
+                          style={{ opacity: 0.6, cursor: 'not-allowed' }}
+                        >
                           <div className="spinner"></div>
                           Setting up scraping...
-                        </>
-                      ) : (
-                        'Yes, proceed with scraping'
-                      )}
-                    </button>
-                    <button 
-                      type="button"
-                      className="btn btn-secondary"
-                      onClick={handleCancelScraping}
-                      disabled={isSettingUpScraping}
-                    >
-                      Cancel
-                    </button>
+                        </button>
+                        <button 
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={handleStopScraping}
+                          style={{ background: '#dc3545', borderColor: '#dc3545' }}
+                        >
+                          Stop
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
               )}
@@ -565,11 +644,7 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
                   <button 
                     type="button"
                     className="btn btn-secondary"
-                    onClick={() => {
-                      setShowAddForm(false);
-                      setValidationError('');
-                      setFeedCheckResult(null);
-                    }}
+                    onClick={handleCancel}
                   >
                     Cancel
                   </button>
@@ -582,11 +657,7 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
                   <button 
                     type="button"
                     className="btn btn-secondary"
-                    onClick={() => {
-                      setShowAddForm(false);
-                      setValidationError('');
-                      setFeedCheckResult(null);
-                    }}
+                    onClick={handleCancel}
                   >
                     Close
                   </button>
