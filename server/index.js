@@ -759,6 +759,23 @@ app.post('/api/articles/send', async (req, res) => {
   }
 });
 
+// Get the most recent last_checked timestamp from all sources
+app.get('/api/monitor/last-checked', async (req, res) => {
+  try {
+    const result = await database.pool.query(`
+      SELECT MAX(last_checked) as last_checked
+      FROM sources
+      WHERE last_checked IS NOT NULL
+    `);
+    
+    const lastChecked = result.rows[0]?.last_checked || null;
+    res.json({ last_checked: lastChecked });
+  } catch (error) {
+    console.error('Error fetching last checked time:', error);
+    res.status(500).json({ error: 'Failed to fetch last checked time' });
+  }
+});
+
 // Manual trigger for feed monitoring (for testing)
 app.post('/api/monitor/trigger', async (req, res) => {
   try {

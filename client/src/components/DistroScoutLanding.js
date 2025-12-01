@@ -14,10 +14,12 @@ function DistroScoutLanding({ onArticlesSelected, onCheckNow, isCheckingFeeds })
   const [categories, setCategories] = useState([]);
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [sortOrder, setSortOrder] = useState('newest'); // 'newest' | 'oldest'
+  const [lastChecked, setLastChecked] = useState(null);
 
   useEffect(() => {
     fetchArticles();
     fetchCategories();
+    fetchLastChecked();
   }, [timeFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -52,6 +54,42 @@ function DistroScoutLanding({ onArticlesSelected, onCheckNow, isCheckingFeeds })
       }
     } catch (err) {
       console.error('Error fetching categories:', err);
+    }
+  };
+
+  const fetchLastChecked = async () => {
+    try {
+      const response = await fetch(`${config.API_BASE_URL}/api/monitor/last-checked`);
+      if (response.ok) {
+        const data = await response.json();
+        setLastChecked(data.last_checked);
+      }
+    } catch (err) {
+      console.error('Error fetching last checked time:', err);
+    }
+  };
+
+  const formatLastChecked = (timestamp) => {
+    if (!timestamp) return 'Never';
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diffInHours = Math.floor((now - date) / (1000 * 60 * 60));
+    
+    if (diffInHours < 1) {
+      return 'Just now';
+    } else if (diffInHours < 24) {
+      return `${diffInHours}h ago`;
+    } else {
+      const diffInDays = Math.floor(diffInHours / 24);
+      if (diffInDays < 7) {
+        return `${diffInDays}d ago`;
+      } else {
+        // Format as MM/DD/YY
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        const year = String(date.getFullYear()).slice(-2);
+        return `${month}/${day}/${year}`;
+      }
     }
   };
 
@@ -97,9 +135,10 @@ function DistroScoutLanding({ onArticlesSelected, onCheckNow, isCheckingFeeds })
         }
       }
       
-      // Wait a moment for feeds to process, then refresh articles
-      setTimeout(() => {
-        fetchArticles();
+      // Wait a moment for feeds to process, then refresh articles and last checked time
+      setTimeout(async () => {
+        await fetchArticles();
+        await fetchLastChecked();
         setIsRefreshing(false);
       }, 2000);
     } catch (error) {
@@ -243,13 +282,20 @@ function DistroScoutLanding({ onArticlesSelected, onCheckNow, isCheckingFeeds })
               Past 7 Days
             </button>
           </div>
-          <button 
-            onClick={handleCheckNow}
-            disabled={isRefreshing || isCheckingFeeds}
-            className="refresh-btn"
-          >
-            {isRefreshing || isCheckingFeeds ? '⏳ Checking...' : '🔍 Check Now'}
-          </button>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
+            <button 
+              onClick={handleCheckNow}
+              disabled={isRefreshing || isCheckingFeeds}
+              className="refresh-btn"
+            >
+              {isRefreshing || isCheckingFeeds ? '⏳ Checking...' : '🔍 Check Now'}
+            </button>
+            {lastChecked && (
+              <div style={{ fontSize: '0.75rem', color: '#6c757d', marginTop: '4px' }}>
+                Last checked {formatLastChecked(lastChecked)}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
