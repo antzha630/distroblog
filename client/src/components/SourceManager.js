@@ -488,7 +488,15 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
               + Add Source
             </button>
           )}
-          {sources.filter(s => s.monitoring_type === 'SCRAPING' && s.is_active).length > 0 && (
+        </div>
+
+        {/* Re-scrape All button - visible above sources list */}
+        {!showAddForm && sources.filter(s => s.monitoring_type === 'SCRAPING' && s.is_active).length > 0 && (
+          <div style={{
+            display: 'flex',
+            justifyContent: 'center',
+            marginBottom: '16px'
+          }}>
             <button
               onClick={handleReScrapeAll}
               disabled={isReScrapingAll}
@@ -501,13 +509,13 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
                 padding: '10px 20px',
                 fontSize: '1rem',
                 fontWeight: '500',
-                marginLeft: '10px'
+                boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
               }}
             >
               {isReScrapingAll ? '⏳ Re-scraping All...' : '🔄 Re-scrape All Sources'}
             </button>
-          )}
-        </div>
+          </div>
+        )}
 
         {showAddForm && (
           <div style={{ 
