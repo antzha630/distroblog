@@ -265,24 +265,85 @@ class FeedMonitor {
               try {
                 const exists = await database.articleExists(article.link);
                 if (!exists) {
+                  // NEW ARTICLE FOUND - fetch full content and metadata
                   // Ensure title is never null or empty (simple check)
-                  const originalTitle = (article.title && article.title.trim()) ? article.title.trim() : 'Untitled Article';
+                  let originalTitle = (article.title && article.title.trim()) ? article.title.trim() : 'Untitled Article';
                   
                   // Skip if link is invalid
                   if (!article.link || typeof article.link !== 'string') {
                     continue;
                   }
                   
-                  // Generate AI-enhanced content for preview/summary only
-                  const enhancedContent = await this.enhanceArticleContent(article);
+                  // Fetch full content and metadata from article page (better titles/dates)
+                  let fullContent = null;
+                  let pubDate = article.datePublished ? new Date(article.datePublished) : null;
+                  
+                  try {
+                    // Fetch full content
+                    fullContent = await this.fetchFullArticleContent(article.link);
+                    
+                    // Fetch metadata (title/date) from article page
+                    const metadata = await this.extractArticleMetadata(article.link);
+                    
+                    // Use article page title if available and better
+                    if (metadata.title && metadata.title.trim().length > 10) {
+                      const newTitle = metadata.title.trim();
+                      const newTitleLower = newTitle.toLowerCase();
+                      const isGeneric = newTitleLower.includes('blog') ||
+                                       newTitleLower.includes('all posts') ||
+                                       newTitleLower.includes('latest by topic') ||
+                                       (newTitle.length < 25 && (
+                                         newTitleLower === 'blockchain web3' ||
+                                         newTitleLower === 'cybersecurity' ||
+                                         newTitleLower === 'company updates'
+                                       ));
+                      
+                      if (!isGeneric) {
+                        originalTitle = newTitle;
+                        console.log(`📝 Using better title from article page: "${originalTitle}"`);
+                      }
+                    }
+                    
+                    // Use article page date if available
+                    if (metadata.pubDate) {
+                      try {
+                        const articlePageDate = new Date(metadata.pubDate);
+                        if (!isNaN(articlePageDate.getTime())) {
+                          pubDate = articlePageDate;
+                          console.log(`📅 Found date from article page: ${pubDate.toISOString()}`);
+                        }
+                      } catch (e) {
+                        // Invalid date, skip
+                      }
+                    }
+                  } catch (err) {
+                    // If fetching fails, use what we have from listing page
+                    console.log(`⚠️ Could not fetch article page content/metadata: ${err.message}`);
+                  }
+                  
+                  // Use full content if available, otherwise use scraped content
+                  const articleContent = fullContent || article.content || article.description || '';
+                  
+                  // Generate AI-enhanced preview/summary
+                  const enhancedContent = await this.enhanceArticleContent({
+                    ...article,
+                    title: originalTitle,
+                    content: articleContent
+                  });
+                  
+                  // Format date
+                  let finalPubDate = null;
+                  if (pubDate && !isNaN(pubDate.getTime())) {
+                    finalPubDate = pubDate.toISOString();
+                  }
                   
                   const articleObj = {
                     sourceId: source.id,
-                    title: originalTitle, // Use original scraped title, guaranteed not null/empty
+                    title: originalTitle, // Use best available title
                     link: article.link,
-                    content: enhancedContent.content || article.content || '',
+                    content: enhancedContent.content || articleContent || '',
                     preview: enhancedContent.preview || article.description || article.contentSnippet || '',
-                    pubDate: article.pubDate || article.isoDate || null,
+                    pubDate: finalPubDate,
                     sourceName: source.name || 'Unknown Source',
                     category: source.category || 'General',
                     status: 'new'
@@ -313,7 +374,7 @@ class FeedMonitor {
             if (newArticles.length > 0) {
               console.log(`✅ Added ${newArticles.length} new article(s) from ${source.name}`);
             } else {
-              console.log(`ℹ️  No new articles found for ${source.name} (${articles.length} articles checked, all already in database)`);
+              console.log(`ℹ️  No new articles found for ${source.name} (checked ${articles.length} most recent benchmark articles, all already in database)`);
             }
             
             // Update last_checked timestamp (scraping result is already stored by webScraper)
@@ -780,7 +841,94 @@ class FeedMonitor {
   }
 
   // Fetch and extract readable text from an article page
+  // Tries Playwright first (for JS-rendered sites), then falls back to static scraping
   async fetchFullArticleContent(url) {
+    // Try Playwright first for JS-rendered content
+    try {
+      const { chromium } = require('playwright');
+      let browser = null;
+      let page = null;
+      
+      try {
+        browser = await chromium.launch({
+          headless: true,
+          args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+        });
+        
+        page = await browser.newPage();
+        await page.goto(url, { 
+          waitUntil: 'domcontentloaded',
+          timeout: 20000 
+        });
+        
+        // Wait for content to load
+        await page.waitForTimeout(2000);
+        
+        // Extract content using Playwright
+        const content = await page.evaluate(() => {
+          // Try common content selectors
+          const selectors = [
+            'article',
+            '.post-content',
+            '.entry-content',
+            '.article-content',
+            '.content',
+            'main article',
+            'section[data-testid="post"]',
+            'div[data-article-body=true]',
+            'div.post',
+            '.body',
+            '[class*="article"]',
+            '[class*="post"]',
+            '[class*="content"]'
+          ];
+          
+          let best = '';
+          for (const sel of selectors) {
+            const el = document.querySelector(sel);
+            if (el) {
+              const text = Array.from(el.querySelectorAll('p, li, h2, h3, blockquote, div'))
+                .map(n => n.textContent.trim())
+                .filter(t => t.length > 0)
+                .join('\n\n');
+              if (text.length > best.length) best = text;
+            }
+          }
+          
+          // Fallback: all paragraphs
+          if (best.length < 200) {
+            const all = Array.from(document.querySelectorAll('p'))
+              .map(n => n.textContent.trim())
+              .filter(t => t.length > 0)
+              .join('\n\n');
+            if (all.length > best.length) best = all;
+          }
+          
+          return best;
+        });
+        
+        await page.close();
+        await browser.close();
+        
+        if (content && content.length > 100) {
+          return this.cleanContent(content);
+        }
+      } catch (playwrightError) {
+        // Playwright failed - fall back to static scraping
+        if (browser) {
+          try {
+            await browser.close();
+          } catch (e) {
+            // Ignore close errors
+          }
+        }
+        // Continue to static scraping fallback
+      }
+    } catch (playwrightNotAvailable) {
+      // Playwright not available - use static scraping
+    }
+    
+    // Fallback to static scraping (for non-JS sites or if Playwright fails)
     try {
       const resp = await axios.get(url, { 
         timeout: 15000, 
@@ -849,7 +997,131 @@ class FeedMonitor {
   }
 
   // Extract article metadata from a URL
+  // Tries Playwright first (for JS-rendered sites), then falls back to static scraping
   async extractArticleMetadata(url) {
+    // Try Playwright first for JS-rendered content
+    try {
+      const { chromium } = require('playwright');
+      let browser = null;
+      let page = null;
+      
+      try {
+        browser = await chromium.launch({
+          headless: true,
+          args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+        });
+        
+        page = await browser.newPage();
+        await page.goto(url, { 
+          waitUntil: 'domcontentloaded',
+          timeout: 20000 
+        });
+        
+        // Wait for content to load
+        await page.waitForTimeout(2000);
+        
+        // Extract metadata using Playwright
+        const metadata = await page.evaluate(() => {
+          // Extract title
+          let title = '';
+          // Try Open Graph first
+          const ogTitle = document.querySelector('meta[property="og:title"]');
+          if (ogTitle) {
+            title = ogTitle.getAttribute('content') || '';
+          }
+          // Try JSON-LD
+          if (!title) {
+            const jsonLd = document.querySelector('script[type="application/ld+json"]');
+            if (jsonLd) {
+              try {
+                const data = JSON.parse(jsonLd.textContent);
+                if (data.headline) title = data.headline;
+                else if (data.name) title = data.name;
+              } catch (e) {
+                // Invalid JSON
+              }
+            }
+          }
+          // Try article H1
+          if (!title) {
+            const h1 = document.querySelector('article h1, main h1, [class*="article"] h1');
+            if (h1) title = h1.textContent.trim();
+          }
+          // Fallback to page title
+          if (!title) {
+            title = document.title || '';
+          }
+          
+          // Extract description
+          let description = '';
+          const ogDesc = document.querySelector('meta[property="og:description"]');
+          if (ogDesc) {
+            description = ogDesc.getAttribute('content') || '';
+          }
+          if (!description) {
+            const metaDesc = document.querySelector('meta[name="description"]');
+            if (metaDesc) {
+              description = metaDesc.getAttribute('content') || '';
+            }
+          }
+          
+          // Extract date
+          let pubDate = null;
+          const timeEl = document.querySelector('time[datetime]');
+          if (timeEl) {
+            pubDate = timeEl.getAttribute('datetime');
+          }
+          if (!pubDate) {
+            // Try meta tags
+            const pubDateMeta = document.querySelector('meta[property="article:published_time"]');
+            if (pubDateMeta) {
+              pubDate = pubDateMeta.getAttribute('content');
+            }
+          }
+          
+          return { title: title.trim(), description: description.trim(), pubDate };
+        });
+        
+        await page.close();
+        await browser.close();
+        
+        // If we got good metadata from Playwright, use it
+        if (metadata.title && metadata.title.length > 10) {
+          // Fetch content using the updated fetchFullArticleContent (which also tries Playwright)
+          let content = '';
+          try {
+            content = await this.fetchFullArticleContent(url);
+          } catch (contentError) {
+            // If content fetch fails, use description as fallback
+            if (contentError.response && contentError.response.status === 403) {
+              content = metadata.description || '';
+            }
+          }
+          
+          return {
+            title: metadata.title,
+            content: content,
+            pubDate: metadata.pubDate,
+            sourceName: '',
+            description: metadata.description
+          };
+        }
+      } catch (playwrightError) {
+        // Playwright failed - fall back to static scraping
+        if (browser) {
+          try {
+            await browser.close();
+          } catch (e) {
+            // Ignore close errors
+          }
+        }
+        // Continue to static scraping fallback
+      }
+    } catch (playwrightNotAvailable) {
+      // Playwright not available - use static scraping
+    }
+    
+    // Fallback to static scraping (for non-JS sites or if Playwright fails)
     try {
       const resp = await axios.get(url, { 
         timeout: 15000, 

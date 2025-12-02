@@ -1132,6 +1132,159 @@ app.post('/api/sources/:id/re-scrape', async (req, res) => {
     }
 });
 
+// Re-scrape all scraping sources (bulk operation)
+app.post('/api/sources/re-scrape-all', async (req, res) => {
+  try {
+    console.log('🔄 Starting bulk re-scrape of all scraping sources...');
+    
+    // Get all scraping sources
+    const allSources = await database.getAllSources();
+    const scrapingSources = allSources.filter(s => s.monitoring_type === 'SCRAPING' && s.is_active);
+    
+    if (scrapingSources.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No active scraping sources found',
+        sources_processed: 0,
+        results: []
+      });
+    }
+    
+    console.log(`📋 Found ${scrapingSources.length} active scraping sources to re-scrape`);
+    
+    // Set lock to prevent automatic feed monitoring
+    feedMonitor.isScrapingInProgress = true;
+    console.log('🔒 Pausing automatic feed monitoring during bulk re-scrape');
+    
+    const results = [];
+    let totalUpdated = 0;
+    let totalErrors = 0;
+    
+    // Process sources sequentially to avoid memory issues
+    for (let i = 0; i < scrapingSources.length; i++) {
+      const source = scrapingSources[i];
+      console.log(`\n[${i + 1}/${scrapingSources.length}] Re-scraping: ${source.name}`);
+      
+      try {
+        const WebScraper = require('./services/webScraper');
+        const webScraper = new WebScraper();
+        const articles = await webScraper.scrapeArticles(source);
+        
+        let updated = 0;
+        let errors = 0;
+        
+        // Process articles in small batches
+        const batchSize = 3;
+        for (let j = 0; j < Math.min(articles.length, 10); j += batchSize) {
+          const batch = articles.slice(j, j + batchSize);
+          
+          for (const article of batch) {
+            try {
+              if (!article.link || !article.title) continue;
+              
+              const existing = await database.getArticleByLink(article.link);
+              if (!existing) continue;
+              
+              const updatesToApply = {};
+              let hasUpdates = false;
+              
+              // Update title if better
+              const newTitle = article.title.trim();
+              const currentTitle = existing.title || '';
+              const isGeneric = newTitle.toLowerCase().includes('latest by topic') ||
+                               newTitle.toLowerCase().includes('mothership of ai') ||
+                               newTitle.toLowerCase().includes('backbone of ai infrastructure');
+              
+              if (newTitle && 
+                  newTitle.length > 10 && 
+                  !isGeneric &&
+                  (newTitle !== currentTitle) &&
+                  (newTitle.length > currentTitle.length || currentTitle.length < 20)) {
+                updatesToApply.title = newTitle;
+                hasUpdates = true;
+              }
+              
+              // Update date if missing
+              if (article.datePublished && !existing.pub_date) {
+                try {
+                  const pubDate = new Date(article.datePublished);
+                  if (!isNaN(pubDate.getTime())) {
+                    updatesToApply.pub_date = pubDate.toISOString();
+                    hasUpdates = true;
+                  }
+                } catch (e) {
+                  // Invalid date, skip
+                }
+              }
+              
+              if (hasUpdates) {
+                await database.updateArticleByLink(article.link, updatesToApply);
+                updated++;
+              }
+            } catch (err) {
+              errors++;
+            }
+          }
+          
+          // Small delay between batches
+          if (j + batchSize < Math.min(articles.length, 10)) {
+            await new Promise(resolve => setTimeout(resolve, 200));
+          }
+        }
+        
+        totalUpdated += updated;
+        totalErrors += errors;
+        
+        results.push({
+          source_id: source.id,
+          source_name: source.name,
+          articles_found: articles.length,
+          articles_updated: updated,
+          errors: errors,
+          success: true
+        });
+        
+        console.log(`✅ ${source.name}: Updated ${updated} articles`);
+        
+        // Delay between sources to prevent memory spikes
+        if (i < scrapingSources.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      } catch (error) {
+        console.error(`❌ Error re-scraping ${source.name}:`, error.message);
+        totalErrors++;
+        results.push({
+          source_id: source.id,
+          source_name: source.name,
+          success: false,
+          error: error.message
+        });
+      }
+    }
+    
+    console.log(`\n✅ Bulk re-scrape complete: ${totalUpdated} total articles updated, ${totalErrors} errors`);
+    
+    res.json({
+      success: true,
+      message: `Re-scraped ${scrapingSources.length} sources`,
+      sources_processed: scrapingSources.length,
+      total_articles_updated: totalUpdated,
+      total_errors: totalErrors,
+      results: results
+    });
+  } catch (error) {
+    console.error('Error in bulk re-scrape:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to re-scrape sources',
+      details: error.message
+    });
+  } finally {
+    feedMonitor.isScrapingInProgress = false;
+    console.log('🔓 Resuming automatic feed monitoring');
+  }
+});
+
 // Get scraping status for a source (for verification)
 app.get('/api/sources/:id/scraping-status', async (req, res) => {
   try {

@@ -23,6 +23,7 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
   const [showCategorySuggestions, setShowCategorySuggestions] = useState(false);
   const [editingCategory, setEditingCategory] = useState(null);
   const [newCategory, setNewCategory] = useState('');
+  const [isReScrapingAll, setIsReScrapingAll] = useState(false);
   const abortControllerRef = useRef(null);
 
   useEffect(() => {
@@ -287,6 +288,48 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
     }
   };
 
+  const handleReScrapeAll = async () => {
+    const scrapingSources = sources.filter(s => s.monitoring_type === 'SCRAPING' && s.is_active);
+    
+    if (scrapingSources.length === 0) {
+      alert('No active scraping sources found to re-scrape.');
+      return;
+    }
+    
+    if (!window.confirm(`Re-scrape all ${scrapingSources.length} scraping sources?\n\nThis will update existing articles with improved titles and dates. This may take several minutes.`)) {
+      return;
+    }
+    
+    setIsReScrapingAll(true);
+    
+    try {
+      const response = await axios.post('/api/sources/re-scrape-all');
+      
+      const results = response.data.results || [];
+      const successCount = results.filter(r => r.success).length;
+      const totalUpdated = response.data.total_articles_updated || 0;
+      
+      let message = `Bulk re-scrape complete!\n\n`;
+      message += `Sources processed: ${response.data.sources_processed}\n`;
+      message += `Successful: ${successCount}\n`;
+      message += `Total articles updated: ${totalUpdated}\n\n`;
+      
+      if (results.some(r => !r.success)) {
+        message += `Some sources had errors. Check console for details.`;
+      }
+      
+      alert(message);
+      
+      // Refresh sources list
+      await fetchSources();
+    } catch (error) {
+      console.error('Error re-scraping all sources:', error);
+      alert('Failed to re-scrape sources: ' + (error.response?.data?.error || error.message));
+    } finally {
+      setIsReScrapingAll(false);
+    }
+  };
+
   const handleRemoveSource = async (sourceId, sourceName) => {
     setIsRemoving(true);
     
@@ -443,6 +486,25 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
               }}
             >
               + Add Source
+            </button>
+          )}
+          {sources.filter(s => s.monitoring_type === 'SCRAPING' && s.is_active).length > 0 && (
+            <button
+              onClick={handleReScrapeAll}
+              disabled={isReScrapingAll}
+              style={{
+                background: isReScrapingAll ? '#6c757d' : '#17a2b8',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: isReScrapingAll ? 'not-allowed' : 'pointer',
+                padding: '10px 20px',
+                fontSize: '1rem',
+                fontWeight: '500',
+                marginLeft: '10px'
+              }}
+            >
+              {isReScrapingAll ? '⏳ Re-scraping All...' : '🔄 Re-scrape All Sources'}
             </button>
           )}
         </div>

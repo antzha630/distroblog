@@ -108,289 +108,51 @@ class WebScraper {
         }
       }
       
-      // Enhance articles with full content and better date extraction (reuse existing logic from feedMonitor)
-      // IMPORTANT: Limit processing to avoid timeouts - only process first 10 articles in detail
-      // The workflow will further limit to 3 when adding a new source
-      const feedMonitor = require('./feedMonitor');
-      const enhancedArticles = [];
-      const maxArticlesToProcess = 10; // Only process first 10 articles in detail
+      // OPTIMIZATION: Two-phase approach for memory efficiency
+      // Phase 1: Lightweight scraping - get 5 articles from listing page (just URLs/titles)
+      // Phase 2: Check which exist in DB, then only fetch full content for NEW articles
+      // This way we have a buffer (5) but only process what's actually new (typically 0-2)
+      // This is much more memory-efficient than processing all articles fully before checking
       
-      for (let i = 0; i < Math.min(articles.length, maxArticlesToProcess); i++) {
-        const article = articles[i];
-        try {
-          let articleUrl = article.url || article.link;
-          
-          // Fix URL resolution - handle relative URLs and malformed URLs
-          if (articleUrl && !articleUrl.startsWith('http')) {
-            // Relative URL - resolve against base URL
-            if (articleUrl.startsWith('/')) {
-              const baseUrlObj = new URL(source.url);
-              articleUrl = `${baseUrlObj.protocol}//${baseUrlObj.host}${articleUrl}`;
-            } else {
-              // Relative path - resolve against source URL
-              const baseUrlObj = new URL(source.url);
-              const basePath = baseUrlObj.pathname.replace(/\/[^\/]*$/, '/');
-              articleUrl = `${baseUrlObj.protocol}//${baseUrlObj.host}${basePath}${articleUrl}`;
-            }
-          }
-          
-          // Fix double /post/ issue: if base has /post and link has /posts/, fix it
-          if (articleUrl.includes('/post/posts/')) {
-            articleUrl = articleUrl.replace('/post/posts/', '/posts/');
-          }
-          // If base is /post but link should be /posts/, fix it
-          if (source.url.includes('/post') && !source.url.includes('/posts') && 
-              articleUrl.includes('/post/') && articleUrl.match(/\/post\/posts\/[^\/]+/)) {
-            articleUrl = articleUrl.replace(/\/post\//, '/posts/');
-          }
-          
-          // Fetch full content for each article (reuse existing method)
-          // NOTE: For initial scraping, we skip full content fetch to avoid timeouts
-          // Full content will be fetched later when articles are processed individually
-          let fullContent = null;
-          
-          // Only fetch full content for the first 3 articles to avoid timeouts
-          // When adding a new source, we only process 3 articles anyway
-          // This saves time and prevents timeouts when scraping sites with many articles
-          if (i < 3) {
-            try {
-              fullContent = await feedMonitor.fetchFullArticleContent(articleUrl);
-            } catch (err) {
-              // Handle 403 (Cloudflare) gracefully - just use scraped content
-              if (err.response && err.response.status === 403) {
-                console.log(`⚠️ 403 Forbidden for ${articleUrl} (Cloudflare protection), using scraped content`);
-              }
-              // If 404, try alternative URL patterns
-              else if (err.response && err.response.status === 404) {
-                console.log(`⚠️ 404 for ${articleUrl}, trying alternative URLs...`);
-                
-                // Try alternative URL patterns (only if same domain)
-                const urlVariations = [
-                  articleUrl.replace('/posts/', '/post/'),
-                  articleUrl.replace('/post/', '/posts/'),
-                  articleUrl.replace('/posts/', '/blog/'),
-                  articleUrl.replace('/post/', '/blog/'),
-                ].filter(url => this.isSameDomain(url, source.url));
-                
-                for (const altUrl of urlVariations) {
-                  try {
-                    fullContent = await feedMonitor.fetchFullArticleContent(altUrl);
-                    if (fullContent && fullContent.length > 100) {
-                      articleUrl = altUrl; // Use the working URL
-                      break;
-                    }
-                  } catch (e) {
-                    // Continue to next variation
-                  }
-                }
-              }
-              
-              // If still no content, use what we have from scraping
-              if (!fullContent) {
-                // Don't log if it's a 403 - we already logged that
-                if (!err.response || err.response.status !== 403) {
-                  console.log(`⚠️ Could not fetch full content for ${articleUrl}, using scraped content`);
-                }
-              }
-            }
+      // Return lightweight articles (just from listing page)
+      // Full processing will happen in feedMonitor after checking which are new
+      const lightweightArticles = articles.slice(0, 5).map(article => {
+        // Fix URL resolution for relative URLs
+        let articleUrl = article.url || article.link;
+        if (articleUrl && !articleUrl.startsWith('http')) {
+          if (articleUrl.startsWith('/')) {
+            const baseUrlObj = new URL(source.url);
+            articleUrl = `${baseUrlObj.protocol}//${baseUrlObj.host}${articleUrl}`;
           } else {
-            // For articles beyond the first 3, skip full content fetch to save time
-            // Full content will be fetched later when needed (e.g., when generating AI summaries)
-            fullContent = null;
+            const baseUrlObj = new URL(source.url);
+            const basePath = baseUrlObj.pathname.replace(/\/[^\/]*$/, '/');
+            articleUrl = `${baseUrlObj.protocol}//${baseUrlObj.host}${basePath}${articleUrl}`;
           }
-          
-          // Extract publication date from article page (more comprehensive than list page)
-          let pubDate = article.datePublished ? new Date(article.datePublished) : null;
-          
-          // Try to extract metadata from article page for first 10 articles (to avoid memory issues)
-          // This is critical because the listing page titles/dates might be wrong
-          if (i < 10) {
-            try {
-              console.log(`🔍 Fetching article page for better title/date: ${articleUrl.substring(0, 60)}...`);
-              const metadata = await feedMonitor.extractArticleMetadata(articleUrl);
-              
-              // ALWAYS use article page title if available (it's more reliable)
-              if (metadata.title && metadata.title.trim().length > 10) {
-                const newTitle = metadata.title.trim();
-                // Filter out generic/site-wide titles
-                const isGeneric = newTitle.toLowerCase().includes('blog') ||
-                                 newTitle.toLowerCase().includes('all posts') ||
-                                 newTitle.toLowerCase().includes('latest by topic') ||
-                                 newTitle.toLowerCase().includes('mothership') ||
-                                 newTitle.toLowerCase().includes('backbone of ai infrastructure') ||
-                                 newTitle.toLowerCase().match(/^(home|about|contact|careers|company|solutions|marketplace)$/i);
-                
-                // Always prefer article page title if it's not generic
-                if (!isGeneric) {
-                  article.title = newTitle;
-                  console.log(`📝 Updated title from article page: "${article.title}"`);
-                } else if (newTitle.length > article.title.length && !article.title.toLowerCase().includes('latest by topic')) {
-                  // Use if it's longer and current title is also generic
-                  article.title = newTitle;
-                  console.log(`📝 Using longer title from article page: "${article.title}"`);
-                }
-              }
-              
-              // ALWAYS use article page date if available (it's more reliable)
-              if (metadata.pubDate) {
-                try {
-                  const articlePageDate = new Date(metadata.pubDate);
-                  if (!isNaN(articlePageDate.getTime())) {
-                    pubDate = articlePageDate;
-                    console.log(`📅 Found date from article page: ${pubDate.toISOString()}`);
-                  }
-                } catch (e) {
-                  // Invalid date, skip
-                }
-              }
-            } catch (err) {
-              // If extraction fails (especially 403), log but continue
-              console.log(`⚠️ Could not fetch article page metadata: ${err.message}`);
-              // This is OK - we'll use what we scraped from the listing page
-            }
-          }
-          
-          // Validate and format date
-          let finalPubDate = null;
-          let finalIsoDate = null;
-          if (pubDate && !isNaN(pubDate.getTime())) {
-            finalPubDate = pubDate.toISOString();
-            finalIsoDate = pubDate.toISOString();
-          }
-          
-          // Convert to RSS-like format
-          // Store full content for AI summaries (use scraped content if fetch failed)
-          const articleContent = fullContent || article.content || article.description || '';
-          
-          // Generate author's note style summary only for first 3 articles (to save time and API calls)
-          // Other articles will use the description from scraping
-          const llmService = require('./llmService');
-          let authorNote = article.description || article.preview || '';
-          
-          // Only generate AI summary for first 3 articles to avoid timeouts and API costs
-          if (i < 3 && articleContent && articleContent.length > 100 && (!authorNote || authorNote.length < 50)) {
-            try {
-              authorNote = llmService.createAuthorsNoteStyleSummary(
-                article.title || 'Untitled',
-                articleContent,
-                source.name || 'Unknown Source'
-              );
-            } catch (err) {
-              // If generation fails, use what we have
-              console.warn('Could not generate author\'s note style summary:', err.message);
-            }
-          }
-          
-          enhancedArticles.push({
-            title: article.title || 'Untitled',
-            link: articleUrl,
-            content: articleContent, // Full content for AI summaries
-            contentSnippet: authorNote, // Author's note style summary
-            description: authorNote, // Author's note style summary (shown on dashboard)
-            pubDate: finalPubDate,
-            isoDate: finalIsoDate,
-            sourceName: source.name || 'Unknown Source',
-            category: source.category || 'General'
-          });
-        } catch (err) {
-          // If fetching full content fails, use what we have
-          const articleUrl = article.url || article.link;
-          let pubDate = article.datePublished ? new Date(article.datePublished) : null;
-          let finalPubDate = null;
-          let finalIsoDate = null;
-          if (pubDate && !isNaN(pubDate.getTime())) {
-            finalPubDate = pubDate.toISOString();
-            finalIsoDate = pubDate.toISOString();
-          }
-          
-          enhancedArticles.push({
-            title: article.title || 'Untitled',
-            link: articleUrl,
-            content: article.content || article.description || '',
-            contentSnippet: article.description || article.preview || '',
-            description: article.description || article.preview || '',
-            pubDate: finalPubDate,
-            isoDate: finalIsoDate,
-            sourceName: source.name || 'Unknown Source',
-            category: source.category || 'General'
-          });
         }
-      }
-      
-      // Sort by date (newest first)
-      enhancedArticles.sort((a, b) => {
-        // Articles with dates come first
-        if (a.pubDate && !b.pubDate) return -1;
-        if (!a.pubDate && b.pubDate) return 1;
         
-        // If both have dates, sort by date (newest first)
-        if (a.pubDate && b.pubDate) {
-          try {
-            const dateA = new Date(a.pubDate);
-            const dateB = new Date(b.pubDate);
-            if (!isNaN(dateA.getTime()) && !isNaN(dateB.getTime())) {
-              return dateB - dateA; // Newest first
-            }
-          } catch (e) {
-            // Invalid date, keep original order
-          }
-        }
-        return 0;
+        return {
+          title: article.title || 'Untitled',
+          link: articleUrl,
+          url: articleUrl,
+          description: article.description || '',
+          content: article.content || article.description || '',
+          datePublished: article.datePublished || null,
+          sourceName: source.name || 'Unknown Source',
+          category: source.category || 'General'
+        };
       });
       
-      // Add remaining articles (beyond maxArticlesToProcess) without full processing
-      // These are already sorted by date, so we just add them with minimal processing
-      for (let i = maxArticlesToProcess; i < articles.length && enhancedArticles.length < 20; i++) {
-        const article = articles[i];
-        try {
-          let articleUrl = article.url || article.link;
-          
-          // Fix URL resolution
-          if (articleUrl && !articleUrl.startsWith('http')) {
-            if (articleUrl.startsWith('/')) {
-              const baseUrlObj = new URL(source.url);
-              articleUrl = `${baseUrlObj.protocol}//${baseUrlObj.host}${articleUrl}`;
-            } else {
-              const baseUrlObj = new URL(source.url);
-              const basePath = baseUrlObj.pathname.replace(/\/[^\/]*$/, '/');
-              articleUrl = `${baseUrlObj.protocol}//${baseUrlObj.host}${basePath}${articleUrl}`;
-            }
-          }
-          
-          // Parse date if available
-          let pubDate = article.datePublished ? new Date(article.datePublished) : null;
-          let finalPubDate = null;
-          if (pubDate && !isNaN(pubDate.getTime())) {
-            finalPubDate = pubDate.toISOString();
-          }
-          
-          enhancedArticles.push({
-            title: article.title || 'Untitled',
-            link: articleUrl,
-            content: article.description || '', // Minimal content - will be fetched later if needed
-            contentSnippet: article.description || '',
-            description: article.description || '',
-            pubDate: finalPubDate,
-            isoDate: finalPubDate,
-            sourceName: source.name || 'Unknown Source',
-            category: source.category || 'General'
-          });
-        } catch (err) {
-          // Skip articles that fail to process
-        }
-      }
-      
-      // Limit to most recent 20 articles total
-      const limitedArticles = enhancedArticles.slice(0, 20);
-      
-      console.log(`✅ Scraping completed: ${limitedArticles.length} articles processed (from ${articles.length} found, showing most recent)`);
-      return limitedArticles;
+      console.log(`✅ Scraping completed: ${lightweightArticles.length} articles found (lightweight, will check for new ones before full processing)`);
+      return lightweightArticles;
     } catch (error) {
       console.error(`❌ Error scraping ${source.url}:`, error.message);
       return [];
     }
   }
 
+  /**
+   * Static HTML scraping (no browser needed)
+   */
   /**
    * Static HTML scraping (no browser needed)
    */
@@ -691,6 +453,7 @@ class WebScraper {
                                      pathname === '/company' ||
                                      pathname === '/solutions' ||
                                      pathname === '/marketplace' ||
+                                     pathname === '/search' ||
                                      pathname.startsWith('/press') ||
                                      pathname.startsWith('/privacy') ||
                                      pathname.startsWith('/terms') ||
@@ -698,7 +461,10 @@ class WebScraper {
                                      pathname.startsWith('/brand') ||
                                      pathname.startsWith('/litepaper') ||
                                      pathname.startsWith('/faq') ||
-                                     pathname.startsWith('/products')) &&
+                                     pathname.startsWith('/products') ||
+                                     pathname.startsWith('/c/') || // Category pages (e.g., /c/tutorials)
+                                     pathname.match(/^\/[a-z]{2}$/i) || // Language codes (e.g., /en, /zh)
+                                     pathname.match(/^\/tag[s]?\/|\/category\/|\/archive\/|\/author\//i)) && // Tag/category/archive/author pages
                                     !pathname.match(/\/(blog|post|article|articles|news)\//i);
             
             if (isNonArticlePath) {
@@ -762,13 +528,22 @@ class WebScraper {
               const headingText = heading.textContent.trim();
               
               // Skip if it's too short, generic, or looks like a section header
+              const headingLower = headingText.toLowerCase();
+              const isGenericHeading = headingLower.length < 25 && (
+                headingLower.match(/^(blockchain|web3|cybersecurity|company updates?|io intelligence|ai infrastructure|ai startup|developer resources)/i) ||
+                headingLower === 'blockchain web3' ||
+                headingLower === 'cybersecurity' ||
+                headingLower.includes('swarm community call') && headingLower.includes('recap')
+              );
+              
               if (headingText.length > 15 && 
                   headingText.length < 200 &&
-                  !headingText.toLowerCase().includes('blog') &&
-                  !headingText.toLowerCase().includes('all posts') &&
-                  !headingText.toLowerCase().includes('quarterly updates') &&
-                  !headingText.toLowerCase().includes('case studies') &&
-                  !headingText.toLowerCase().includes('read more')) {
+                  !isGenericHeading &&
+                  !headingLower.includes('blog') &&
+                  !headingLower.includes('all posts') &&
+                  !headingLower.includes('quarterly updates') &&
+                  !headingLower.includes('case studies') &&
+                  !headingLower.includes('read more')) {
                 title = headingText;
                 break; // Use the first valid heading we find in this container
               }
@@ -856,16 +631,31 @@ class WebScraper {
           
           // Filter out generic/site-wide titles BEFORE using them
           if (title) {
-            const titleLower = title.toLowerCase();
-            const isGeneric = titleLower.includes('latest by topic') ||
+            const titleLower = title.toLowerCase().trim();
+            // Check for very short generic titles (likely category/navigation items)
+            const isVeryShortGeneric = title.length < 25 && (
+              titleLower.match(/^(blockchain|web3|cybersecurity|company updates?|io intelligence|ai infrastructure compute|ai startup corner|developer resources|swarm community call)/i) ||
+              titleLower === 'blockchain web3' ||
+              titleLower === 'cybersecurity' ||
+              titleLower === 'company updates' ||
+              titleLower === 'io intelligence' ||
+              titleLower === 'ai infrastructure compute' ||
+              titleLower === 'ai startup corner' ||
+              titleLower === 'developer resources'
+            );
+            
+            const isGeneric = isVeryShortGeneric ||
+                             titleLower.includes('latest by topic') ||
                              titleLower.includes('mothership of ai compute') ||
                              titleLower.includes('backbone of ai infrastructure') ||
                              titleLower.includes('research by dr. yu sun') ||
                              titleLower.includes('innovations & ideas from') ||
                              titleLower.includes('why we should train ai models') ||
                              titleLower.match(/^(home|about|contact|careers|company|solutions|marketplace|blog|all posts)$/i) ||
-                             titleLower.includes('exabits:') && titleLower.includes('mothership') ||
-                             titleLower.includes('giza') && titleLower.includes('innovations');
+                             (titleLower.includes('exabits:') && titleLower.includes('mothership')) ||
+                             (titleLower.includes('giza') && titleLower.includes('innovations')) ||
+                             // Check for duplicate generic titles (like "Swarm Community Call, 30 October – Recap" appearing multiple times)
+                             (titleLower.includes('swarm community call') && titleLower.includes('recap'));
             
             if (isGeneric) {
               // Try to extract a better title from the URL slug
@@ -891,18 +681,31 @@ class WebScraper {
             }
           }
           
-          // Filter: Must have a meaningful title
+            // Filter: Must have a meaningful title
           if (title && title.length > 10) {
             // Skip if it's clearly not an article (navigation, buttons, etc.)
-            const lowerTitle = title.toLowerCase();
-            if (lowerTitle.includes('read more') || 
+            const lowerTitle = title.toLowerCase().trim();
+            const isGenericNav = lowerTitle.includes('read more') || 
                 lowerTitle.includes('learn more') ||
                 lowerTitle === 'blog' ||
                 lowerTitle === 'about' ||
                 lowerTitle === 'articles' ||
                 lowerTitle === 'posts' ||
                 lowerTitle.includes('all posts') ||
-                lowerTitle.includes('view all')) {
+                lowerTitle.includes('view all') ||
+                // Reject very short generic titles
+                (title.length < 25 && (
+                  lowerTitle === 'blockchain web3' ||
+                  lowerTitle === 'cybersecurity' ||
+                  lowerTitle === 'company updates' ||
+                  lowerTitle === 'io intelligence' ||
+                  lowerTitle === 'ai infrastructure compute' ||
+                  lowerTitle === 'ai startup corner' ||
+                  lowerTitle === 'developer resources' ||
+                  (lowerTitle.includes('swarm community call') && lowerTitle.includes('recap'))
+                ));
+            
+            if (isGenericNav) {
               return;
             }
             
@@ -1102,9 +905,9 @@ class WebScraper {
         return 0;
       });
       
-      // Limit to most recent 20 articles (enough for initial fetch, but not too many)
-      // The workflow will further limit to 3 when adding a new source
-      const limited = unique.slice(0, 20);
+      // Limit to most recent 5 articles (benchmark for new article detection)
+      // This allows real-time updates while saving memory and processing time
+      const limited = unique.slice(0, 5);
       
       if (limited.length === 0) {
         console.log(`⚠️ Playwright found 0 articles. This might be because:`);
