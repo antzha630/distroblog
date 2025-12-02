@@ -468,44 +468,45 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
         }}>
           <h2 className="card-title" style={{ margin: '0 0 16px 0' }}>Sources</h2>
           {!showAddForm && (
-            <button 
-              className="btn btn-primary"
-              onClick={() => {
-                // Clear any stale state when opening the form
-                setNewSource({ url: '', name: '', category: '' });
-                setFeedCheckResult(null);
-                setValidationError('');
-                setIsCheckingFeed(false);
-                setIsSettingUpScraping(false);
-                setShowAddForm(true);
-              }}
-              style={{
-                padding: '10px 20px',
-                fontSize: '1rem',
-                fontWeight: '500'
-              }}
-            >
-              + Add Source
-            </button>
-          )}
-          {sources.filter(s => s.monitoring_type === 'SCRAPING' && s.is_active).length > 0 && (
-            <button
-              onClick={handleReScrapeAll}
-              disabled={isReScrapingAll}
-              style={{
-                background: isReScrapingAll ? '#6c757d' : '#17a2b8',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: isReScrapingAll ? 'not-allowed' : 'pointer',
-                padding: '10px 20px',
-                fontSize: '1rem',
-                fontWeight: '500',
-                marginLeft: '10px'
-              }}
-            >
-              {isReScrapingAll ? '⏳ Re-scraping All...' : '🔄 Re-scrape All Sources'}
-            </button>
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+              <button 
+                className="btn btn-primary"
+                onClick={() => {
+                  // Clear any stale state when opening the form
+                  setNewSource({ url: '', name: '', category: '' });
+                  setFeedCheckResult(null);
+                  setValidationError('');
+                  setIsCheckingFeed(false);
+                  setIsSettingUpScraping(false);
+                  setShowAddForm(true);
+                }}
+                style={{
+                  padding: '10px 20px',
+                  fontSize: '1rem',
+                  fontWeight: '500'
+                }}
+              >
+                + Add Source
+              </button>
+              {sources.filter(s => s.monitoring_type === 'SCRAPING' && s.is_active).length > 0 && (
+                <button
+                  onClick={handleReScrapeAll}
+                  disabled={isReScrapingAll}
+                  style={{
+                    background: isReScrapingAll ? '#6c757d' : '#17a2b8',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: isReScrapingAll ? 'not-allowed' : 'pointer',
+                    padding: '10px 20px',
+                    fontSize: '1rem',
+                    fontWeight: '500'
+                  }}
+                >
+                  {isReScrapingAll ? '⏳ Re-scraping All...' : '🔄 Re-scrape All Sources'}
+                </button>
+              )}
+            </div>
           )}
         </div>
 
