@@ -477,8 +477,8 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
         }}>
           <h2 className="card-title" style={{ margin: '0 0 16px 0' }}>Sources</h2>
           {!showAddForm && (
-            <button 
-              className="btn btn-primary"
+          <button 
+            className="btn btn-primary"
               onClick={() => {
                 // Clear any stale state when opening the form
                 setNewSource({ url: '', name: '', category: '' });
@@ -488,14 +488,14 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
                 setIsSettingUpScraping(false);
                 setShowAddForm(true);
               }}
-              style={{
-                padding: '10px 20px',
-                fontSize: '1rem',
-                fontWeight: '500'
-              }}
-            >
+            style={{
+              padding: '10px 20px',
+              fontSize: '1rem',
+              fontWeight: '500'
+            }}
+          >
               + Add Source
-            </button>
+          </button>
           )}
         </div>
 
@@ -570,13 +570,13 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
                 <div style={{ fontSize: '0.85rem', color: '#666', marginBottom: '8px' }}>
                   💡 Tip: Enter the blog URL (e.g., https://example.com/blog) for better results
                 </div>
-                <input
-                  type="url"
-                  className="form-input"
-                  value={newSource.url}
-                  onChange={(e) => setNewSource({ ...newSource, url: e.target.value })}
-                  placeholder="https://example.com/blog"
-                  required
+                  <input
+                    type="url"
+                    className="form-input"
+                    value={newSource.url}
+                    onChange={(e) => setNewSource({ ...newSource, url: e.target.value })}
+                    placeholder="https://example.com/blog"
+                    required
                 />
                 <div style={{ fontSize: '0.8rem', color: '#6c757d', marginTop: '4px' }}>
                   Enter a website URL and click "Check for RSS Feed" below to see if it has an RSS feed or needs scraping.
@@ -687,10 +687,10 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
                   <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
                     {!isSettingUpScraping ? (
                       <>
-                        <button 
-                          type="button"
-                          className="btn btn-primary"
-                          onClick={handleSetupScraping}
+                    <button 
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={handleSetupScraping}
                         >
                           Yes, proceed with scraping
                         </button>
@@ -698,12 +698,12 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
                           type="button"
                           className="btn btn-secondary"
                           onClick={handleCancelScraping}
-                        >
+                    >
                           Cancel
                         </button>
                       </>
                     ) : (
-                      <>
+                        <>
                         <button 
                           type="button"
                           className="btn btn-primary"
@@ -712,15 +712,15 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
                         >
                           <div className="spinner"></div>
                           Setting up scraping...
-                        </button>
-                        <button 
-                          type="button"
-                          className="btn btn-secondary"
+                    </button>
+                    <button 
+                      type="button"
+                      className="btn btn-secondary"
                           onClick={handleStopScraping}
                           style={{ background: '#dc3545', borderColor: '#dc3545' }}
-                        >
+                    >
                           Stop
-                        </button>
+                    </button>
                       </>
                     )}
                   </div>
@@ -729,34 +729,34 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
 
               {/* Only show "Check for RSS Feed" button if we haven't checked yet */}
               {!feedCheckResult && (
-                <div style={{ display: 'flex', gap: '12px' }}>
-                  <button 
-                    type="submit" 
-                    className="btn btn-primary"
-                    disabled={isCheckingFeed || isValidating || !newSource.url || !newSource.name}
-                  >
-                    {isCheckingFeed ? (
-                      <>
-                        <div className="spinner"></div>
-                        Checking for RSS feed...
-                      </>
-                    ) : isValidating ? (
-                      <>
-                        <div className="spinner"></div>
-                        Adding source...
-                      </>
-                    ) : (
-                      'Check for RSS Feed'
-                    )}
-                  </button>
-                  <button 
-                    type="button"
-                    className="btn btn-secondary"
+              <div style={{ display: 'flex', gap: '12px' }}>
+                <button 
+                  type="submit" 
+                  className="btn btn-primary"
+                  disabled={isCheckingFeed || isValidating || !newSource.url || !newSource.name}
+                >
+                  {isCheckingFeed ? (
+                    <>
+                      <div className="spinner"></div>
+                      Checking for RSS feed...
+                    </>
+                  ) : isValidating ? (
+                    <>
+                      <div className="spinner"></div>
+                      Adding source...
+                    </>
+                  ) : (
+                    'Check for RSS Feed'
+                  )}
+                </button>
+                <button 
+                  type="button"
+                  className="btn btn-secondary"
                     onClick={handleCancel}
-                  >
-                    Cancel
-                  </button>
-                </div>
+                >
+                  Cancel
+                </button>
+              </div>
               )}
               
               {/* Show Cancel button when feed check is complete (for RSS feeds found or scraping option shown) */}

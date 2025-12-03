@@ -776,14 +776,43 @@ app.get('/api/monitor/last-checked', async (req, res) => {
   }
 });
 
-// Manual trigger for feed monitoring (for testing)
+// Manual trigger for feed monitoring (for "Check Now" button)
 app.post('/api/monitor/trigger', async (req, res) => {
-  try {
-    const results = await feedMonitor.checkAllFeeds();
-    res.json({ message: 'Feed monitoring completed', results });
+  const startTime = Date.now();
+  console.log(`\n🔔 [TRIGGER] Manual feed check triggered at ${new Date().toISOString()}`);
+  
+    try {
+      // Pass allowManual=true to bypass monitoring check
+      const results = await feedMonitor.checkAllFeeds(true);
+      const duration = Date.now() - startTime;
+      
+      const summary = {
+        totalSources: results.length,
+        successfulSources: results.filter(r => r.success).length,
+        failedSources: results.filter(r => !r.success).length,
+        totalNewArticles: results.reduce((sum, r) => sum + (r.newArticles || 0), 0),
+        duration: `${duration}ms`,
+        results: results
+      };
+      
+      console.log(`✅ [TRIGGER] Manual feed check completed in ${duration}ms`);
+      console.log(`📊 [TRIGGER] Summary: ${summary.successfulSources}/${summary.totalSources} sources successful, ${summary.totalNewArticles} new articles`);
+      
+      res.json({ 
+        success: true,
+        message: 'Feed check completed successfully', 
+        summary: summary,
+        results: results
+      });
   } catch (error) {
-    console.error('Error during manual monitoring:', error);
-    res.status(500).json({ error: 'Failed to check feeds' });
+    const duration = Date.now() - startTime;
+    console.error(`❌ [TRIGGER] Error during manual feed check (${duration}ms):`, error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to check feeds',
+      message: error.message,
+      duration: `${duration}ms`
+    });
   }
 });
 

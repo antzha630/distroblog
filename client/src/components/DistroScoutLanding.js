@@ -283,13 +283,13 @@ function DistroScoutLanding({ onArticlesSelected, onCheckNow, isCheckingFeeds })
             </button>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
-            <button 
-              onClick={handleCheckNow}
-              disabled={isRefreshing || isCheckingFeeds}
-              className="refresh-btn"
-            >
-              {isRefreshing || isCheckingFeeds ? '⏳ Checking...' : '🔍 Check Now'}
-            </button>
+          <button 
+            onClick={handleCheckNow}
+            disabled={isRefreshing || isCheckingFeeds}
+            className="refresh-btn"
+          >
+            {isRefreshing || isCheckingFeeds ? '⏳ Checking...' : '🔍 Check Now'}
+          </button>
             {lastChecked && (
               <div style={{ fontSize: '0.75rem', color: '#6c757d', marginTop: '4px' }}>
                 Last checked {formatLastChecked(lastChecked)}

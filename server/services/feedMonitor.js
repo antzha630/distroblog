@@ -214,22 +214,31 @@ class FeedMonitor {
   }
 
   // Check all monitored sources for new articles
-  async checkAllFeeds() {
-    if (!this.isMonitoring) {
-      console.log('Feed monitoring is stopped, skipping check');
+  // allowManual: if true, allows the check to run even if monitoring is stopped (for manual triggers)
+  async checkAllFeeds(allowManual = false) {
+    const startTime = Date.now();
+    const triggerType = allowManual ? 'MANUAL' : 'SCHEDULED';
+    console.log(`\n🚀 [CHECK NOW] Starting ${triggerType} feed check at ${new Date().toISOString()}`);
+    
+    if (!this.isMonitoring && !allowManual) {
+      console.log('⚠️  [CHECK NOW] Feed monitoring is stopped, skipping scheduled check');
       return [];
+    }
+    
+    if (!this.isMonitoring && allowManual) {
+      console.log('ℹ️  [CHECK NOW] Feed monitoring is stopped, but allowing manual check');
     }
     
     // Skip if scraping is in progress (re-scrape or other scraping operations)
     if (this.isScrapingInProgress) {
-      console.log('⏸️  Feed monitoring paused: scraping operation in progress');
+      console.log('⏸️  [CHECK NOW] Feed monitoring paused: scraping operation in progress');
       return [];
     }
 
     try {
       const sources = await database.getAllSources();
       if (sources.length === 0) {
-        console.log('No sources to check');
+        console.log('ℹ️  [CHECK NOW] No sources to check');
         return [];
       }
 
@@ -238,85 +247,120 @@ class FeedMonitor {
       const pausedSources = sources.filter(source => source.is_paused);
       
       if (pausedSources.length > 0) {
-        console.log(`⏸️ Skipping ${pausedSources.length} paused sources: ${pausedSources.map(s => s.name).join(', ')}`);
+        console.log(`⏸️  [CHECK NOW] Skipping ${pausedSources.length} paused sources: ${pausedSources.map(s => s.name).join(', ')}`);
       }
 
       if (activeSources.length === 0) {
-        console.log('No active sources to check');
+        console.log('ℹ️  [CHECK NOW] No active sources to check');
         return [];
       }
 
-      console.log(`🔍 Checking ${activeSources.length} active sources for new articles...`);
+      console.log(`🔍 [CHECK NOW] Checking ${activeSources.length} active sources for new articles...`);
       const results = [];
       
-      for (const source of activeSources) {
+      // MEMORY OPTIMIZATION: Process sources sequentially with delays
+      // Process all new articles but in batches with proper cleanup to stay under 512MB
+      const BATCH_SIZE = 3; // Process articles in batches to control memory
+      let totalNewArticlesProcessed = 0;
+      
+      for (let i = 0; i < activeSources.length; i++) {
+        const source = activeSources[i];
+        console.log(`\n📊 [CHECK NOW] [${i + 1}/${activeSources.length}] Processing source: ${source.name}`);
         try {
           const monitoringType = source.monitoring_type || 'RSS';
           let newArticles = [];
           
           if (monitoringType === 'SCRAPING') {
             // Scraping: get articles and check for new ones
-            console.log(`🔍 Checking scraping source: ${source.name} (${source.url})`);
+            console.log(`🔍 [CHECK NOW] [${source.name}] Scraping articles from: ${source.url}`);
+            const scrapeStartTime = Date.now();
             const articles = await this.webScraper.scrapeArticles(source);
+            const scrapeDuration = Date.now() - scrapeStartTime;
+            console.log(`✅ [CHECK NOW] [${source.name}] Scraped ${articles.length} articles in ${scrapeDuration}ms`);
             
             // MEMORY OPTIMIZATION: Close webScraper browser immediately after scraping
             // to free memory before processing articles
             try {
               await this.webScraper.close();
-              console.log(`🧹 Closed webScraper browser for ${source.name}`);
+              console.log(`🧹 [CHECK NOW] [${source.name}] Closed webScraper browser`);
             } catch (closeError) {
-              console.warn(`⚠️  Could not close webScraper browser: ${closeError.message}`);
+              console.warn(`⚠️  [CHECK NOW] [${source.name}] Could not close webScraper browser: ${closeError.message}`);
             }
             
-            // MEMORY OPTIMIZATION: Small delay to allow garbage collection
+            // MEMORY OPTIMIZATION: Delay to allow garbage collection
             await new Promise(resolve => setTimeout(resolve, 500));
             
-            console.log(`📰 Found ${articles.length} articles from ${source.name}, checking for new ones...`);
+            console.log(`📰 [CHECK NOW] [${source.name}] Checking ${articles.length} articles for new ones...`);
             
+            // MEMORY OPTIMIZATION: Check all articles, but filter out existing ones first (no DB queries in loop)
+            // Then process new ones in batches to control memory usage
+            const newArticlesToProcess = [];
+            let checkedCount = 0;
+            
+            // First pass: identify all new articles (quick check, no heavy processing)
             for (const article of articles) {
+              checkedCount++;
               try {
                 const exists = await database.articleExists(article.link);
                 if (exists) {
-                  console.log(`ℹ️  [${source.name}] Article already exists, skipping: "${article.title.substring(0, 50)}..."`);
-                  continue;
+                  continue; // Skip existing articles
                 }
-                
-                // NEW ARTICLE FOUND
-                console.log(`🆕 [${source.name}] NEW article found: "${article.title.substring(0, 50)}..."`);
+                // This is a new article - add to queue
+                newArticlesToProcess.push(article);
+              } catch (err) {
+                console.warn(`⚠️  [CHECK NOW] [${source.name}] Error checking article existence: ${err.message}`);
+              }
+            }
+            
+            console.log(`📊 [CHECK NOW] [${source.name}] Found ${newArticlesToProcess.length} new articles out of ${checkedCount} checked`);
+            
+            if (newArticlesToProcess.length === 0) {
+              console.log(`ℹ️  [CHECK NOW] [${source.name}] No new articles found`);
+            }
+            
+            // Second pass: Process new articles in batches with optimized scraping (better titles/dates)
+            let newArticlesFound = 0;
+            for (let batchIdx = 0; batchIdx < newArticlesToProcess.length; batchIdx += BATCH_SIZE) {
+              const batch = newArticlesToProcess.slice(batchIdx, batchIdx + BATCH_SIZE);
+              console.log(`🔄 [CHECK NOW] [${source.name}] Processing batch ${Math.floor(batchIdx / BATCH_SIZE) + 1}/${Math.ceil(newArticlesToProcess.length / BATCH_SIZE)} (${batch.length} articles)`);
+              
+              // Process batch sequentially (not parallel) to control memory
+              for (const article of batch) {
+                try {
+                  newArticlesFound++;
+                  totalNewArticlesProcessed++;
+                  console.log(`🆕 [CHECK NOW] [${source.name}] NEW article #${newArticlesFound}: "${article.title.substring(0, 50)}..."`);
+                  console.log(`📊 [CHECK NOW] Total new articles processed so far: ${totalNewArticlesProcessed}`);
+                  
                   // NEW ARTICLE FOUND - fetch full content and metadata
                   // Ensure title is never null or empty (simple check)
                   let originalTitle = (article.title && article.title.trim()) ? article.title.trim() : 'Untitled Article';
                   
                   // Skip if link is invalid
                   if (!article.link || typeof article.link !== 'string') {
+                    console.log(`⚠️  [CHECK NOW] [${source.name}] Invalid link, skipping article`);
                     continue;
                   }
                   
-                  // Fetch full content and metadata from article page (better titles/dates)
-                  // MEMORY OPTIMIZATION: Use extractArticleMetadata which can also return content
-                  // to avoid creating two separate browser instances
-                  let fullContent = null;
-                  let pubDate = article.datePublished ? new Date(article.datePublished) : null;
+                  // Use optimized scraping logic (same as re-scrape) to get better titles/dates
+                  // CRITICAL: Fetch metadata from article page for better title/date
+                  // This is what makes the optimized scraping work - same as re-scrape
+                  let improvedTitle = article.title.trim();
+                  let improvedDate = article.datePublished ? new Date(article.datePublished) : null;
                   
                   try {
-                    console.log(`🔍 [${article.link.substring(0, 60)}...] Fetching metadata and content...`);
+                    console.log(`🔍 [CHECK NOW] [${source.name}] Fetching optimized metadata (title/date) for: ${article.link.substring(0, 60)}...`);
+                    const metadataStartTime = Date.now();
                     
-                    // Fetch metadata (title/date) from article page - this uses Playwright
+                    // Use extractArticleMetadata - same optimized logic as re-scrape
                     const metadata = await this.extractArticleMetadata(article.link);
+                    const metadataDuration = Date.now() - metadataStartTime;
+                    console.log(`✅ [CHECK NOW] [${source.name}] Optimized metadata fetched in ${metadataDuration}ms`);
                     
-                    // Then fetch full content (will reuse browser logic but may create new instance)
-                    // For memory safety, we'll fetch content separately but add delay after
-                    fullContent = await this.fetchFullArticleContent(article.link);
-                    if (fullContent) {
-                      console.log(`✅ [${article.link.substring(0, 60)}...] Content fetched: ${fullContent.length} chars`);
-                    } else {
-                      console.log(`⚠️  [${article.link.substring(0, 60)}...] No content fetched`);
-                    }
+                    // MEMORY OPTIMIZATION: Delay after metadata fetch to allow browser cleanup
+                    await new Promise(resolve => setTimeout(resolve, 500));
                     
-                    // MEMORY OPTIMIZATION: Small delay to allow browser cleanup
-                    await new Promise(resolve => setTimeout(resolve, 300));
-                    
-                    // Use article page title if available and better
+                    // Use article page title if available and better (same logic as re-scrape)
                     if (metadata.title && metadata.title.trim().length > 10) {
                       const newTitle = metadata.title.trim();
                       const newTitleLower = newTitle.toLowerCase();
@@ -337,63 +381,58 @@ class FeedMonitor {
                                        ));
                       
                       if (!isGeneric) {
-                        console.log(`📝 [${article.link.substring(0, 60)}...] Using better title: "${newTitle.substring(0, 60)}..." (was: "${originalTitle.substring(0, 60)}...")`);
-                        originalTitle = newTitle;
+                        improvedTitle = newTitle;
+                        console.log(`📝 [CHECK NOW] [${source.name}] Using optimized title: "${improvedTitle.substring(0, 60)}..."`);
                       } else {
-                        console.log(`⚠️  [${article.link.substring(0, 60)}...] Article page title is generic, keeping original: "${originalTitle.substring(0, 60)}..."`);
+                        console.log(`⚠️  [CHECK NOW] [${source.name}] Article page title is generic, keeping original`);
                       }
                     } else {
-                      console.log(`⚠️  [${article.link.substring(0, 60)}...] Article page title not found or too short, keeping original: "${originalTitle.substring(0, 60)}..."`);
+                      console.log(`⚠️  [CHECK NOW] [${source.name}] Article page title not found, keeping original`);
                     }
                     
-                    // Use article page date if available
+                    // Use article page date if available (same logic as re-scrape)
                     if (metadata.pubDate) {
                       try {
                         const articlePageDate = new Date(metadata.pubDate);
                         if (!isNaN(articlePageDate.getTime())) {
-                          pubDate = articlePageDate;
-                          console.log(`📅 [${article.link.substring(0, 60)}...] Found date from article page: ${pubDate.toISOString()}`);
+                          improvedDate = articlePageDate;
+                          console.log(`📅 [CHECK NOW] [${source.name}] Found optimized date: ${improvedDate.toISOString()}`);
                         }
                       } catch (e) {
-                        console.log(`⚠️  [${article.link.substring(0, 60)}...] Invalid date format: ${metadata.pubDate}`);
+                        console.log(`⚠️  [CHECK NOW] [${source.name}] Invalid date format: ${metadata.pubDate}`);
                       }
                     } else {
-                      console.log(`⚠️  [${article.link.substring(0, 60)}...] No date found on article page`);
+                      console.log(`⚠️  [CHECK NOW] [${source.name}] No date found on article page`);
                     }
                   } catch (err) {
                     // If fetching fails, use what we have from listing page
-                    console.log(`❌ [${article.link.substring(0, 60)}...] Could not fetch article page content/metadata: ${err.message}`);
+                    console.log(`❌ [CHECK NOW] [${source.name}] Could not fetch optimized metadata: ${err.message} (using listing page data)`);
                   }
                   
-                  // Use full content if available, otherwise use scraped content
-                  const articleContent = fullContent || article.content || article.description || '';
+                  // Use scraped content from listing page (skip full content fetch to save memory)
+                  const articleContent = article.content || article.description || '';
                   
-                  if (articleContent.length < 200) {
-                    console.log(`⚠️  [${article.link.substring(0, 60)}...] Content is short (${articleContent.length} chars), might be incomplete`);
-                  }
+                  // MEMORY OPTIMIZATION: Skip AI summary generation for "Check Now" to save memory
+                  // AI summaries can be generated later when articles are selected/reviewed
+                  const enhancedContent = {
+                    content: articleContent,
+                    preview: article.description || article.contentSnippet || articleContent.substring(0, 200) + '...',
+                    title: improvedTitle
+                  };
                   
-                  // Generate AI-enhanced preview/summary
-                  console.log(`🤖 [${article.link.substring(0, 60)}...] Generating AI summary...`);
-                  const enhancedContent = await this.enhanceArticleContent({
-                    ...article,
-                    title: originalTitle,
-                    content: articleContent
-                  });
-                  console.log(`✅ [${article.link.substring(0, 60)}...] AI summary generated (${enhancedContent.preview?.length || 0} chars)`);
-                  
-                  // Format date
+                  // Format date using improved date
                   let finalPubDate = null;
-                  if (pubDate && !isNaN(pubDate.getTime())) {
-                    finalPubDate = pubDate.toISOString();
+                  if (improvedDate && !isNaN(improvedDate.getTime())) {
+                    finalPubDate = improvedDate.toISOString();
                   }
                   
                   const articleObj = {
                     sourceId: source.id,
-                    title: originalTitle, // Use best available title
+                    title: improvedTitle, // Use optimized title from article page
                     link: article.link,
                     content: enhancedContent.content || articleContent || '',
                     preview: enhancedContent.preview || article.description || article.contentSnippet || '',
-                    pubDate: finalPubDate,
+                    pubDate: finalPubDate, // Use optimized date from article page
                     sourceName: source.name || 'Unknown Source',
                     category: source.category || 'General',
                     status: 'new'
@@ -408,32 +447,48 @@ class FeedMonitor {
                       pubDate: articleObj.pubDate
                     });
                     
-                    // Log new article found
-                    console.log(`✨ NEW ARTICLE: "${articleObj.title}" | Date: ${articleObj.pubDate || 'NO DATE'} | Link: ${articleObj.link.substring(0, 60)}...`);
+                    // Log new article found with optimized data
+                    console.log(`✨ [CHECK NOW] [${source.name}] NEW ARTICLE ADDED (with optimized title/date): "${articleObj.title.substring(0, 60)}..." | Date: ${articleObj.pubDate || 'NO DATE'}`);
                     
-                    // MEMORY OPTIMIZATION: Small delay after each new article to allow garbage collection
-                    await new Promise(resolve => setTimeout(resolve, 200));
+                    // MEMORY OPTIMIZATION: Delay after each new article to allow garbage collection
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                  }
+                } catch (articleErr) {
+                  console.error(`❌ [CHECK NOW] [${source.name}] Error processing article:`, articleErr.message);
+                  // Continue with next article
                 }
-              } catch (err) {
-                console.error(`Error processing article from ${source.name}:`, err.message);
-                // Skip duplicates or errors
+              }
+              
+              // MEMORY OPTIMIZATION: Delay after each batch to allow garbage collection
+              if (batchIdx + BATCH_SIZE < newArticlesToProcess.length) {
+                console.log(`⏸️  [CHECK NOW] [${source.name}] Pausing 1s after batch to allow memory cleanup...`);
+                await new Promise(resolve => setTimeout(resolve, 1000));
               }
             }
             
             // MEMORY OPTIMIZATION: Delay after processing all articles from a source
-            await new Promise(resolve => setTimeout(resolve, 500));
+            await new Promise(resolve => setTimeout(resolve, 1000));
             
             if (newArticles.length > 0) {
-              console.log(`✅ Added ${newArticles.length} new article(s) from ${source.name}`);
+              console.log(`✅ [CHECK NOW] [${source.name}] Added ${newArticles.length} new article(s)`);
             } else {
-              console.log(`ℹ️  No new articles found for ${source.name} (checked ${articles.length} most recent benchmark articles, all already in database)`);
+              console.log(`ℹ️  [CHECK NOW] [${source.name}] No new articles found (checked ${articles.length} articles, all already in database)`);
             }
             
             // Update last_checked timestamp (scraping result is already stored by webScraper)
             await database.updateSourceLastChecked(source.id);
           } else {
-            // RSS/JSON Feed: use existing method
-            newArticles = await this.checkFeedLimited(source, 5);
+            // RSS/JSON Feed: process ALL new articles from the feed
+            console.log(`📡 [CHECK NOW] [${source.name}] Checking RSS/JSON feed: ${source.url}`);
+            const rssStartTime = Date.now();
+            
+            // Process ALL articles from RSS feed (most feeds have 10-30 items, check up to 100 to be safe)
+            // This ensures we get ALL new articles, not just a limited number
+            newArticles = await this.checkFeedLimited(source, 100); // Check up to 100 items for new articles
+            const rssDuration = Date.now() - rssStartTime;
+            console.log(`✅ [CHECK NOW] [${source.name}] RSS check completed in ${rssDuration}ms, found ${newArticles.length} new articles`);
+            
+            totalNewArticlesProcessed += newArticles.length;
             
             // MEMORY OPTIMIZATION: Small delay after RSS feed processing
             await new Promise(resolve => setTimeout(resolve, 300));
@@ -446,8 +501,13 @@ class FeedMonitor {
             success: true,
             monitoring_type: monitoringType
           });
+          
+          // MEMORY OPTIMIZATION: Delay between sources to allow garbage collection
+          if (i < activeSources.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+          }
         } catch (error) {
-          console.error(`Error checking ${source.monitoring_type || 'RSS'} source ${source.name}:`, error.message);
+          console.error(`❌ [CHECK NOW] [${source.name}] Error checking ${source.monitoring_type || 'RSS'} source:`, error.message);
           results.push({
             source: source.name,
             url: source.url,
@@ -458,7 +518,14 @@ class FeedMonitor {
         }
       }
       
-      console.log(`✅ Feed check completed. ${results.filter(r => r.success).length}/${results.length} active sources successful`);
+      const totalDuration = Date.now() - startTime;
+      const successfulSources = results.filter(r => r.success).length;
+      const totalNewArticles = results.reduce((sum, r) => sum + r.newArticles, 0);
+      
+      console.log(`\n✅ [CHECK NOW] Feed check completed in ${totalDuration}ms`);
+      console.log(`📊 [CHECK NOW] Summary: ${successfulSources}/${results.length} sources successful, ${totalNewArticles} new articles found`);
+      console.log(`🚀 [CHECK NOW] Finished at ${new Date().toISOString()}\n`);
+      
       return results;
     } catch (error) {
       console.error('Error checking all feeds:', error);
@@ -1477,7 +1544,7 @@ class FeedMonitor {
           .replace(/^([^|–—]+)[|\-–—]\s*/i, '')      // Remove "Site | " prefix
           .replace(/^[^:]+:\s*/i, '')                // Remove "Site: " prefix
           .trim();
-        
+      
         // If title still contains separators, use the longest part (usually the article title)
         const titleParts = title.split(/[|\-–—]/);
         if (titleParts.length > 1) {
