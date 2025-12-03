@@ -1029,6 +1029,9 @@ app.post('/api/sources/:id/re-scrape', async (req, res) => {
       const webScraper = new WebScraper();
       const articles = await webScraper.scrapeArticles(source);
       
+      // CRITICAL: Close Playwright browser immediately after scraping to free memory
+      await webScraper.close();
+      
       console.log(`📰 [Re-scrape] Found ${articles.length} articles from listing page, checking for existing ones to update...`);
       if (articles.length > 0) {
         articles.forEach((article, i) => {
@@ -1043,12 +1046,40 @@ app.post('/api/sources/:id/re-scrape', async (req, res) => {
       
       // CRITICAL: Get ALL existing articles for this source from database
       // This ensures we check old bad articles even if they're no longer in current scrape
-      const allExistingArticles = await database.getArticlesBySourceId(source.id);
-      console.log(`📋 [Re-scrape] Found ${allExistingArticles.length} existing articles in database for ${source.name}`);
+      // MEMORY OPTIMIZATION: Limit to 100 articles per source to avoid memory issues
+      const allExistingArticlesRaw = await database.getArticlesBySourceId(source.id);
+      const allExistingArticles = allExistingArticlesRaw.slice(0, 100); // Limit to 100 most recent
+      if (allExistingArticlesRaw.length > 100) {
+        console.log(`⚠️  [Re-scrape] Limiting to 100 most recent articles (${allExistingArticlesRaw.length} total) to save memory`);
+      }
+      console.log(`📋 [Re-scrape] Checking ${allExistingArticles.length} existing articles in database for ${source.name}`);
+      
+      // MEMORY OPTIMIZATION: Pre-fetch duplicate title check data ONCE (not per article)
+      let duplicateTitleCache = null;
+      const getDuplicateTitles = async (title) => {
+        if (!duplicateTitleCache) {
+          // Load once, not per article
+          const allArticles = await database.getAllArticles(1000);
+          duplicateTitleCache = new Map();
+          allArticles.forEach(a => {
+            const key = (a.title || '').toLowerCase().trim();
+            if (key) {
+              if (!duplicateTitleCache.has(key)) {
+                duplicateTitleCache.set(key, []);
+              }
+              duplicateTitleCache.get(key).push(a);
+            }
+          });
+        }
+        const key = (title || '').toLowerCase().trim();
+        if (!key) return [];
+        const matches = duplicateTitleCache.get(key) || [];
+        return matches;
+      };
       
       // First pass: Check ALL existing articles for bad titles/URLs and delete them
       console.log(`\n🔍 [Re-scrape] First pass: Checking all existing articles for bad titles/URLs...`);
-      const batchSize = 5;
+      const batchSize = 3; // Reduced from 5 to save memory
       for (let i = 0; i < allExistingArticles.length; i += batchSize) {
         const batch = allExistingArticles.slice(i, i + batchSize);
         
@@ -1099,16 +1130,13 @@ app.post('/api/sources/:id/re-scrape', async (req, res) => {
               }
               
               // Check for duplicate titles (same title = likely category pages)
-              const allArticles = await database.getAllArticles(1000);
-              const duplicateTitles = allArticles.filter(a => 
-                a.id !== existing.id && 
-                a.title && 
-                a.title.toLowerCase().trim() === currentTitleLower
-              );
+              // Use cached duplicate check to avoid loading all articles repeatedly
+              const duplicateTitles = await getDuplicateTitles(currentTitleLower);
+              const otherDuplicates = duplicateTitles.filter(a => a.id !== existing.id);
               
               // If more than 2 articles share this exact title, it's likely a category page
-              if (duplicateTitles.length > 2) {
-                console.log(`🗑️  [Re-scrape] Deleting article with duplicate generic title (${duplicateTitles.length + 1} total): "${existing.title}" (URL: ${existing.link})`);
+              if (otherDuplicates.length > 2) {
+                console.log(`🗑️  [Re-scrape] Deleting article with duplicate generic title (${otherDuplicates.length + 1} total): "${existing.title}" (URL: ${existing.link})`);
                 await database.deleteArticleByLink(existing.link);
                 deleted++;
                 continue;
@@ -1126,11 +1154,15 @@ app.post('/api/sources/:id/re-scrape', async (req, res) => {
         }
       }
       
+      // Clear duplicate cache after first pass to free memory
+      duplicateTitleCache = null;
+      
       console.log(`✅ [Re-scrape] First pass complete: Deleted ${deleted} bad articles`);
       
       // Second pass: Process current scrape results to update/improve existing articles
+      // LIMIT to 5 articles per source to save memory
       console.log(`\n🔍 [Re-scrape] Second pass: Processing current scrape results to update existing articles...`);
-      const articlesToProcess = articles.slice(0, 30);
+      const articlesToProcess = articles.slice(0, 5); // Reduced from 30 to 5
       
       for (let i = 0; i < articlesToProcess.length; i += batchSize) {
         const batch = articlesToProcess.slice(i, i + batchSize);
@@ -1168,16 +1200,13 @@ app.post('/api/sources/:id/re-scrape', async (req, res) => {
             const currentTitleLower = (existing.title || '').toLowerCase().trim();
             if (currentTitleLower) {
               // Check if this title appears on multiple articles (likely a category page)
-              const allArticles = await database.getAllArticles(1000);
-              const duplicateTitles = allArticles.filter(a => 
-                a.id !== existing.id && 
-                a.title && 
-                a.title.toLowerCase().trim() === currentTitleLower
-              );
+              // Use cached duplicate check to avoid loading all articles repeatedly
+              const duplicateTitles = await getDuplicateTitles(currentTitleLower);
+              const otherDuplicates = duplicateTitles.filter(a => a.id !== existing.id);
               
               // If more than 2 articles share this exact title, it's likely a category page
-              if (duplicateTitles.length > 2) {
-                console.log(`🗑️  [Re-scrape] Deleting article with duplicate generic title (${duplicateTitles.length + 1} total): "${existing.title}" (URL: ${article.link})`);
+              if (otherDuplicates.length > 2) {
+                console.log(`🗑️  [Re-scrape] Deleting article with duplicate generic title (${otherDuplicates.length + 1} total): "${existing.title}" (URL: ${article.link})`);
                 await database.deleteArticleByLink(article.link);
                 deleted++;
                 continue;
