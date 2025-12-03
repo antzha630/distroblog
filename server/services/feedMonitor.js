@@ -1305,27 +1305,16 @@ class FeedMonitor {
         await page.close();
         await browser.close();
         
-        // If we got good metadata from Playwright, use it
-        if (metadata.title && metadata.title.length > 10) {
-          // Fetch content using the updated fetchFullArticleContent (which also tries Playwright)
-          let content = '';
-          try {
-            content = await this.fetchFullArticleContent(url);
-          } catch (contentError) {
-            // If content fetch fails, use description as fallback
-            if (contentError.response && contentError.response.status === 403) {
-              content = metadata.description || '';
-            }
-          }
-          
-          return {
-            title: metadata.title,
-            content: content,
-            pubDate: metadata.pubDate,
-            sourceName: '',
-            description: metadata.description
-          };
-        }
+        // MEMORY OPTIMIZATION: Don't fetch full content here - just return metadata
+        // Full content fetching creates another browser instance, doubling memory usage
+        // For re-scrape operations, we only need title/date, not full content
+        return {
+          title: metadata.title,
+          content: '', // Skip content fetch to save memory
+          pubDate: metadata.pubDate,
+          sourceName: '',
+          description: metadata.description
+        };
       } catch (playwrightError) {
         // Playwright failed - fall back to static scraping
         if (browser) {

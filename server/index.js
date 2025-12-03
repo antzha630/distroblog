@@ -1019,6 +1019,12 @@ app.post('/api/sources/:id/re-scrape', async (req, res) => {
   
   console.log(`\n🔄 [Re-scrape] Starting re-scrape for source: ${source.name} (${source.url})`);
   
+  // CRITICAL: Close feedMonitor's browser BEFORE setting lock to free memory
+  if (feedMonitor.webScraper && feedMonitor.webScraper.browser) {
+    console.log('🔒 [Re-scrape] Closing feedMonitor browser before re-scrape...');
+    await feedMonitor.webScraper.close();
+  }
+  
   // Set lock to prevent automatic feed monitoring from running during re-scrape
   feedMonitor.isScrapingInProgress = true;
   console.log('🔒 [Re-scrape] Pausing automatic feed monitoring during re-scrape');
@@ -1219,9 +1225,12 @@ app.post('/api/sources/:id/re-scrape', async (req, res) => {
             let improvedDate = article.datePublished ? new Date(article.datePublished) : null;
             let shouldDelete = false;
             
-            try {
-              console.log(`🔍 [Re-scrape] Fetching article page metadata for: ${article.link.substring(0, 60)}...`);
-              const metadata = await feedMonitor.extractArticleMetadata(article.link);
+              try {
+                console.log(`🔍 [Re-scrape] Fetching article page metadata for: ${article.link.substring(0, 60)}...`);
+                const metadata = await feedMonitor.extractArticleMetadata(article.link);
+                
+                // MEMORY OPTIMIZATION: Small delay after each metadata fetch to allow browser cleanup
+                await new Promise(resolve => setTimeout(resolve, 500));
               
               // Use article page title if available and better
               if (metadata.title && metadata.title.trim().length > 10) {
@@ -1453,15 +1462,21 @@ app.post('/api/sources/re-scrape-all', async (req, res) => {
     // Process sources sequentially to avoid memory issues
     for (let i = 0; i < scrapingSources.length; i++) {
       const source = scrapingSources[i];
-      console.log(`\n[${i + 1}/${scrapingSources.length}] [Bulk Re-scrape] Processing: ${source.name} (${source.url})`);
+    console.log(`\n[${i + 1}/${scrapingSources.length}] [Bulk Re-scrape] Processing: ${source.name} (${source.url})`);
+    
+    // CRITICAL: Close any existing browsers before starting new scrape
+    if (feedMonitor.webScraper && feedMonitor.webScraper.browser) {
+      console.log('🔒 [Bulk Re-scrape] Closing feedMonitor browser before scraping...');
+      await feedMonitor.webScraper.close();
+    }
+    
+    try {
+      const WebScraper = require('./services/webScraper');
+      const webScraper = new WebScraper();
+      const articles = await webScraper.scrapeArticles(source);
       
-      try {
-        const WebScraper = require('./services/webScraper');
-        const webScraper = new WebScraper();
-        const articles = await webScraper.scrapeArticles(source);
-        
-        // CRITICAL: Close Playwright browser immediately after scraping to free memory
-        await webScraper.close();
+      // CRITICAL: Close Playwright browser immediately after scraping to free memory
+      await webScraper.close();
         
         let updated = 0;
         let deleted = 0;
