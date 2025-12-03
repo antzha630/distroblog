@@ -629,6 +629,17 @@ class Database {
     return result.rows;
   }
 
+  async getArticlesBySourceId(sourceId) {
+    const result = await this.pool.query(`
+      SELECT a.*, s.name as source_name, s.monitoring_type, s.url as source_url
+      FROM articles a 
+      LEFT JOIN sources s ON a.source_id = s.id 
+      WHERE a.source_id = $1
+      ORDER BY COALESCE(a.pub_date, a.created_at) DESC
+    `, [sourceId]);
+    return result.rows;
+  }
+
   async updateArticleContent(id, title, content, preview) {
     const result = await this.pool.query(`
       UPDATE articles 

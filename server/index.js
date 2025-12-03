@@ -1041,12 +1041,97 @@ app.post('/api/sources/:id/re-scrape', async (req, res) => {
       let errors = 0;
       const updates = [];
       
-      // Limit to first 30 articles to avoid memory issues on free tier
-      // Process in smaller batches to prevent memory spikes
+      // CRITICAL: Get ALL existing articles for this source from database
+      // This ensures we check old bad articles even if they're no longer in current scrape
+      const allExistingArticles = await database.getArticlesBySourceId(source.id);
+      console.log(`📋 [Re-scrape] Found ${allExistingArticles.length} existing articles in database for ${source.name}`);
+      
+      // First pass: Check ALL existing articles for bad titles/URLs and delete them
+      console.log(`\n🔍 [Re-scrape] First pass: Checking all existing articles for bad titles/URLs...`);
+      const batchSize = 5;
+      for (let i = 0; i < allExistingArticles.length; i += batchSize) {
+        const batch = allExistingArticles.slice(i, i + batchSize);
+        
+        for (const existing of batch) {
+          try {
+            if (!existing.link || !existing.title) continue;
+            
+            // Check if this is a non-article page (should be deleted)
+            try {
+              const urlObj = new URL(existing.link);
+              const pathname = urlObj.pathname.toLowerCase();
+              const isNonArticlePage = pathname === '/search' ||
+                                      pathname.startsWith('/c/') ||
+                                      pathname.match(/^\/[a-z]{2}$/i) ||
+                                      pathname.match(/^\/tag[s]?\/|\/category\/|\/archive\/|\/author\//i) ||
+                                      pathname.includes('/search?') ||
+                                      // Check for category pages like /blog/blockchain-web3
+                                      pathname.match(/\/blog\/(blockchain-web3|cybersecurity|company-updates|io-intelligence|ai-infrastructure-compute|ai-startup-corner|developer-resources)/i);
+              
+              if (isNonArticlePage) {
+                console.log(`🗑️  [Re-scrape] Deleting non-article page: ${existing.link}`);
+                await database.deleteArticleByLink(existing.link);
+                deleted++;
+                continue;
+              }
+            } catch (urlError) {
+              // Invalid URL, skip
+            }
+            
+            // Check for generic titles (category pages)
+            const currentTitleLower = (existing.title || '').toLowerCase().trim();
+            if (currentTitleLower) {
+              const isGenericTitle = currentTitleLower.length < 25 && (
+                currentTitleLower === 'blockchain web3' ||
+                currentTitleLower === 'cybersecurity' ||
+                currentTitleLower === 'company updates' ||
+                currentTitleLower === 'io intelligence' ||
+                currentTitleLower === 'ai infrastructure compute' ||
+                currentTitleLower === 'ai startup corner' ||
+                currentTitleLower === 'developer resources'
+              );
+              
+              if (isGenericTitle) {
+                console.log(`🗑️  [Re-scrape] Deleting article with generic title: "${existing.title}" (URL: ${existing.link})`);
+                await database.deleteArticleByLink(existing.link);
+                deleted++;
+                continue;
+              }
+              
+              // Check for duplicate titles (same title = likely category pages)
+              const allArticles = await database.getAllArticles(1000);
+              const duplicateTitles = allArticles.filter(a => 
+                a.id !== existing.id && 
+                a.title && 
+                a.title.toLowerCase().trim() === currentTitleLower
+              );
+              
+              // If more than 2 articles share this exact title, it's likely a category page
+              if (duplicateTitles.length > 2) {
+                console.log(`🗑️  [Re-scrape] Deleting article with duplicate generic title (${duplicateTitles.length + 1} total): "${existing.title}" (URL: ${existing.link})`);
+                await database.deleteArticleByLink(existing.link);
+                deleted++;
+                continue;
+              }
+            }
+          } catch (err) {
+            console.error(`❌ [Re-scrape] Error checking existing article ${existing.link}:`, err);
+            errors++;
+          }
+        }
+        
+        // Small delay between batches
+        if (i + batchSize < allExistingArticles.length) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
+      
+      console.log(`✅ [Re-scrape] First pass complete: Deleted ${deleted} bad articles`);
+      
+      // Second pass: Process current scrape results to update/improve existing articles
+      console.log(`\n🔍 [Re-scrape] Second pass: Processing current scrape results to update existing articles...`);
       const articlesToProcess = articles.slice(0, 30);
       
-      // Process articles in batches of 3 to avoid memory spikes
-      const batchSize = 3;
       for (let i = 0; i < articlesToProcess.length; i += batchSize) {
         const batch = articlesToProcess.slice(i, i + batchSize);
         
@@ -1308,9 +1393,9 @@ app.post('/api/sources/re-scrape-all', async (req, res) => {
   try {
     console.log('\n🔄 [Bulk Re-scrape] Starting bulk re-scrape of all scraping sources...');
     
-    // Get all scraping sources
+    // Get all scraping sources (active = not paused)
     const allSources = await database.getAllSources();
-    const scrapingSources = allSources.filter(s => s.monitoring_type === 'SCRAPING' && s.is_active);
+    const scrapingSources = allSources.filter(s => s.monitoring_type === 'SCRAPING' && !s.is_paused);
     
     if (scrapingSources.length === 0) {
       console.log('⚠️  [Bulk Re-scrape] No active scraping sources found');
@@ -1349,10 +1434,99 @@ app.post('/api/sources/re-scrape-all', async (req, res) => {
         let deleted = 0;
         let errors = 0;
         
-        // Process articles in small batches
-        const batchSize = 3;
-        for (let j = 0; j < Math.min(articles.length, 10); j += batchSize) {
-          const batch = articles.slice(j, j + batchSize);
+        // CRITICAL: Get ALL existing articles for this source from database
+        // This ensures we check old bad articles even if they're no longer in current scrape
+        const allExistingArticles = await database.getArticlesBySourceId(source.id);
+        console.log(`📋 [Bulk Re-scrape] Found ${allExistingArticles.length} existing articles in database for ${source.name}`);
+        
+        // First pass: Check ALL existing articles for bad titles/URLs and delete them
+        console.log(`\n🔍 [Bulk Re-scrape] First pass: Checking all existing articles for bad titles/URLs...`);
+        const batchSize = 5;
+        for (let j = 0; j < allExistingArticles.length; j += batchSize) {
+          const batch = allExistingArticles.slice(j, j + batchSize);
+          
+          for (const existing of batch) {
+            try {
+              if (!existing.link || !existing.title) continue;
+              
+              // Check if this is a non-article page (should be deleted)
+              try {
+                const urlObj = new URL(existing.link);
+                const pathname = urlObj.pathname.toLowerCase();
+                const isNonArticlePage = pathname === '/search' ||
+                                        pathname.startsWith('/c/') ||
+                                        pathname.match(/^\/[a-z]{2}$/i) ||
+                                        pathname.match(/^\/tag[s]?\/|\/category\/|\/archive\/|\/author\//i) ||
+                                        pathname.includes('/search?') ||
+                                        // Check for category pages like /blog/blockchain-web3
+                                        pathname.match(/\/blog\/(blockchain-web3|cybersecurity|company-updates|io-intelligence|ai-infrastructure-compute|ai-startup-corner|developer-resources)/i);
+                
+                if (isNonArticlePage) {
+                  console.log(`🗑️  [Bulk Re-scrape] Deleting non-article page: ${existing.link}`);
+                  await database.deleteArticleByLink(existing.link);
+                  deleted++;
+                  continue;
+                }
+              } catch (urlError) {
+                // Invalid URL, skip
+              }
+              
+              // Check for generic titles (category pages)
+              const currentTitleLower = (existing.title || '').toLowerCase().trim();
+              if (currentTitleLower) {
+                const isGenericTitle = currentTitleLower.length < 25 && (
+                  currentTitleLower === 'blockchain web3' ||
+                  currentTitleLower === 'cybersecurity' ||
+                  currentTitleLower === 'company updates' ||
+                  currentTitleLower === 'io intelligence' ||
+                  currentTitleLower === 'ai infrastructure compute' ||
+                  currentTitleLower === 'ai startup corner' ||
+                  currentTitleLower === 'developer resources'
+                );
+                
+                if (isGenericTitle) {
+                  console.log(`🗑️  [Bulk Re-scrape] Deleting article with generic title: "${existing.title}" (URL: ${existing.link})`);
+                  await database.deleteArticleByLink(existing.link);
+                  deleted++;
+                  continue;
+                }
+                
+                // Check for duplicate titles (same title = likely category pages)
+                const allArticles = await database.getAllArticles(1000);
+                const duplicateTitles = allArticles.filter(a => 
+                  a.id !== existing.id && 
+                  a.title && 
+                  a.title.toLowerCase().trim() === currentTitleLower
+                );
+                
+                // If more than 2 articles share this exact title, it's likely a category page
+                if (duplicateTitles.length > 2) {
+                  console.log(`🗑️  [Bulk Re-scrape] Deleting article with duplicate generic title (${duplicateTitles.length + 1} total): "${existing.title}" (URL: ${existing.link})`);
+                  await database.deleteArticleByLink(existing.link);
+                  deleted++;
+                  continue;
+                }
+              }
+            } catch (err) {
+              console.error(`❌ [Bulk Re-scrape] Error checking existing article ${existing.link}:`, err);
+              errors++;
+            }
+          }
+          
+          // Small delay between batches
+          if (j + batchSize < allExistingArticles.length) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+        }
+        
+        console.log(`✅ [Bulk Re-scrape] First pass complete for ${source.name}: Deleted ${deleted} bad articles`);
+        
+        // Second pass: Process current scrape results to update/improve existing articles
+        console.log(`\n🔍 [Bulk Re-scrape] Second pass: Processing current scrape results to update existing articles...`);
+        const articlesToProcess = articles.slice(0, 10);
+        
+        for (let j = 0; j < articlesToProcess.length; j += batchSize) {
+          const batch = articlesToProcess.slice(j, j + batchSize);
           
           for (const article of batch) {
             try {
