@@ -1418,6 +1418,7 @@ app.post('/api/sources/re-scrape-all', async (req, res) => {
     
     const results = [];
     let totalUpdated = 0;
+    let totalDeleted = 0;
     let totalErrors = 0;
     
     // Process sources sequentially to avoid memory issues
@@ -1430,18 +1431,50 @@ app.post('/api/sources/re-scrape-all', async (req, res) => {
         const webScraper = new WebScraper();
         const articles = await webScraper.scrapeArticles(source);
         
+        // CRITICAL: Close Playwright browser immediately after scraping to free memory
+        await webScraper.close();
+        
         let updated = 0;
         let deleted = 0;
         let errors = 0;
         
         // CRITICAL: Get ALL existing articles for this source from database
         // This ensures we check old bad articles even if they're no longer in current scrape
-        const allExistingArticles = await database.getArticlesBySourceId(source.id);
-        console.log(`📋 [Bulk Re-scrape] Found ${allExistingArticles.length} existing articles in database for ${source.name}`);
+        // MEMORY OPTIMIZATION: Limit to 100 articles per source to avoid memory issues
+        const allExistingArticlesRaw = await database.getArticlesBySourceId(source.id);
+        const allExistingArticles = allExistingArticlesRaw.slice(0, 100); // Limit to 100 most recent
+        if (allExistingArticlesRaw.length > 100) {
+          console.log(`⚠️  [Bulk Re-scrape] Limiting to 100 most recent articles (${allExistingArticlesRaw.length} total) to save memory`);
+        }
+        console.log(`📋 [Bulk Re-scrape] Checking ${allExistingArticles.length} existing articles in database for ${source.name}`);
+        
+        // MEMORY OPTIMIZATION: Pre-fetch duplicate title check data ONCE per source (not per article)
+        // This avoids loading 1000 articles into memory repeatedly
+        let duplicateTitleCache = null;
+        const getDuplicateTitles = async (title) => {
+          if (!duplicateTitleCache) {
+            // Load once per source, not per article
+            const allArticles = await database.getAllArticles(1000);
+            duplicateTitleCache = new Map();
+            allArticles.forEach(a => {
+              const key = (a.title || '').toLowerCase().trim();
+              if (key) {
+                if (!duplicateTitleCache.has(key)) {
+                  duplicateTitleCache.set(key, []);
+                }
+                duplicateTitleCache.get(key).push(a);
+              }
+            });
+          }
+          const key = (title || '').toLowerCase().trim();
+          if (!key) return [];
+          const matches = duplicateTitleCache.get(key) || [];
+          return matches;
+        };
         
         // First pass: Check ALL existing articles for bad titles/URLs and delete them
         console.log(`\n🔍 [Bulk Re-scrape] First pass: Checking all existing articles for bad titles/URLs...`);
-        const batchSize = 5;
+        const batchSize = 3; // Reduced from 5 to save memory
         for (let j = 0; j < allExistingArticles.length; j += batchSize) {
           const batch = allExistingArticles.slice(j, j + batchSize);
           
@@ -1492,16 +1525,13 @@ app.post('/api/sources/re-scrape-all', async (req, res) => {
                 }
                 
                 // Check for duplicate titles (same title = likely category pages)
-                const allArticles = await database.getAllArticles(1000);
-                const duplicateTitles = allArticles.filter(a => 
-                  a.id !== existing.id && 
-                  a.title && 
-                  a.title.toLowerCase().trim() === currentTitleLower
-                );
+                // Use cached duplicate check to avoid loading all articles repeatedly
+                const duplicateTitles = await getDuplicateTitles(currentTitleLower);
+                const otherDuplicates = duplicateTitles.filter(a => a.id !== existing.id);
                 
                 // If more than 2 articles share this exact title, it's likely a category page
-                if (duplicateTitles.length > 2) {
-                  console.log(`🗑️  [Bulk Re-scrape] Deleting article with duplicate generic title (${duplicateTitles.length + 1} total): "${existing.title}" (URL: ${existing.link})`);
+                if (otherDuplicates.length > 2) {
+                  console.log(`🗑️  [Bulk Re-scrape] Deleting article with duplicate generic title (${otherDuplicates.length + 1} total): "${existing.title}" (URL: ${existing.link})`);
                   await database.deleteArticleByLink(existing.link);
                   deleted++;
                   continue;
@@ -1513,17 +1543,21 @@ app.post('/api/sources/re-scrape-all', async (req, res) => {
             }
           }
           
-          // Small delay between batches
+          // Small delay between batches to allow garbage collection
           if (j + batchSize < allExistingArticles.length) {
-            await new Promise(resolve => setTimeout(resolve, 100));
+            await new Promise(resolve => setTimeout(resolve, 200));
           }
         }
+        
+        // Clear duplicate cache after first pass to free memory
+        duplicateTitleCache = null;
         
         console.log(`✅ [Bulk Re-scrape] First pass complete for ${source.name}: Deleted ${deleted} bad articles`);
         
         // Second pass: Process current scrape results to update/improve existing articles
+        // LIMIT to 5 articles per source to save memory
         console.log(`\n🔍 [Bulk Re-scrape] Second pass: Processing current scrape results to update existing articles...`);
-        const articlesToProcess = articles.slice(0, 10);
+        const articlesToProcess = articles.slice(0, 5); // Reduced from 10 to 5
         
         for (let j = 0; j < articlesToProcess.length; j += batchSize) {
           const batch = articlesToProcess.slice(j, j + batchSize);
@@ -1716,6 +1750,7 @@ app.post('/api/sources/re-scrape-all', async (req, res) => {
         }
         
         totalUpdated += updated;
+        totalDeleted += deleted;
         totalErrors += errors;
         
         results.push({
@@ -1730,9 +1765,11 @@ app.post('/api/sources/re-scrape-all', async (req, res) => {
         
         console.log(`✅ [Bulk Re-scrape] [${source.name}] Complete: Updated ${updated} articles, deleted ${deleted} bad articles, ${errors} errors`);
         
-        // Delay between sources to prevent memory spikes
+        // CRITICAL: Force garbage collection between sources by adding a longer delay
+        // This allows Node.js to clean up memory (Playwright, articles, etc.) before processing next source
         if (i < scrapingSources.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 500));
+          console.log(`⏸️  [Bulk Re-scrape] Pausing 3 seconds before next source to allow memory cleanup...`);
+          await new Promise(resolve => setTimeout(resolve, 3000));
         }
       } catch (error) {
         console.error(`❌ Error re-scraping ${source.name}:`, error.message);
