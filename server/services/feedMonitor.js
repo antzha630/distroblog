@@ -624,12 +624,21 @@ class FeedMonitor {
       
       // Limit to only the most recent articles
       const limitedItems = feed.items.slice(0, maxArticles);
-      console.log(`📰 Processing ${limitedItems.length} most recent articles from ${source.name}`);
+      console.log(`📰 [CHECK NOW] Processing ${limitedItems.length} most recent articles from ${source.name} (feed has ${feed.items.length} total, checking up to ${maxArticles})`);
       
       for (const item of limitedItems) {
-        // Check if article already exists
-        const exists = await database.articleExists(item.link);
-        if (!exists) {
+        try {
+          // Skip if no link
+          if (!item.link) {
+            continue;
+          }
+          
+          // Check if article already exists
+          const exists = await database.articleExists(item.link);
+          if (exists) {
+            continue; // Skip existing articles
+          }
+          
           // Generate AI-enhanced content
           const enhancedContent = await this.enhanceArticleContent(item);
           
@@ -714,13 +723,27 @@ class FeedMonitor {
             continue;
           }
 
-          const articleId = await database.addArticle(article);
-
-          newArticles.push({
-            id: articleId,
-            title: article.title,
-            link: article.link
-          });
+          // Try to add article, handle duplicate key errors gracefully
+          try {
+            const articleId = await database.addArticle(article);
+            newArticles.push({
+              id: articleId,
+              title: article.title,
+              link: article.link
+            });
+          } catch (addError) {
+            // Handle duplicate key error gracefully (might happen due to race conditions)
+            if (addError.code === '23505' || addError.message?.includes('duplicate key')) {
+              console.log(`ℹ️  Article already exists (race condition): ${item.link}`);
+              continue; // Skip this article, it was added by another process
+            }
+            // Re-throw other errors
+            throw addError;
+          }
+        } catch (itemError) {
+          console.error(`❌ Error processing RSS item from ${source.name}:`, itemError.message);
+          // Continue with next item instead of crashing
+          continue;
         }
       }
 
