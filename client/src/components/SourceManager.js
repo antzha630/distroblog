@@ -491,31 +491,57 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
         </div>
 
         {/* Re-scrape All button - visible above sources list */}
-        {!showAddForm && sources.filter(s => s.monitoring_type === 'SCRAPING' && s.is_active).length > 0 && (
-          <div style={{
-            display: 'flex',
-            justifyContent: 'center',
-            marginBottom: '16px'
-          }}>
-            <button
-              onClick={handleReScrapeAll}
-              disabled={isReScrapingAll}
-              style={{
-                background: isReScrapingAll ? '#6c757d' : '#17a2b8',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: isReScrapingAll ? 'not-allowed' : 'pointer',
-                padding: '10px 20px',
-                fontSize: '1rem',
-                fontWeight: '500',
-                boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-              }}
-            >
-              {isReScrapingAll ? '⏳ Re-scraping All...' : '🔄 Re-scrape All Sources'}
-            </button>
-          </div>
-        )}
+        {!showAddForm && (() => {
+          const scrapingSources = sources.filter(s => s.monitoring_type === 'SCRAPING' && s.is_active);
+          console.log('Scraping sources count:', scrapingSources.length, 'Total sources:', sources.length);
+          console.log('Sources:', sources.map(s => ({ name: s.name, type: s.monitoring_type, active: s.is_active })));
+          if (scrapingSources.length === 0) return null;
+          
+          return (
+            <div style={{
+              display: 'flex',
+              justifyContent: 'center',
+              marginBottom: '20px',
+              padding: '12px',
+              background: '#f8f9fa',
+              borderRadius: '4px',
+              border: '1px solid #e9ecef'
+            }}>
+              <button
+                onClick={handleReScrapeAll}
+                disabled={isReScrapingAll}
+                style={{
+                  background: isReScrapingAll ? '#6c757d' : '#17a2b8',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: isReScrapingAll ? 'not-allowed' : 'pointer',
+                  padding: '12px 24px',
+                  fontSize: '1rem',
+                  fontWeight: '600',
+                  boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
+                  transition: 'all 0.2s'
+                }}
+                onMouseEnter={(e) => {
+                  if (!isReScrapingAll) {
+                    e.target.style.background = '#138496';
+                    e.target.style.transform = 'translateY(-1px)';
+                    e.target.style.boxShadow = '0 4px 6px rgba(0,0,0,0.2)';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!isReScrapingAll) {
+                    e.target.style.background = '#17a2b8';
+                    e.target.style.transform = 'translateY(0)';
+                    e.target.style.boxShadow = '0 2px 4px rgba(0,0,0,0.15)';
+                  }
+                }}
+              >
+                {isReScrapingAll ? '⏳ Re-scraping All...' : '🔄 Re-scrape All Sources'}
+              </button>
+            </div>
+          );
+        })()}
 
         {showAddForm && (
           <div style={{ 
