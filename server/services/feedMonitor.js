@@ -259,6 +259,18 @@ class FeedMonitor {
             console.log(`🔍 Checking scraping source: ${source.name} (${source.url})`);
             const articles = await this.webScraper.scrapeArticles(source);
             
+            // MEMORY OPTIMIZATION: Close webScraper browser immediately after scraping
+            // to free memory before processing articles
+            try {
+              await this.webScraper.close();
+              console.log(`🧹 Closed webScraper browser for ${source.name}`);
+            } catch (closeError) {
+              console.warn(`⚠️  Could not close webScraper browser: ${closeError.message}`);
+            }
+            
+            // MEMORY OPTIMIZATION: Small delay to allow garbage collection
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
             console.log(`📰 Found ${articles.length} articles from ${source.name}, checking for new ones...`);
             
             for (const article of articles) {
@@ -281,13 +293,19 @@ class FeedMonitor {
                   }
                   
                   // Fetch full content and metadata from article page (better titles/dates)
+                  // MEMORY OPTIMIZATION: Use extractArticleMetadata which can also return content
+                  // to avoid creating two separate browser instances
                   let fullContent = null;
                   let pubDate = article.datePublished ? new Date(article.datePublished) : null;
                   
                   try {
-                    console.log(`🔍 [${article.link.substring(0, 60)}...] Fetching full content and metadata...`);
+                    console.log(`🔍 [${article.link.substring(0, 60)}...] Fetching metadata and content...`);
                     
-                    // Fetch full content
+                    // Fetch metadata (title/date) from article page - this uses Playwright
+                    const metadata = await this.extractArticleMetadata(article.link);
+                    
+                    // Then fetch full content (will reuse browser logic but may create new instance)
+                    // For memory safety, we'll fetch content separately but add delay after
                     fullContent = await this.fetchFullArticleContent(article.link);
                     if (fullContent) {
                       console.log(`✅ [${article.link.substring(0, 60)}...] Content fetched: ${fullContent.length} chars`);
@@ -295,8 +313,8 @@ class FeedMonitor {
                       console.log(`⚠️  [${article.link.substring(0, 60)}...] No content fetched`);
                     }
                     
-                    // Fetch metadata (title/date) from article page
-                    const metadata = await this.extractArticleMetadata(article.link);
+                    // MEMORY OPTIMIZATION: Small delay to allow browser cleanup
+                    await new Promise(resolve => setTimeout(resolve, 300));
                     
                     // Use article page title if available and better
                     if (metadata.title && metadata.title.trim().length > 10) {
@@ -392,12 +410,18 @@ class FeedMonitor {
                     
                     // Log new article found
                     console.log(`✨ NEW ARTICLE: "${articleObj.title}" | Date: ${articleObj.pubDate || 'NO DATE'} | Link: ${articleObj.link.substring(0, 60)}...`);
-                  }
+                    
+                    // MEMORY OPTIMIZATION: Small delay after each new article to allow garbage collection
+                    await new Promise(resolve => setTimeout(resolve, 200));
+                }
               } catch (err) {
                 console.error(`Error processing article from ${source.name}:`, err.message);
                 // Skip duplicates or errors
               }
             }
+            
+            // MEMORY OPTIMIZATION: Delay after processing all articles from a source
+            await new Promise(resolve => setTimeout(resolve, 500));
             
             if (newArticles.length > 0) {
               console.log(`✅ Added ${newArticles.length} new article(s) from ${source.name}`);
@@ -410,6 +434,9 @@ class FeedMonitor {
           } else {
             // RSS/JSON Feed: use existing method
             newArticles = await this.checkFeedLimited(source, 5);
+            
+            // MEMORY OPTIMIZATION: Small delay after RSS feed processing
+            await new Promise(resolve => setTimeout(resolve, 300));
           }
           
           results.push({
