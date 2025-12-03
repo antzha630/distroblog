@@ -393,10 +393,6 @@ class FeedMonitor {
                     // Log new article found
                     console.log(`✨ NEW ARTICLE: "${articleObj.title}" | Date: ${articleObj.pubDate || 'NO DATE'} | Link: ${articleObj.link.substring(0, 60)}...`);
                   }
-                } else {
-                  // Article already exists - skip
-                  console.log(`⏭️  Article already exists: ${article.link.substring(0, 60)}...`);
-                }
               } catch (err) {
                 console.error(`Error processing article from ${source.name}:`, err.message);
                 // Skip duplicates or errors
