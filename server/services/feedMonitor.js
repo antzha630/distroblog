@@ -264,7 +264,13 @@ class FeedMonitor {
             for (const article of articles) {
               try {
                 const exists = await database.articleExists(article.link);
-                if (!exists) {
+                if (exists) {
+                  console.log(`ℹ️  [${source.name}] Article already exists, skipping: "${article.title.substring(0, 50)}..."`);
+                  continue;
+                }
+                
+                // NEW ARTICLE FOUND
+                console.log(`🆕 [${source.name}] NEW article found: "${article.title.substring(0, 50)}..."`);
                   // NEW ARTICLE FOUND - fetch full content and metadata
                   // Ensure title is never null or empty (simple check)
                   let originalTitle = (article.title && article.title.trim()) ? article.title.trim() : 'Untitled Article';
@@ -279,8 +285,15 @@ class FeedMonitor {
                   let pubDate = article.datePublished ? new Date(article.datePublished) : null;
                   
                   try {
+                    console.log(`🔍 [${article.link.substring(0, 60)}...] Fetching full content and metadata...`);
+                    
                     // Fetch full content
                     fullContent = await this.fetchFullArticleContent(article.link);
+                    if (fullContent) {
+                      console.log(`✅ [${article.link.substring(0, 60)}...] Content fetched: ${fullContent.length} chars`);
+                    } else {
+                      console.log(`⚠️  [${article.link.substring(0, 60)}...] No content fetched`);
+                    }
                     
                     // Fetch metadata (title/date) from article page
                     const metadata = await this.extractArticleMetadata(article.link);
@@ -292,16 +305,27 @@ class FeedMonitor {
                       const isGeneric = newTitleLower.includes('blog') ||
                                        newTitleLower.includes('all posts') ||
                                        newTitleLower.includes('latest by topic') ||
+                                       newTitleLower.includes('mothership') ||
+                                       newTitleLower.includes('backbone of ai infrastructure') ||
                                        (newTitle.length < 25 && (
                                          newTitleLower === 'blockchain web3' ||
                                          newTitleLower === 'cybersecurity' ||
-                                         newTitleLower === 'company updates'
+                                         newTitleLower === 'company updates' ||
+                                         newTitleLower === 'io intelligence' ||
+                                         newTitleLower === 'ai infrastructure compute' ||
+                                         newTitleLower === 'ai startup corner' ||
+                                         newTitleLower === 'developer resources' ||
+                                         (newTitleLower.includes('swarm community call') && newTitleLower.includes('recap'))
                                        ));
                       
                       if (!isGeneric) {
+                        console.log(`📝 [${article.link.substring(0, 60)}...] Using better title: "${newTitle.substring(0, 60)}..." (was: "${originalTitle.substring(0, 60)}...")`);
                         originalTitle = newTitle;
-                        console.log(`📝 Using better title from article page: "${originalTitle}"`);
+                      } else {
+                        console.log(`⚠️  [${article.link.substring(0, 60)}...] Article page title is generic, keeping original: "${originalTitle.substring(0, 60)}..."`);
                       }
+                    } else {
+                      console.log(`⚠️  [${article.link.substring(0, 60)}...] Article page title not found or too short, keeping original: "${originalTitle.substring(0, 60)}..."`);
                     }
                     
                     // Use article page date if available
@@ -310,26 +334,34 @@ class FeedMonitor {
                         const articlePageDate = new Date(metadata.pubDate);
                         if (!isNaN(articlePageDate.getTime())) {
                           pubDate = articlePageDate;
-                          console.log(`📅 Found date from article page: ${pubDate.toISOString()}`);
+                          console.log(`📅 [${article.link.substring(0, 60)}...] Found date from article page: ${pubDate.toISOString()}`);
                         }
                       } catch (e) {
-                        // Invalid date, skip
+                        console.log(`⚠️  [${article.link.substring(0, 60)}...] Invalid date format: ${metadata.pubDate}`);
                       }
+                    } else {
+                      console.log(`⚠️  [${article.link.substring(0, 60)}...] No date found on article page`);
                     }
                   } catch (err) {
                     // If fetching fails, use what we have from listing page
-                    console.log(`⚠️ Could not fetch article page content/metadata: ${err.message}`);
+                    console.log(`❌ [${article.link.substring(0, 60)}...] Could not fetch article page content/metadata: ${err.message}`);
                   }
                   
                   // Use full content if available, otherwise use scraped content
                   const articleContent = fullContent || article.content || article.description || '';
                   
+                  if (articleContent.length < 200) {
+                    console.log(`⚠️  [${article.link.substring(0, 60)}...] Content is short (${articleContent.length} chars), might be incomplete`);
+                  }
+                  
                   // Generate AI-enhanced preview/summary
+                  console.log(`🤖 [${article.link.substring(0, 60)}...] Generating AI summary...`);
                   const enhancedContent = await this.enhanceArticleContent({
                     ...article,
                     title: originalTitle,
                     content: articleContent
                   });
+                  console.log(`✅ [${article.link.substring(0, 60)}...] AI summary generated (${enhancedContent.preview?.length || 0} chars)`);
                   
                   // Format date
                   let finalPubDate = null;
@@ -856,52 +888,113 @@ class FeedMonitor {
         });
         
         page = await browser.newPage();
+        
+        // Set realistic browser headers
+        if (typeof page.setUserAgent === 'function') {
+          await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+        }
+        if (typeof page.setExtraHTTPHeaders === 'function') {
+          await page.setExtraHTTPHeaders({
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive'
+          });
+        }
+        
         await page.goto(url, { 
           waitUntil: 'domcontentloaded',
           timeout: 20000 
         });
         
-        // Wait for content to load
-        await page.waitForTimeout(2000);
+        // Check for Cloudflare challenge
+        const isCloudflareChallenge = await page.evaluate(() => {
+          return document.body.textContent.includes('Checking your browser') ||
+                 document.body.textContent.includes('Just a moment') ||
+                 document.title.includes('Just a moment');
+        });
+        
+        if (isCloudflareChallenge) {
+          console.log('⚠️  Cloudflare challenge detected, waiting...');
+          await page.waitForTimeout(5000);
+          try {
+            await page.waitForFunction(() => {
+              return !document.body.textContent.includes('Checking your browser') &&
+                     !document.body.textContent.includes('Just a moment');
+            }, { timeout: 15000 });
+          } catch (e) {
+            console.warn('Cloudflare challenge may not have passed');
+          }
+        }
+        
+        // Wait for content to load - longer wait for JS-rendered sites
+        await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+        await page.waitForTimeout(3000); // Additional wait for JS to execute
         
         // Extract content using Playwright
         const content = await page.evaluate(() => {
-          // Try common content selectors
+          // Try common content selectors in order of preference
           const selectors = [
             'article',
+            'main article',
             '.post-content',
             '.entry-content',
             '.article-content',
+            '[class*="article-content"]',
+            '[class*="post-content"]',
+            '[class*="entry-content"]',
             '.content',
-            'main article',
             'section[data-testid="post"]',
             'div[data-article-body=true]',
             'div.post',
             '.body',
             '[class*="article"]',
             '[class*="post"]',
-            '[class*="content"]'
+            '[class*="content"]',
+            'main' // Last resort
           ];
           
           let best = '';
           for (const sel of selectors) {
             const el = document.querySelector(sel);
             if (el) {
-              const text = Array.from(el.querySelectorAll('p, li, h2, h3, blockquote, div'))
-                .map(n => n.textContent.trim())
+              // Get text from paragraphs, headings, lists, blockquotes
+              const text = Array.from(el.querySelectorAll('p, li, h2, h3, h4, blockquote, div[class*="text"], div[class*="paragraph"]'))
+                .map(n => {
+                  const txt = n.textContent.trim();
+                  // Filter out very short text (likely navigation/buttons)
+                  return txt.length > 20 ? txt : '';
+                })
                 .filter(t => t.length > 0)
                 .join('\n\n');
+              
+              // Also try direct text content if selector found something
+              if (text.length < 200) {
+                const directText = el.textContent.trim();
+                // Remove common non-content elements
+                const cleaned = directText
+                  .replace(/\s+/g, ' ')
+                  .replace(/Subscribe|Follow|Share|Like|Comment/gi, '')
+                  .trim();
+                if (cleaned.length > text.length && cleaned.length > 200) {
+                  return cleaned;
+                }
+              }
+              
               if (text.length > best.length) best = text;
             }
           }
           
-          // Fallback: all paragraphs
+          // Fallback: all paragraphs in main content area
           if (best.length < 200) {
-            const all = Array.from(document.querySelectorAll('p'))
-              .map(n => n.textContent.trim())
-              .filter(t => t.length > 0)
-              .join('\n\n');
-            if (all.length > best.length) best = all;
+            const main = document.querySelector('main, [role="main"], body');
+            if (main) {
+              const all = Array.from(main.querySelectorAll('p'))
+                .map(n => n.textContent.trim())
+                .filter(t => t.length > 20) // Filter short paragraphs
+                .join('\n\n');
+              if (all.length > best.length) best = all;
+            }
           }
           
           return best;
@@ -910,8 +1003,14 @@ class FeedMonitor {
         await page.close();
         await browser.close();
         
-        if (content && content.length > 100) {
-          return this.cleanContent(content);
+        // Clean and validate content
+        if (content) {
+          const cleaned = this.cleanContent(content);
+          // Only return if we got substantial content (at least 200 chars)
+          // This prevents returning placeholder/loading text
+          if (cleaned.length > 200) {
+            return cleaned;
+          }
         }
       } catch (playwrightError) {
         // Playwright failed - fall back to static scraping
@@ -1012,22 +1111,59 @@ class FeedMonitor {
         });
         
         page = await browser.newPage();
+        
+        // Set realistic browser headers
+        if (typeof page.setUserAgent === 'function') {
+          await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+        }
+        if (typeof page.setExtraHTTPHeaders === 'function') {
+          await page.setExtraHTTPHeaders({
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive'
+          });
+        }
+        
         await page.goto(url, { 
           waitUntil: 'domcontentloaded',
           timeout: 20000 
         });
         
+        // Check for Cloudflare challenge
+        const isCloudflareChallenge = await page.evaluate(() => {
+          return document.body.textContent.includes('Checking your browser') ||
+                 document.body.textContent.includes('Just a moment') ||
+                 document.title.includes('Just a moment');
+        });
+        
+        if (isCloudflareChallenge) {
+          console.log('⚠️  Cloudflare challenge detected, waiting...');
+          await page.waitForTimeout(5000);
+          try {
+            await page.waitForFunction(() => {
+              return !document.body.textContent.includes('Checking your browser') &&
+                     !document.body.textContent.includes('Just a moment');
+            }, { timeout: 15000 });
+          } catch (e) {
+            console.warn('Cloudflare challenge may not have passed');
+          }
+        }
+        
         // Wait for content to load
-        await page.waitForTimeout(2000);
+        await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+        await page.waitForTimeout(3000);
         
         // Extract metadata using Playwright
         const metadata = await page.evaluate(() => {
           // Extract title
           let title = '';
+          let titleSource = '';
           // Try Open Graph first
           const ogTitle = document.querySelector('meta[property="og:title"]');
           if (ogTitle) {
             title = ogTitle.getAttribute('content') || '';
+            titleSource = 'og:title';
           }
           // Try JSON-LD
           if (!title) {
@@ -1035,8 +1171,13 @@ class FeedMonitor {
             if (jsonLd) {
               try {
                 const data = JSON.parse(jsonLd.textContent);
-                if (data.headline) title = data.headline;
-                else if (data.name) title = data.name;
+                if (data.headline) {
+                  title = data.headline;
+                  titleSource = 'JSON-LD headline';
+                } else if (data.name) {
+                  title = data.name;
+                  titleSource = 'JSON-LD name';
+                }
               } catch (e) {
                 // Invalid JSON
               }
@@ -1045,12 +1186,18 @@ class FeedMonitor {
           // Try article H1
           if (!title) {
             const h1 = document.querySelector('article h1, main h1, [class*="article"] h1');
-            if (h1) title = h1.textContent.trim();
+            if (h1) {
+              title = h1.textContent.trim();
+              titleSource = 'article h1';
+            }
           }
           // Fallback to page title
           if (!title) {
             title = document.title || '';
+            titleSource = 'page title';
           }
+          
+          return { title, titleSource };
           
           // Extract description
           let description = '';
@@ -1065,22 +1212,99 @@ class FeedMonitor {
             }
           }
           
-          // Extract date
+          // Extract date - try multiple strategies
           let pubDate = null;
+          
+          // Strategy 1: Structured elements
           const timeEl = document.querySelector('time[datetime]');
           if (timeEl) {
             pubDate = timeEl.getAttribute('datetime');
           }
           if (!pubDate) {
-            // Try meta tags
-            const pubDateMeta = document.querySelector('meta[property="article:published_time"]');
+            const pubDateMeta = document.querySelector('meta[property="article:published_time"], meta[name="publish-date"], meta[name="date"]');
             if (pubDateMeta) {
               pubDate = pubDateMeta.getAttribute('content');
             }
           }
           
-          return { title: title.trim(), description: description.trim(), pubDate };
+          // Strategy 2: Look in article header/author area for date text
+          if (!pubDate) {
+            const articleHeader = document.querySelector('article header, [class*="article-header"], [class*="post-header"], [class*="entry-header"]');
+            if (articleHeader) {
+              const headerText = articleHeader.textContent;
+              // Look for date patterns: "Nov 21, 2025", "November 21, 2025", etc.
+              const datePatterns = [
+                /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2}),?\s+(\d{4})\b/i,
+                /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b/i,
+                /\b(\d{1,2})[-/](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[-/](\d{2,4})\b/i,
+                /\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b/
+              ];
+              
+              for (const pattern of datePatterns) {
+                const match = headerText.match(pattern);
+                if (match) {
+                  try {
+                    const dateStr = match[0];
+                    const date = new Date(dateStr);
+                    if (!isNaN(date.getTime())) {
+                      // Validate date is reasonable (not too far in past/future)
+                      const now = new Date();
+                      const yearDiff = date.getFullYear() - now.getFullYear();
+                      if (yearDiff >= -10 && yearDiff <= 2) {
+                        pubDate = date.toISOString();
+                        break;
+                      }
+                    }
+                  } catch (e) {
+                    // Invalid date, continue
+                  }
+                }
+              }
+            }
+          }
+          
+          // Strategy 3: Look in article body near the top for date patterns
+          if (!pubDate) {
+            const articleBody = document.querySelector('article, [class*="article-content"], [class*="post-content"], main');
+            if (articleBody) {
+              // Get first 500 chars (likely to contain date if present)
+              const bodyText = articleBody.textContent.substring(0, 500);
+              const datePatterns = [
+                /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2}),?\s+(\d{4})\b/i,
+                /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b/i
+              ];
+              
+              for (const pattern of datePatterns) {
+                const match = bodyText.match(pattern);
+                if (match) {
+                  try {
+                    const dateStr = match[0];
+                    const date = new Date(dateStr);
+                    if (!isNaN(date.getTime())) {
+                      const now = new Date();
+                      const yearDiff = date.getFullYear() - now.getFullYear();
+                      if (yearDiff >= -10 && yearDiff <= 2) {
+                        pubDate = date.toISOString();
+                        break;
+                      }
+                    }
+                  } catch (e) {
+                    // Invalid date, continue
+                  }
+                }
+              }
+            }
+          }
+          
+          return { title: title.trim(), titleSource, description: description.trim(), pubDate };
         });
+        
+        console.log(`📝 [${url.substring(0, 60)}...] Extracted title: "${metadata.title.substring(0, 60)}..." (source: ${metadata.titleSource})`);
+        if (metadata.pubDate) {
+          console.log(`📅 [${url.substring(0, 60)}...] Extracted date: ${metadata.pubDate}`);
+        } else {
+          console.log(`⚠️  [${url.substring(0, 60)}...] No date found`);
+        }
         
         await page.close();
         await browser.close();
@@ -1232,8 +1456,8 @@ class FeedMonitor {
       // Strategy 5: Use page title but clean it up extensively
       if (!title) {
         title = $('title').text() || 'Untitled';
-        title = title.replace(/\s+/g, ' ').trim();
-        
+      title = title.replace(/\s+/g, ' ').trim();
+      
         // Remove common site name patterns
         // Patterns: "Title | Site", "Title - Site", "Title | Site Name", "Site: Title"
         title = title

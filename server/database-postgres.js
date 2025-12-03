@@ -527,6 +527,22 @@ class Database {
     return result.rows[0];
   }
 
+  async deleteArticleByLink(link) {
+    const result = await this.pool.query(
+      'DELETE FROM articles WHERE link = $1 RETURNING id',
+      [link]
+    );
+    return result.rows[0]?.id || null;
+  }
+
+  async deleteArticleById(id) {
+    const result = await this.pool.query(
+      'DELETE FROM articles WHERE id = $1 RETURNING id',
+      [id]
+    );
+    return result.rows[0]?.id || null;
+  }
+
   async clearAllCurrentArticles() {
     await this.pool.query("UPDATE articles SET status = 'dismissed' WHERE status = 'new'");
   }

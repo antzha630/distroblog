@@ -315,11 +315,13 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
       const results = response.data.results || [];
       const successCount = results.filter(r => r.success).length;
       const totalUpdated = response.data.total_articles_updated || 0;
+      const totalDeleted = response.data.total_articles_deleted || 0;
       
       let message = `Bulk re-scrape complete!\n\n`;
       message += `Sources processed: ${response.data.sources_processed}\n`;
       message += `Successful: ${successCount}\n`;
-      message += `Total articles updated: ${totalUpdated}\n\n`;
+      message += `Articles updated: ${totalUpdated}\n`;
+      message += `Bad articles deleted: ${totalDeleted}\n\n`;
       
       if (results.some(r => !r.success)) {
         message += `Some sources had errors. Check console for details.`;

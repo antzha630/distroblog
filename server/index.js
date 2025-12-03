@@ -1017,11 +1017,11 @@ app.post('/api/sources/:id/re-scrape', async (req, res) => {
     return res.status(400).json({ error: 'Re-scraping is only available for scraping sources' });
   }
   
-  console.log(`🔄 Re-scraping source: ${source.name} (${source.url})`);
+  console.log(`\n🔄 [Re-scrape] Starting re-scrape for source: ${source.name} (${source.url})`);
   
   // Set lock to prevent automatic feed monitoring from running during re-scrape
   feedMonitor.isScrapingInProgress = true;
-  console.log('🔒 Pausing automatic feed monitoring during re-scrape');
+  console.log('🔒 [Re-scrape] Pausing automatic feed monitoring during re-scrape');
   
   try {
       // Scrape articles with improved logic
@@ -1029,9 +1029,15 @@ app.post('/api/sources/:id/re-scrape', async (req, res) => {
       const webScraper = new WebScraper();
       const articles = await webScraper.scrapeArticles(source);
       
-      console.log(`📰 Found ${articles.length} articles, updating existing ones...`);
+      console.log(`📰 [Re-scrape] Found ${articles.length} articles from listing page, checking for existing ones to update...`);
+      if (articles.length > 0) {
+        articles.forEach((article, i) => {
+          console.log(`   ${i + 1}. "${article.title.substring(0, 50)}..." (date: ${article.datePublished || 'none'})`);
+        });
+      }
       
       let updated = 0;
+      let deleted = 0;
       let errors = 0;
       const updates = [];
       
@@ -1053,13 +1059,54 @@ app.post('/api/sources/:id/re-scrape', async (req, res) => {
             const existing = await database.getArticleByLink(article.link);
             if (!existing) continue; // Skip new articles (they'll be added normally)
             
+            // Check if this is a non-article page (should be deleted)
+            try {
+              const urlObj = new URL(article.link);
+              const pathname = urlObj.pathname.toLowerCase();
+              const isNonArticlePage = pathname === '/search' ||
+                                      pathname.startsWith('/c/') || // Category pages
+                                      pathname.match(/^\/[a-z]{2}$/i) || // Language codes
+                                      pathname.match(/^\/tag[s]?\/|\/category\/|\/archive\/|\/author\//i) || // Tag/category/archive/author pages
+                                      pathname.includes('/search?');
+              
+              if (isNonArticlePage) {
+                console.log(`🗑️  Deleting non-article page: ${article.link}`);
+                await database.deleteArticleByLink(article.link);
+                deleted++;
+                continue;
+              }
+            } catch (urlError) {
+              // Invalid URL, skip
+            }
+            
+            // Check for duplicate titles (same title = likely category pages)
+            const currentTitleLower = (existing.title || '').toLowerCase().trim();
+            if (currentTitleLower) {
+              // Check if this title appears on multiple articles (likely a category page)
+              const allArticles = await database.getAllArticles(1000);
+              const duplicateTitles = allArticles.filter(a => 
+                a.id !== existing.id && 
+                a.title && 
+                a.title.toLowerCase().trim() === currentTitleLower
+              );
+              
+              // If more than 2 articles share this exact title, it's likely a category page
+              if (duplicateTitles.length > 2) {
+                console.log(`🗑️  [Re-scrape] Deleting article with duplicate generic title (${duplicateTitles.length + 1} total): "${existing.title}" (URL: ${article.link})`);
+                await database.deleteArticleByLink(article.link);
+                deleted++;
+                continue;
+              }
+            }
+            
             // CRITICAL: Fetch metadata from article page for better title/date
             // This is what makes re-scrape actually improve the data
             let improvedTitle = article.title.trim();
             let improvedDate = article.datePublished ? new Date(article.datePublished) : null;
+            let shouldDelete = false;
             
             try {
-              console.log(`🔍 Fetching article page metadata for: ${article.link.substring(0, 60)}...`);
+              console.log(`🔍 [Re-scrape] Fetching article page metadata for: ${article.link.substring(0, 60)}...`);
               const metadata = await feedMonitor.extractArticleMetadata(article.link);
               
               // Use article page title if available and better
@@ -1084,7 +1131,31 @@ app.post('/api/sources/:id/re-scrape', async (req, res) => {
                 
                 if (!isGeneric) {
                   improvedTitle = newTitle;
-                  console.log(`📝 Found better title from article page: "${improvedTitle}"`);
+                  console.log(`📝 [Re-scrape] Found better title: "${improvedTitle.substring(0, 60)}..." (was: "${existing.title?.substring(0, 60)}...")`);
+                } else {
+                  // If we can't get a good title from article page, mark for deletion
+                  console.log(`⚠️  [Re-scrape] Article page also has generic title, marking for deletion: ${article.link}`);
+                  shouldDelete = true;
+                }
+              } else {
+                // No title found on article page, check if current title is generic
+                const currentTitleLower = existing.title?.toLowerCase() || '';
+                const isCurrentGeneric = currentTitleLower.length < 25 && (
+                  currentTitleLower === 'blockchain web3' ||
+                  currentTitleLower === 'cybersecurity' ||
+                  currentTitleLower === 'company updates' ||
+                  currentTitleLower === 'io intelligence' ||
+                  currentTitleLower === 'ai infrastructure compute' ||
+                  currentTitleLower === 'ai startup corner' ||
+                  currentTitleLower === 'developer resources' ||
+                  (currentTitleLower.includes('swarm community call') && currentTitleLower.includes('recap'))
+                );
+                
+                if (isCurrentGeneric) {
+                  console.log(`🗑️  [Re-scrape] Deleting article with generic title that can't be fixed: ${article.link}`);
+                  shouldDelete = true;
+                } else {
+                  console.log(`⚠️  [Re-scrape] No title found on article page, keeping existing: "${existing.title?.substring(0, 60)}..."`);
                 }
               }
               
@@ -1094,15 +1165,54 @@ app.post('/api/sources/:id/re-scrape', async (req, res) => {
                   const articlePageDate = new Date(metadata.pubDate);
                   if (!isNaN(articlePageDate.getTime())) {
                     improvedDate = articlePageDate;
-                    console.log(`📅 Found date from article page: ${improvedDate.toISOString()}`);
+                    console.log(`📅 [Re-scrape] Found date from article page: ${improvedDate.toISOString()} (was: ${existing.pub_date || 'none'})`);
+                  } else {
+                    console.log(`⚠️  [Re-scrape] Invalid date format: ${metadata.pubDate}`);
                   }
                 } catch (e) {
-                  // Invalid date, skip
+                  console.log(`⚠️  [Re-scrape] Date parsing error: ${e.message}`);
                 }
+              } else {
+                console.log(`⚠️  [Re-scrape] No date found on article page (current: ${existing.pub_date || 'none'})`);
+              }
+              
+              // Check if content is too short (likely not a real article)
+              if (metadata.content && metadata.content.length < 100 && !improvedDate) {
+                console.log(`⚠️  [Re-scrape] Article has very short content (${metadata.content.length} chars) and no date: ${article.link}`);
+                // Don't delete yet - might be a real article with minimal content
               }
             } catch (metadataError) {
-              // If fetching metadata fails, use what we have from listing page
-              console.log(`⚠️ Could not fetch article page metadata: ${metadataError.message}`);
+              // If fetching metadata fails, check if current article is clearly bad
+              const currentTitleLower = (existing.title || '').toLowerCase();
+              const isBadTitle = currentTitleLower.length < 25 && (
+                currentTitleLower === 'blockchain web3' ||
+                currentTitleLower === 'cybersecurity' ||
+                currentTitleLower === 'company updates' ||
+                currentTitleLower === 'io intelligence' ||
+                currentTitleLower === 'ai infrastructure compute' ||
+                currentTitleLower === 'ai startup corner' ||
+                currentTitleLower === 'developer resources' ||
+                (currentTitleLower.includes('swarm community call') && currentTitleLower.includes('recap'))
+              );
+              
+              // Also check if URL suggests it's a non-article page
+              const urlSuggestsNonArticle = article.link.includes('/search') ||
+                                           article.link.includes('/c/') ||
+                                           article.link.match(/\/tag[s]?\/|\/category\/|\/archive\/|\/author\//i);
+              
+              if (isBadTitle || urlSuggestsNonArticle) {
+                console.log(`🗑️  [Re-scrape] Deleting bad article (can't fetch metadata): ${article.link} (error: ${metadataError.message})`);
+                shouldDelete = true;
+              } else {
+                console.log(`⚠️  [Re-scrape] Could not fetch article page metadata: ${metadataError.message}`);
+              }
+            }
+            
+            // Delete bad articles
+            if (shouldDelete) {
+              await database.deleteArticleByLink(article.link);
+              deleted++;
+              continue;
             }
             
             // Prepare updates
@@ -1168,13 +1278,14 @@ app.post('/api/sources/:id/re-scrape', async (req, res) => {
         }
       }
       
-      console.log(`✅ Re-scraping complete: Updated ${updated} articles, ${errors} errors`);
+      console.log(`\n✅ [Re-scrape] Complete for ${source.name}: Updated ${updated} articles, deleted ${deleted} bad articles, ${errors} errors`);
       
       res.json({
         success: true,
         message: `Re-scraped ${source.name}`,
         total_articles_found: articles.length,
         articles_updated: updated,
+        articles_deleted: deleted,
         errors: errors,
         updates: updates.slice(0, 20) // Return first 20 updates as examples
       });
@@ -1195,13 +1306,14 @@ app.post('/api/sources/:id/re-scrape', async (req, res) => {
 // Re-scrape all scraping sources (bulk operation)
 app.post('/api/sources/re-scrape-all', async (req, res) => {
   try {
-    console.log('🔄 Starting bulk re-scrape of all scraping sources...');
+    console.log('\n🔄 [Bulk Re-scrape] Starting bulk re-scrape of all scraping sources...');
     
     // Get all scraping sources
     const allSources = await database.getAllSources();
     const scrapingSources = allSources.filter(s => s.monitoring_type === 'SCRAPING' && s.is_active);
     
     if (scrapingSources.length === 0) {
+      console.log('⚠️  [Bulk Re-scrape] No active scraping sources found');
       return res.json({
         success: true,
         message: 'No active scraping sources found',
@@ -1210,11 +1322,14 @@ app.post('/api/sources/re-scrape-all', async (req, res) => {
       });
     }
     
-    console.log(`📋 Found ${scrapingSources.length} active scraping sources to re-scrape`);
+    console.log(`📋 [Bulk Re-scrape] Found ${scrapingSources.length} active scraping sources to re-scrape`);
+    scrapingSources.forEach((source, i) => {
+      console.log(`   ${i + 1}. ${source.name} (${source.url})`);
+    });
     
     // Set lock to prevent automatic feed monitoring
     feedMonitor.isScrapingInProgress = true;
-    console.log('🔒 Pausing automatic feed monitoring during bulk re-scrape');
+    console.log('🔒 [Bulk Re-scrape] Pausing automatic feed monitoring during bulk re-scrape');
     
     const results = [];
     let totalUpdated = 0;
@@ -1223,7 +1338,7 @@ app.post('/api/sources/re-scrape-all', async (req, res) => {
     // Process sources sequentially to avoid memory issues
     for (let i = 0; i < scrapingSources.length; i++) {
       const source = scrapingSources[i];
-      console.log(`\n[${i + 1}/${scrapingSources.length}] Re-scraping: ${source.name}`);
+      console.log(`\n[${i + 1}/${scrapingSources.length}] [Bulk Re-scrape] Processing: ${source.name} (${source.url})`);
       
       try {
         const WebScraper = require('./services/webScraper');
@@ -1231,6 +1346,7 @@ app.post('/api/sources/re-scrape-all', async (req, res) => {
         const articles = await webScraper.scrapeArticles(source);
         
         let updated = 0;
+        let deleted = 0;
         let errors = 0;
         
         // Process articles in small batches
@@ -1245,9 +1361,48 @@ app.post('/api/sources/re-scrape-all', async (req, res) => {
               const existing = await database.getArticleByLink(article.link);
               if (!existing) continue;
               
+              // Check if this is a non-article page (should be deleted)
+              try {
+                const urlObj = new URL(article.link);
+                const pathname = urlObj.pathname.toLowerCase();
+                const isNonArticlePage = pathname === '/search' ||
+                                        pathname.startsWith('/c/') ||
+                                        pathname.match(/^\/[a-z]{2}$/i) ||
+                                        pathname.match(/^\/tag[s]?\/|\/category\/|\/archive\/|\/author\//i) ||
+                                        pathname.includes('/search?');
+                
+                if (isNonArticlePage) {
+                  console.log(`🗑️  Deleting non-article page: ${article.link}`);
+                  await database.deleteArticleByLink(article.link);
+                  deleted++;
+                  continue;
+                }
+              } catch (urlError) {
+                // Invalid URL, skip
+              }
+              
+              // Check for duplicate titles (same title = likely category pages)
+              const currentTitleLower = (existing.title || '').toLowerCase().trim();
+              if (currentTitleLower) {
+                const allArticles = await database.getAllArticles(1000);
+                const duplicateTitles = allArticles.filter(a => 
+                  a.id !== existing.id && 
+                  a.title && 
+                  a.title.toLowerCase().trim() === currentTitleLower
+                );
+                
+                if (duplicateTitles.length > 2) {
+                  console.log(`🗑️  Deleting article with duplicate generic title (${duplicateTitles.length + 1} total): "${existing.title}"`);
+                  await database.deleteArticleByLink(article.link);
+                  deleted++;
+                  continue;
+                }
+              }
+              
               // CRITICAL: Fetch metadata from article page for better title/date
               let improvedTitle = article.title.trim();
               let improvedDate = article.datePublished ? new Date(article.datePublished) : null;
+              let shouldDelete = false;
               
               try {
                 const metadata = await feedMonitor.extractArticleMetadata(article.link);
@@ -1262,11 +1417,36 @@ app.post('/api/sources/re-scrape-all', async (req, res) => {
                                    (newTitle.length < 25 && (
                                      newTitleLower === 'blockchain web3' ||
                                      newTitleLower === 'cybersecurity' ||
-                                     newTitleLower === 'company updates'
+                                     newTitleLower === 'company updates' ||
+                                     newTitleLower === 'io intelligence' ||
+                                     newTitleLower === 'ai infrastructure compute' ||
+                                     newTitleLower === 'ai startup corner' ||
+                                     newTitleLower === 'developer resources' ||
+                                     (newTitleLower.includes('swarm community call') && newTitleLower.includes('recap'))
                                    ));
                   
                   if (!isGeneric) {
                     improvedTitle = newTitle;
+                  } else {
+                    // Can't get good title, mark for deletion
+                    shouldDelete = true;
+                  }
+                } else {
+                  // Check if current title is generic
+                  const currentTitleLower = (existing.title || '').toLowerCase();
+                  const isCurrentGeneric = currentTitleLower.length < 25 && (
+                    currentTitleLower === 'blockchain web3' ||
+                    currentTitleLower === 'cybersecurity' ||
+                    currentTitleLower === 'company updates' ||
+                    currentTitleLower === 'io intelligence' ||
+                    currentTitleLower === 'ai infrastructure compute' ||
+                    currentTitleLower === 'ai startup corner' ||
+                    currentTitleLower === 'developer resources' ||
+                    (currentTitleLower.includes('swarm community call') && currentTitleLower.includes('recap'))
+                  );
+                  
+                  if (isCurrentGeneric) {
+                    shouldDelete = true;
                   }
                 }
                 
@@ -1282,8 +1462,33 @@ app.post('/api/sources/re-scrape-all', async (req, res) => {
                   }
                 }
               } catch (metadataError) {
-                // If fetching metadata fails, use what we have from listing page
-                console.log(`⚠️ Could not fetch article page metadata: ${metadataError.message}`);
+                // If fetching fails, check if current article is clearly bad
+                const currentTitleLower = (existing.title || '').toLowerCase();
+                const isBadTitle = currentTitleLower.length < 25 && (
+                  currentTitleLower === 'blockchain web3' ||
+                  currentTitleLower === 'cybersecurity' ||
+                  currentTitleLower === 'company updates' ||
+                  currentTitleLower === 'io intelligence' ||
+                  currentTitleLower === 'ai infrastructure compute' ||
+                  currentTitleLower === 'ai startup corner' ||
+                  currentTitleLower === 'developer resources' ||
+                  (currentTitleLower.includes('swarm community call') && currentTitleLower.includes('recap'))
+                );
+                
+                const urlSuggestsNonArticle = article.link.includes('/search') ||
+                                             article.link.includes('/c/') ||
+                                             article.link.match(/\/tag[s]?\/|\/category\/|\/archive\/|\/author\//i);
+                
+                if (isBadTitle || urlSuggestsNonArticle) {
+                  shouldDelete = true;
+                }
+              }
+              
+              // Delete bad articles
+              if (shouldDelete) {
+                await database.deleteArticleByLink(article.link);
+                deleted++;
+                continue;
               }
               
               const updatesToApply = {};
@@ -1344,11 +1549,12 @@ app.post('/api/sources/re-scrape-all', async (req, res) => {
           source_name: source.name,
           articles_found: articles.length,
           articles_updated: updated,
+          articles_deleted: deleted,
           errors: errors,
           success: true
         });
         
-        console.log(`✅ ${source.name}: Updated ${updated} articles`);
+        console.log(`✅ [Bulk Re-scrape] [${source.name}] Complete: Updated ${updated} articles, deleted ${deleted} bad articles, ${errors} errors`);
         
         // Delay between sources to prevent memory spikes
         if (i < scrapingSources.length - 1) {
@@ -1366,13 +1572,15 @@ app.post('/api/sources/re-scrape-all', async (req, res) => {
       }
     }
     
-    console.log(`\n✅ Bulk re-scrape complete: ${totalUpdated} total articles updated, ${totalErrors} errors`);
+    const totalDeleted = results.reduce((sum, r) => sum + (r.articles_deleted || 0), 0);
+    console.log(`\n✅ Bulk re-scrape complete: ${totalUpdated} articles updated, ${totalDeleted} bad articles deleted, ${totalErrors} errors`);
     
     res.json({
       success: true,
       message: `Re-scraped ${scrapingSources.length} sources`,
       sources_processed: scrapingSources.length,
       total_articles_updated: totalUpdated,
+      total_articles_deleted: totalDeleted,
       total_errors: totalErrors,
       results: results
     });

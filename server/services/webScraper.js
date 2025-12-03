@@ -118,32 +118,37 @@ class WebScraper {
       // Full processing will happen in feedMonitor after checking which are new
       const lightweightArticles = articles.slice(0, 5).map(article => {
         // Fix URL resolution for relative URLs
-        let articleUrl = article.url || article.link;
-        if (articleUrl && !articleUrl.startsWith('http')) {
-          if (articleUrl.startsWith('/')) {
-            const baseUrlObj = new URL(source.url);
-            articleUrl = `${baseUrlObj.protocol}//${baseUrlObj.host}${articleUrl}`;
-          } else {
-            const baseUrlObj = new URL(source.url);
-            const basePath = baseUrlObj.pathname.replace(/\/[^\/]*$/, '/');
-            articleUrl = `${baseUrlObj.protocol}//${baseUrlObj.host}${basePath}${articleUrl}`;
+          let articleUrl = article.url || article.link;
+          if (articleUrl && !articleUrl.startsWith('http')) {
+            if (articleUrl.startsWith('/')) {
+              const baseUrlObj = new URL(source.url);
+              articleUrl = `${baseUrlObj.protocol}//${baseUrlObj.host}${articleUrl}`;
+            } else {
+              const baseUrlObj = new URL(source.url);
+              const basePath = baseUrlObj.pathname.replace(/\/[^\/]*$/, '/');
+              articleUrl = `${baseUrlObj.protocol}//${baseUrlObj.host}${basePath}${articleUrl}`;
+            }
           }
-        }
-        
+          
         return {
-          title: article.title || 'Untitled',
-          link: articleUrl,
+            title: article.title || 'Untitled',
+            link: articleUrl,
           url: articleUrl,
           description: article.description || '',
-          content: article.content || article.description || '',
+            content: article.content || article.description || '',
           datePublished: article.datePublished || null,
-          sourceName: source.name || 'Unknown Source',
-          category: source.category || 'General'
+            sourceName: source.name || 'Unknown Source',
+            category: source.category || 'General'
         };
       });
       
-      console.log(`✅ Scraping completed: ${lightweightArticles.length} articles found (lightweight, will check for new ones before full processing)`);
-      return lightweightArticles;
+            console.log(`✅ [${source.url}] Scraping completed: ${lightweightArticles.length} articles found (lightweight, will check for new ones before full processing)`);
+            if (lightweightArticles.length > 0) {
+              lightweightArticles.forEach((article, i) => {
+                console.log(`   ${i + 1}. "${article.title.substring(0, 50)}..." (date: ${article.datePublished || 'none'})`);
+              });
+            }
+            return lightweightArticles;
     } catch (error) {
       console.error(`❌ Error scraping ${source.url}:`, error.message);
       return [];
@@ -238,11 +243,52 @@ class WebScraper {
         console.log('⚠️ Could not set user agent, continuing without it...');
       }
       
+      // Set realistic browser headers to avoid Cloudflare/bot detection
+      try {
+        if (typeof page.setExtraHTTPHeaders === 'function') {
+          await page.setExtraHTTPHeaders({
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
+          });
+        }
+      } catch (headerError) {
+        // Header setting failed - continue anyway
+      }
+      
       // Navigate and wait for content to load (important for JS-rendered sites like Next.js)
       await page.goto(url, { 
         waitUntil: 'domcontentloaded', // Start with domcontentloaded, then wait for network
         timeout: 30000 
       });
+      
+      // Check if we hit a Cloudflare challenge
+      const isCloudflareChallenge = await page.evaluate(() => {
+        return document.body.textContent.includes('Checking your browser') ||
+               document.body.textContent.includes('Just a moment') ||
+               document.title.includes('Just a moment') ||
+               document.querySelector('#challenge-form') !== null ||
+               document.querySelector('.cf-browser-verification') !== null;
+      });
+      
+      if (isCloudflareChallenge) {
+        console.log(`⚠️  [${url}] Cloudflare challenge detected, waiting longer...`);
+        // Wait longer for Cloudflare to pass
+        await page.waitForTimeout(5000);
+        // Wait for challenge to complete (look for actual content)
+        try {
+          await page.waitForFunction(() => {
+            return !document.body.textContent.includes('Checking your browser') &&
+                   !document.body.textContent.includes('Just a moment') &&
+                   (document.querySelector('h1, article, main, a[href*="/blog/"]') !== null);
+          }, { timeout: 15000 });
+          console.log(`✅ [${url}] Cloudflare challenge passed, content loaded`);
+        } catch (e) {
+          console.warn(`⚠️  [${url}] Cloudflare challenge may not have passed, continuing anyway...`);
+        }
+      }
       
       // Wait for network to be idle (all AJAX/fetch requests complete)
       try {
@@ -388,7 +434,9 @@ class WebScraper {
           // Focus on blog post URLs (most reliable indicator)
           // Look for URLs like /blog/slug, /post/slug, /article/slug, /articles/slug
           // Also handle plural forms and variations
-          const isBlogPostUrl = href.match(/\/(blog|post|article|articles|news|updates|story|stories)\/[^\/\?#]+/i);
+          // EXCLUDE category/tag pages: /blog/category, /blog/tag, /blog/quick-reads, etc.
+          const isBlogPostUrl = href.match(/\/(blog|post|article|articles|news|updates|story|stories)\/[^\/\?#]+/i) &&
+                                !href.match(/\/(blog|post|article|articles)\/(quick-reads|artificial-intelligence|blockchain|cybersecurity|company-updates|io-intelligence|ai-infrastructure-compute|ai-startup-corner|developer-resources|search|tag|category|archive|author|c\/)/i);
           
           // If we're on an articles listing page, be more lenient - accept any link that:
           // 1. Matches article URL patterns, OR
@@ -625,8 +673,8 @@ class WebScraper {
             // Extract description
             description = (container.querySelector('[class*="excerpt"], [class*="summary"], [class*="description"], p')?.textContent.trim() || '').substring(0, 300);
           } else {
-          // Fallback: use link text if container not found
-          title = link.textContent.trim();
+            // Fallback: use link text if container not found
+            title = link.textContent.trim();
           }
           
           // Filter out generic/site-wide titles BEFORE using them
@@ -681,7 +729,24 @@ class WebScraper {
             }
           }
           
-            // Filter: Must have a meaningful title
+            // CRITICAL: Filter out non-article URLs FIRST (before title check)
+            const urlPath = new URL(href).pathname.toLowerCase();
+            const isNonArticleUrl = urlPath === '/search' ||
+                                   urlPath.startsWith('/c/') ||
+                                   urlPath.match(/^\/[a-z]{2}$/i) || // Language codes
+                                   urlPath.match(/^\/tag[s]?\/|\/category\/|\/archive\/|\/author\//i) ||
+                                   urlPath.includes('/search?') ||
+                                   urlPath.includes('/category/') ||
+                                   urlPath.includes('/tag/') ||
+                                   // Filter category pages: /blog/quick-reads, /blog/artificial-intelligence, etc.
+                                   urlPath.match(/\/(blog|post|article|articles)\/(quick-reads|artificial-intelligence|blockchain|cybersecurity|company-updates|io-intelligence|ai-infrastructure-compute|ai-startup-corner|developer-resources)(\/|$)/i);
+            
+            if (isNonArticleUrl) {
+              debug.push(`Filtered non-article URL: ${href} (path: ${urlPath})`);
+              return; // Skip non-article pages entirely
+          }
+          
+          // Filter: Must have a meaningful title
           if (title && title.length > 10) {
             // Skip if it's clearly not an article (navigation, buttons, etc.)
             const lowerTitle = title.toLowerCase().trim();
@@ -703,9 +768,18 @@ class WebScraper {
                   lowerTitle === 'ai startup corner' ||
                   lowerTitle === 'developer resources' ||
                   (lowerTitle.includes('swarm community call') && lowerTitle.includes('recap'))
-                ));
+                )) ||
+                // Reject generic page titles (too long, likely homepage/category)
+                (title.length > 100 && (
+                  lowerTitle.includes('mothership of ai') ||
+                  lowerTitle.includes('backbone of ai infrastructure') ||
+                  lowerTitle.includes('unlock unparalleled gpu compute')
+                )) ||
+                // Reject duplicate generic titles (same title = likely category page)
+                (lowerTitle.includes('swarm community call') && lowerTitle.includes('recap'));
             
             if (isGenericNav) {
+              debug.push(`Filtered generic title: "${title}" (URL: ${href})`);
               return;
             }
             
@@ -736,8 +810,13 @@ class WebScraper {
               // Already validated title length above, so accept it
             }
             
-            // Check if we already have this URL
-            if (!results.some(r => r.url === href)) {
+            // Check if we already have this URL OR this exact title (duplicate titles = likely category pages)
+            const isDuplicate = results.some(r => 
+              r.url === href || 
+              (r.title && r.title.toLowerCase().trim() === lowerTitle)
+            );
+            
+            if (!isDuplicate) {
               // Parse dateText to ISO string if it's a string
               let datePublished = null;
               if (dateText) {
@@ -910,15 +989,18 @@ class WebScraper {
       const limited = unique.slice(0, 5);
       
       if (limited.length === 0) {
-        console.log(`⚠️ Playwright found 0 articles. This might be because:`);
+        console.log(`⚠️ [${url}] Playwright found 0 articles. This might be because:`);
         console.log(`   - Content is loaded via JavaScript that needs more time`);
         console.log(`   - URL structure doesn't match expected patterns (/articles/slug)`);
         console.log(`   - Page structure is different than expected`);
-        console.log(`   - Site might be blocking scrapers`);
+        console.log(`   - Site might be blocking scrapers (Cloudflare?)`);
         console.log(`   - Articles might be loaded via API calls after page load`);
-        console.log(`💡 Check the browser console logs above for debug info about links found`);
+        console.log(`💡 Debug info: ${JSON.stringify(debug.slice(0, 10))}`);
       } else {
-        console.log(`✅ Playwright found ${limited.length} articles (from ${unique.length} total, showing most recent)`);
+        console.log(`✅ [${url}] Playwright found ${limited.length} articles (from ${unique.length} total, showing most recent)`);
+        limited.forEach((article, i) => {
+          console.log(`   ${i + 1}. "${article.title.substring(0, 50)}..." (date: ${article.datePublished || 'none'})`);
+        });
       }
       return limited;
       
