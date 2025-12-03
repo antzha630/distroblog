@@ -1659,6 +1659,9 @@ app.post('/api/sources/re-scrape-all', async (req, res) => {
               try {
                 const metadata = await feedMonitor.extractArticleMetadata(article.link);
                 
+                // MEMORY OPTIMIZATION: Small delay after each metadata fetch to allow browser cleanup
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
                 // Use article page title if available and better
                 if (metadata.title && metadata.title.trim().length > 10) {
                   const newTitle = metadata.title.trim();
