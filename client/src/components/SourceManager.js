@@ -290,14 +290,21 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
 
   const handleReScrapeAll = async () => {
     const scrapingSources = sources.filter(s => s.monitoring_type === 'SCRAPING' && s.is_active);
+    const allScrapingSources = sources.filter(s => s.monitoring_type === 'SCRAPING');
     
-    if (scrapingSources.length === 0) {
-      alert('No active scraping sources found to re-scrape.');
+    if (allScrapingSources.length === 0) {
+      alert('No scraping sources found to re-scrape.');
       return;
     }
     
-    if (!window.confirm(`Re-scrape all ${scrapingSources.length} scraping sources?\n\nThis will update existing articles with improved titles and dates. This may take several minutes.`)) {
-      return;
+    if (scrapingSources.length === 0) {
+      if (!window.confirm(`All scraping sources are paused. Re-scrape all ${allScrapingSources.length} scraping sources anyway?\n\nThis will update existing articles with improved titles and dates. This may take several minutes.`)) {
+        return;
+      }
+    } else {
+      if (!window.confirm(`Re-scrape all ${scrapingSources.length} active scraping sources?\n\nThis will update existing articles with improved titles and dates. This may take several minutes.`)) {
+        return;
+      }
     }
     
     setIsReScrapingAll(true);
@@ -495,7 +502,10 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
           const scrapingSources = sources.filter(s => s.monitoring_type === 'SCRAPING' && s.is_active);
           console.log('Scraping sources count:', scrapingSources.length, 'Total sources:', sources.length);
           console.log('Sources:', sources.map(s => ({ name: s.name, type: s.monitoring_type, active: s.is_active })));
-          if (scrapingSources.length === 0) return null;
+          
+          // Always show button if there are any scraping sources (even if paused)
+          const allScrapingSources = sources.filter(s => s.monitoring_type === 'SCRAPING');
+          if (allScrapingSources.length === 0) return null;
           
           return (
             <div style={{
