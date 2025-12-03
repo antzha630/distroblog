@@ -1783,7 +1783,6 @@ app.post('/api/sources/re-scrape-all', async (req, res) => {
       }
     }
     
-    const totalDeleted = results.reduce((sum, r) => sum + (r.articles_deleted || 0), 0);
     console.log(`\n✅ Bulk re-scrape complete: ${totalUpdated} articles updated, ${totalDeleted} bad articles deleted, ${totalErrors} errors`);
     
     res.json({
