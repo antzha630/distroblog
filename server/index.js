@@ -1039,8 +1039,8 @@ app.post('/api/sources/:id/re-scrape', async (req, res) => {
       // Process in smaller batches to prevent memory spikes
       const articlesToProcess = articles.slice(0, 30);
       
-      // Process articles in batches of 5 to avoid memory spikes
-      const batchSize = 5;
+      // Process articles in batches of 3 to avoid memory spikes
+      const batchSize = 3;
       for (let i = 0; i < articlesToProcess.length; i += batchSize) {
         const batch = articlesToProcess.slice(i, i + batchSize);
         
@@ -1053,32 +1053,92 @@ app.post('/api/sources/:id/re-scrape', async (req, res) => {
             const existing = await database.getArticleByLink(article.link);
             if (!existing) continue; // Skip new articles (they'll be added normally)
             
+            // CRITICAL: Fetch metadata from article page for better title/date
+            // This is what makes re-scrape actually improve the data
+            let improvedTitle = article.title.trim();
+            let improvedDate = article.datePublished ? new Date(article.datePublished) : null;
+            
+            try {
+              console.log(`🔍 Fetching article page metadata for: ${article.link.substring(0, 60)}...`);
+              const metadata = await feedMonitor.extractArticleMetadata(article.link);
+              
+              // Use article page title if available and better
+              if (metadata.title && metadata.title.trim().length > 10) {
+                const newTitle = metadata.title.trim();
+                const newTitleLower = newTitle.toLowerCase();
+                const isGeneric = newTitleLower.includes('blog') ||
+                                 newTitleLower.includes('all posts') ||
+                                 newTitleLower.includes('latest by topic') ||
+                                 newTitleLower.includes('mothership') ||
+                                 newTitleLower.includes('backbone of ai infrastructure') ||
+                                 (newTitle.length < 25 && (
+                                   newTitleLower === 'blockchain web3' ||
+                                   newTitleLower === 'cybersecurity' ||
+                                   newTitleLower === 'company updates' ||
+                                   newTitleLower === 'io intelligence' ||
+                                   newTitleLower === 'ai infrastructure compute' ||
+                                   newTitleLower === 'ai startup corner' ||
+                                   newTitleLower === 'developer resources' ||
+                                   (newTitleLower.includes('swarm community call') && newTitleLower.includes('recap'))
+                                 ));
+                
+                if (!isGeneric) {
+                  improvedTitle = newTitle;
+                  console.log(`📝 Found better title from article page: "${improvedTitle}"`);
+                }
+              }
+              
+              // Use article page date if available
+              if (metadata.pubDate) {
+                try {
+                  const articlePageDate = new Date(metadata.pubDate);
+                  if (!isNaN(articlePageDate.getTime())) {
+                    improvedDate = articlePageDate;
+                    console.log(`📅 Found date from article page: ${improvedDate.toISOString()}`);
+                  }
+                } catch (e) {
+                  // Invalid date, skip
+                }
+              }
+            } catch (metadataError) {
+              // If fetching metadata fails, use what we have from listing page
+              console.log(`⚠️ Could not fetch article page metadata: ${metadataError.message}`);
+            }
+            
             // Prepare updates
             const updatesToApply = {};
             let hasUpdates = false;
             
             // Update title if new one is better (longer, not generic)
-            const newTitle = article.title.trim();
             const currentTitle = existing.title || '';
-            const isGeneric = newTitle.toLowerCase().includes('latest by topic') ||
-                             newTitle.toLowerCase().includes('mothership of ai') ||
-                             newTitle.toLowerCase().includes('backbone of ai infrastructure');
+            const isGeneric = improvedTitle.toLowerCase().includes('latest by topic') ||
+                             improvedTitle.toLowerCase().includes('mothership of ai') ||
+                             improvedTitle.toLowerCase().includes('backbone of ai infrastructure') ||
+                             (improvedTitle.length < 25 && (
+                               improvedTitle.toLowerCase() === 'blockchain web3' ||
+                               improvedTitle.toLowerCase() === 'cybersecurity' ||
+                               improvedTitle.toLowerCase() === 'company updates' ||
+                               improvedTitle.toLowerCase() === 'io intelligence' ||
+                               improvedTitle.toLowerCase() === 'ai infrastructure compute' ||
+                               improvedTitle.toLowerCase() === 'ai startup corner' ||
+                               improvedTitle.toLowerCase() === 'developer resources' ||
+                               (improvedTitle.toLowerCase().includes('swarm community call') && improvedTitle.toLowerCase().includes('recap'))
+                             ));
             
-            if (newTitle && 
-                newTitle.length > 10 && 
+            if (improvedTitle && 
+                improvedTitle.length > 10 && 
                 !isGeneric &&
-                (newTitle !== currentTitle) &&
-                (newTitle.length > currentTitle.length || currentTitle.length < 20)) {
-              updatesToApply.title = newTitle;
+                (improvedTitle !== currentTitle) &&
+                (improvedTitle.length > currentTitle.length || currentTitle.length < 20)) {
+              updatesToApply.title = improvedTitle;
               hasUpdates = true;
             }
             
             // Update date if we found one and existing doesn't have one
-            if (article.pubDate && !existing.pub_date) {
+            if (improvedDate && !existing.pub_date) {
               try {
-                const pubDate = new Date(article.pubDate);
-                if (!isNaN(pubDate.getTime())) {
-                  updatesToApply.pub_date = pubDate.toISOString();
+                if (!isNaN(improvedDate.getTime())) {
+                  updatesToApply.pub_date = improvedDate.toISOString();
                   hasUpdates = true;
                 }
               } catch (e) {
@@ -1185,31 +1245,75 @@ app.post('/api/sources/re-scrape-all', async (req, res) => {
               const existing = await database.getArticleByLink(article.link);
               if (!existing) continue;
               
+              // CRITICAL: Fetch metadata from article page for better title/date
+              let improvedTitle = article.title.trim();
+              let improvedDate = article.datePublished ? new Date(article.datePublished) : null;
+              
+              try {
+                const metadata = await feedMonitor.extractArticleMetadata(article.link);
+                
+                // Use article page title if available and better
+                if (metadata.title && metadata.title.trim().length > 10) {
+                  const newTitle = metadata.title.trim();
+                  const newTitleLower = newTitle.toLowerCase();
+                  const isGeneric = newTitleLower.includes('blog') ||
+                                   newTitleLower.includes('all posts') ||
+                                   newTitleLower.includes('latest by topic') ||
+                                   (newTitle.length < 25 && (
+                                     newTitleLower === 'blockchain web3' ||
+                                     newTitleLower === 'cybersecurity' ||
+                                     newTitleLower === 'company updates'
+                                   ));
+                  
+                  if (!isGeneric) {
+                    improvedTitle = newTitle;
+                  }
+                }
+                
+                // Use article page date if available
+                if (metadata.pubDate) {
+                  try {
+                    const articlePageDate = new Date(metadata.pubDate);
+                    if (!isNaN(articlePageDate.getTime())) {
+                      improvedDate = articlePageDate;
+                    }
+                  } catch (e) {
+                    // Invalid date, skip
+                  }
+                }
+              } catch (metadataError) {
+                // If fetching metadata fails, use what we have from listing page
+                console.log(`⚠️ Could not fetch article page metadata: ${metadataError.message}`);
+              }
+              
               const updatesToApply = {};
               let hasUpdates = false;
               
               // Update title if better
-              const newTitle = article.title.trim();
               const currentTitle = existing.title || '';
-              const isGeneric = newTitle.toLowerCase().includes('latest by topic') ||
-                               newTitle.toLowerCase().includes('mothership of ai') ||
-                               newTitle.toLowerCase().includes('backbone of ai infrastructure');
+              const isGeneric = improvedTitle.toLowerCase().includes('latest by topic') ||
+                               improvedTitle.toLowerCase().includes('mothership of ai') ||
+                               improvedTitle.toLowerCase().includes('backbone of ai infrastructure') ||
+                               (improvedTitle.length < 25 && (
+                                 improvedTitle.toLowerCase() === 'blockchain web3' ||
+                                 improvedTitle.toLowerCase() === 'cybersecurity' ||
+                                 improvedTitle.toLowerCase() === 'company updates'
+                               ));
               
-              if (newTitle && 
-                  newTitle.length > 10 && 
+              if (improvedTitle && 
+                  improvedTitle.length > 10 && 
                   !isGeneric &&
-                  (newTitle !== currentTitle) &&
-                  (newTitle.length > currentTitle.length || currentTitle.length < 20)) {
-                updatesToApply.title = newTitle;
+                  (improvedTitle !== currentTitle) &&
+                  (improvedTitle.length > currentTitle.length || currentTitle.length < 20)) {
+                updatesToApply.title = improvedTitle;
                 hasUpdates = true;
               }
               
               // Update date if missing
-              if (article.datePublished && !existing.pub_date) {
+              if (improvedDate && !existing.pub_date) {
                 try {
-                  const pubDate = new Date(article.datePublished);
-                  if (!isNaN(pubDate.getTime())) {
-                    updatesToApply.pub_date = pubDate.toISOString();
+                  if (!isNaN(improvedDate.getTime())) {
+                    updatesToApply.pub_date = improvedDate.toISOString();
                     hasUpdates = true;
                   }
                 } catch (e) {
