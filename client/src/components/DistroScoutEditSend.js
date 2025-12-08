@@ -99,7 +99,7 @@ function DistroScoutEditSend({ articles, onBack, onEditArticle, onRemoveArticle,
   const handleSendToTelegram = async (articleId) => {
     setTelegramSending(prev => ({ ...prev, [articleId]: true }));
     try {
-      const response = await fetch('/api/articles/send-telegram', {
+      const response = await fetch(`${config.API_BASE_URL}/api/articles/send-telegram`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -107,16 +107,21 @@ function DistroScoutEditSend({ articles, onBack, onEditArticle, onRemoveArticle,
         body: JSON.stringify({ articleId }),
       });
 
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to send to Telegram');
+      }
+
       const result = await response.json();
       
       if (result.success) {
-        alert('Article sent to Telegram successfully!');
+        alert('✅ Article sent to Telegram successfully!');
       } else {
-        alert(`Failed to send to Telegram: ${result.error || 'Unknown error'}`);
+        alert(`❌ Failed to send to Telegram: ${result.error || 'Unknown error'}`);
       }
     } catch (error) {
       console.error('Error sending to Telegram:', error);
-      alert('Failed to send to Telegram. Please try again.');
+      alert(`❌ Failed to send to Telegram: ${error.message || 'Please try again.'}`);
     } finally {
       setTelegramSending(prev => ({ ...prev, [articleId]: false }));
     }

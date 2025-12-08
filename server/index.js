@@ -759,6 +759,140 @@ app.post('/api/articles/send', async (req, res) => {
   }
 });
 
+// Send article to Telegram
+app.post('/api/articles/send-telegram', async (req, res) => {
+  try {
+    const { articleId } = req.body;
+    
+    if (!articleId) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Article ID is required' 
+      });
+    }
+
+    // Get article from database
+    const article = await database.getArticleById(articleId);
+    if (!article) {
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Article not found' 
+      });
+    }
+
+    // Check Telegram configuration
+    if (!config.telegram.botToken || !config.telegram.channelId) {
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Telegram bot token or channel ID not configured. Please set TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_ID in environment variables.' 
+      });
+    }
+
+    // Format message for Telegram
+    // Use preview/description if available, otherwise use content (truncated)
+    const preview = article.ai_summary || article.publisher_description || article.preview || article.content?.substring(0, 300) || 'No preview available';
+    const truncatedPreview = preview.length > 500 ? preview.substring(0, 500) + '...' : preview;
+    
+    // Escape HTML special characters for Telegram HTML parse mode
+    const escapeHtml = (text) => {
+      if (!text) return '';
+      return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    };
+    
+    // Format the message with title, preview, source, and link
+    // Using HTML parse mode for better formatting control and simpler escaping
+    const title = escapeHtml(article.title || 'Untitled Article');
+    const previewText = escapeHtml(truncatedPreview);
+    const source = escapeHtml(article.source_name || 'Unknown');
+    const link = escapeHtml(article.link);
+    
+    const message = `📰 <b>${title}</b>\n\n${previewText}\n\n🔗 <a href="${link}">Read more</a>\n📊 Source: ${source}`;
+
+    // Send to Telegram using Bot API
+    const telegramApiUrl = `https://api.telegram.org/bot${config.telegram.botToken}/sendMessage`;
+    
+    // Handle channel ID format - Telegram channels need -100 prefix for numeric IDs
+    let chatId = config.telegram.channelId;
+    let messageThreadId = config.telegram.messageThreadId;
+    
+    // Check if channel ID contains thread ID (format: -1001234567890_529)
+    if (chatId.includes('_')) {
+      const parts = chatId.split('_');
+      chatId = parts[0]; // Channel ID is the part before underscore
+      messageThreadId = parts[1]; // Thread ID is the part after underscore
+      console.log(`📝 Parsed channel ID: ${chatId}, thread ID: ${messageThreadId}`);
+    }
+    
+    // If it's a plain numeric ID (not starting with @ or -), try adding -100 prefix for channels
+    if (/^\d+$/.test(chatId)) {
+      // It's a plain number, try with -100 prefix (standard for Telegram channels)
+      chatId = `-100${chatId}`;
+      console.log(`📝 Using channel ID with -100 prefix: ${chatId}`);
+    }
+    
+    const payload = {
+      chat_id: chatId,
+      text: message,
+      parse_mode: 'HTML', // Use HTML for simpler formatting
+      disable_web_page_preview: false
+    };
+
+    // Add message_thread_id if configured (for topics in channels)
+    if (messageThreadId) {
+      payload.message_thread_id = parseInt(messageThreadId);
+      console.log(`📝 Sending to topic/thread: ${messageThreadId}`);
+    }
+
+    try {
+      const telegramResponse = await axios.post(telegramApiUrl, payload, {
+        timeout: 10000
+      });
+
+      if (telegramResponse.data.ok) {
+        console.log(`✅ Article "${article.title}" sent to Telegram successfully`);
+        
+        // Optionally mark article as sent to Telegram
+        // await database.updateArticle(articleId, { telegram_sent: true });
+        
+        res.json({ 
+          success: true, 
+          message: 'Article sent to Telegram successfully',
+          messageId: telegramResponse.data.result.message_id
+        });
+      } else {
+        throw new Error(telegramResponse.data.description || 'Unknown Telegram API error');
+      }
+    } catch (telegramError) {
+      console.error('Telegram API error:', telegramError.response?.data || telegramError.message);
+      
+      let errorMessage = 'Failed to send to Telegram';
+      if (telegramError.response?.data?.description) {
+        errorMessage = telegramError.response.data.description;
+      } else if (telegramError.message) {
+        errorMessage = telegramError.message;
+      }
+      
+      return res.status(500).json({ 
+        success: false, 
+        error: errorMessage,
+        details: telegramError.response?.data
+      });
+    }
+  } catch (error) {
+    console.error('Error sending article to Telegram:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to send article to Telegram',
+      details: error.message
+    });
+  }
+});
+
 // Get the most recent last_checked timestamp from all sources
 app.get('/api/monitor/last-checked', async (req, res) => {
   try {
