@@ -848,6 +848,12 @@ app.post('/api/articles/send-telegram', async (req, res) => {
       console.log(`📝 Sending to topic/thread: ${messageThreadId}`);
     }
 
+    const results = {
+      telegram: { success: false, error: null },
+      externalApi: { success: false, error: null }
+    };
+
+    // Step 1: Send to Telegram
     try {
       const telegramResponse = await axios.post(telegramApiUrl, payload, {
         timeout: 10000
@@ -855,15 +861,8 @@ app.post('/api/articles/send-telegram', async (req, res) => {
 
       if (telegramResponse.data.ok) {
         console.log(`✅ Article "${article.title}" sent to Telegram successfully`);
-        
-        // Optionally mark article as sent to Telegram
-        // await database.updateArticle(articleId, { telegram_sent: true });
-        
-        res.json({ 
-          success: true, 
-          message: 'Article sent to Telegram successfully',
-          messageId: telegramResponse.data.result.message_id
-        });
+        results.telegram.success = true;
+        results.telegram.messageId = telegramResponse.data.result.message_id;
       } else {
         throw new Error(telegramResponse.data.description || 'Unknown Telegram API error');
       }
@@ -877,10 +876,71 @@ app.post('/api/articles/send-telegram', async (req, res) => {
         errorMessage = telegramError.message;
       }
       
-      return res.status(500).json({ 
+      results.telegram.error = errorMessage;
+    }
+
+    // Step 2: Send to external API (pulse-chain)
+    try {
+      const externalPayload = {
+        user_info: {
+          name: "Distro DeAI News Flash"
+        },
+        more_info_url: article.link,
+        source: article.source_name || 'Unknown',
+        cost: 10,
+        preview: article.ai_summary || article.publisher_description || article.preview || '',
+        title: article.title,
+        content: article.content || ''
+      };
+
+      const externalResponse = await axios.post(config.distro.apiEndpoint, externalPayload, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${config.distro.apiKey}`,
+          'X-API-Key': config.distro.apiKey
+        },
+        timeout: 10000
+      });
+
+      console.log(`✅ Article "${article.title}" sent to external API successfully`);
+      results.externalApi.success = true;
+      results.externalApi.response = externalResponse.data;
+    } catch (externalError) {
+      console.error(`Error sending "${article.title}" to external API:`, externalError.message);
+      results.externalApi.error = externalError.message;
+    }
+
+    // Return combined results
+    const telegramSuccess = results.telegram.success;
+    const externalSuccess = results.externalApi.success;
+    
+    if (telegramSuccess && externalSuccess) {
+      res.json({ 
+        success: true, 
+        message: 'Article sent to Telegram and external API successfully',
+        telegram: results.telegram,
+        externalApi: results.externalApi
+      });
+    } else if (telegramSuccess) {
+      res.json({ 
+        success: true, 
+        message: 'Article sent to Telegram successfully, but failed to send to external API',
+        telegram: results.telegram,
+        externalApi: results.externalApi
+      });
+    } else if (externalSuccess) {
+      res.json({ 
         success: false, 
-        error: errorMessage,
-        details: telegramError.response?.data
+        message: 'Article sent to external API successfully, but failed to send to Telegram',
+        telegram: results.telegram,
+        externalApi: results.externalApi
+      });
+    } else {
+      res.status(500).json({ 
+        success: false, 
+        message: 'Failed to send to both Telegram and external API',
+        telegram: results.telegram,
+        externalApi: results.externalApi
       });
     }
   } catch (error) {
