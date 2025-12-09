@@ -258,8 +258,8 @@ class FeedMonitor {
       console.log(`🔍 [CHECK NOW] Checking ${activeSources.length} active sources for new articles...`);
       const results = [];
       
-      // MEMORY OPTIMIZATION: Process sources sequentially with delays
-      // For manual checks, run faster and skip heavy metadata fetches
+      // Process sources sequentially; for manual checks we skip heavy metadata fetches
+      // and for both manual/auto we now avoid artificial delays to improve speed.
       const isManual = allowManual;
       const BATCH_SIZE = 3; // Process articles in batches to control memory
       let totalNewArticlesProcessed = 0;
@@ -288,10 +288,7 @@ class FeedMonitor {
               console.warn(`⚠️  [CHECK NOW] [${source.name}] Could not close webScraper browser: ${closeError.message}`);
             }
             
-            // MEMORY OPTIMIZATION: Delay to allow garbage collection (skip for manual to speed up)
-            if (!isManual) {
-              await new Promise(resolve => setTimeout(resolve, 500));
-            }
+            // Removed GC delay to speed up
             
             console.log(`📰 [CHECK NOW] [${source.name}] Checking ${articles.length} articles for new ones...`);
             
@@ -360,8 +357,7 @@ class FeedMonitor {
                       const metadataDuration = Date.now() - metadataStartTime;
                       console.log(`✅ [CHECK NOW] [${source.name}] Optimized metadata fetched in ${metadataDuration}ms`);
                       
-                      // MEMORY OPTIMIZATION: Delay after metadata fetch to allow browser cleanup
-                      await new Promise(resolve => setTimeout(resolve, 500));
+                      // Skip post-metadata delay to speed up
                       
                       // Use article page title if available and better (same logic as re-scrape)
                       if (metadata.title && metadata.title.trim().length > 10) {
@@ -456,10 +452,7 @@ class FeedMonitor {
                     // Log new article found with optimized data
                     console.log(`✨ [CHECK NOW] [${source.name}] NEW ARTICLE ADDED (with optimized title/date): "${articleObj.title.substring(0, 60)}..." | Date: ${articleObj.pubDate || 'NO DATE'}`);
                     
-                    // MEMORY OPTIMIZATION: Delay after each new article to allow garbage collection (skip for manual)
-                    if (!isManual) {
-                      await new Promise(resolve => setTimeout(resolve, 500));
-                    }
+                    // Removed per-article delay to speed up
                   }
                 } catch (articleErr) {
                   console.error(`❌ [CHECK NOW] [${source.name}] Error processing article:`, articleErr.message);
@@ -467,17 +460,10 @@ class FeedMonitor {
                 }
               }
               
-              // MEMORY OPTIMIZATION: Delay after each batch to allow garbage collection (skip for manual)
-              if (!isManual && batchIdx + BATCH_SIZE < newArticlesToProcess.length) {
-                console.log(`⏸️  [CHECK NOW] [${source.name}] Pausing 1s after batch to allow memory cleanup...`);
-                await new Promise(resolve => setTimeout(resolve, 1000));
-              }
+              // Removed per-batch delay to speed up
             }
             
-            // MEMORY OPTIMIZATION: Delay after processing all articles from a source (skip for manual)
-            if (!isManual) {
-              await new Promise(resolve => setTimeout(resolve, 1000));
-            }
+            // Removed per-source delay to speed up
             
             if (newArticles.length > 0) {
               console.log(`✅ [CHECK NOW] [${source.name}] Added ${newArticles.length} new article(s)`);
@@ -492,9 +478,8 @@ class FeedMonitor {
             console.log(`📡 [CHECK NOW] [${source.name}] Checking RSS/JSON feed: ${source.url}`);
             const rssStartTime = Date.now();
             
-            // Process ALL articles from RSS feed (most feeds have 10-30 items, check up to 100 to be safe)
-            // This ensures we get ALL new articles, not just a limited number
-            newArticles = await this.checkFeedLimited(source, 100); // Check up to 100 items for new articles
+            // Process recent articles from RSS feed (limit to 50 for speed)
+            newArticles = await this.checkFeedLimited(source, 50);
             const rssDuration = Date.now() - rssStartTime;
             console.log(`✅ [CHECK NOW] [${source.name}] RSS check completed in ${rssDuration}ms, found ${newArticles.length} new articles`);
             
@@ -512,10 +497,7 @@ class FeedMonitor {
             monitoring_type: monitoringType
           });
           
-          // MEMORY OPTIMIZATION: Delay between sources to allow garbage collection (skip for manual)
-          if (!isManual && i < activeSources.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 500));
-          }
+          // Removed inter-source delay to speed up
         } catch (error) {
           console.error(`❌ [CHECK NOW] [${source.name}] Error checking ${source.monitoring_type || 'RSS'} source:`, error.message);
           results.push({
