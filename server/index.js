@@ -761,27 +761,44 @@ app.post('/api/articles/send', async (req, res) => {
 
 // Send article to Telegram
 app.post('/api/articles/send-telegram', async (req, res) => {
+  const startTime = Date.now();
+  console.log(`\n📱 [TELEGRAM] Send request received at ${new Date().toISOString()}`);
+  console.log(`📱 [TELEGRAM] Request body:`, req.body);
+  
   try {
     const { articleId } = req.body;
     
     if (!articleId) {
+      console.error(`❌ [TELEGRAM] Missing articleId in request`);
       return res.status(400).json({ 
         success: false, 
         error: 'Article ID is required' 
       });
     }
 
+    console.log(`📱 [TELEGRAM] Looking up article ID: ${articleId}`);
+
     // Get article from database
     const article = await database.getArticleById(articleId);
     if (!article) {
+      console.error(`❌ [TELEGRAM] Article not found with ID: ${articleId}`);
       return res.status(404).json({ 
         success: false, 
         error: 'Article not found' 
       });
     }
 
+    console.log(`✅ [TELEGRAM] Article found: "${article.title}" (ID: ${article.id})`);
+    console.log(`📱 [TELEGRAM] Article link: ${article.link}`);
+
     // Check Telegram configuration
+    console.log(`📱 [TELEGRAM] Checking configuration...`);
+    console.log(`📱 [TELEGRAM] Bot token present: ${!!config.telegram.botToken} (length: ${config.telegram.botToken?.length || 0})`);
+    console.log(`📱 [TELEGRAM] Channel ID: ${config.telegram.channelId || 'NOT SET'}`);
+    console.log(`📱 [TELEGRAM] Thread ID: ${config.telegram.messageThreadId || 'NOT SET'}`);
+    
     if (!config.telegram.botToken || !config.telegram.channelId) {
+      console.error(`❌ [TELEGRAM] Configuration missing! Bot token: ${!!config.telegram.botToken}, Channel ID: ${!!config.telegram.channelId}`);
       return res.status(500).json({ 
         success: false, 
         error: 'Telegram bot token or channel ID not configured. Please set TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_ID in environment variables.' 
@@ -789,9 +806,12 @@ app.post('/api/articles/send-telegram', async (req, res) => {
     }
 
     // Format message for Telegram
+    console.log(`📱 [TELEGRAM] Formatting message...`);
     // Use preview/description if available, otherwise use content (truncated)
     const preview = article.ai_summary || article.publisher_description || article.preview || article.content?.substring(0, 300) || 'No preview available';
     const truncatedPreview = preview.length > 500 ? preview.substring(0, 500) + '...' : preview;
+    
+    console.log(`📱 [TELEGRAM] Preview length: ${truncatedPreview.length} chars`);
     
     // Escape HTML special characters for Telegram HTML parse mode
     const escapeHtml = (text) => {
@@ -812,27 +832,34 @@ app.post('/api/articles/send-telegram', async (req, res) => {
     const link = escapeHtml(article.link);
     
     const message = `📰 <b>${title}</b>\n\n${previewText}\n\n🔗 <a href="${link}">Read more</a>\n📊 Source: ${source}`;
+    
+    console.log(`📱 [TELEGRAM] Message formatted (${message.length} chars)`);
+    console.log(`📱 [TELEGRAM] Message preview: ${message.substring(0, 100)}...`);
 
     // Send to Telegram using Bot API
     const telegramApiUrl = `https://api.telegram.org/bot${config.telegram.botToken}/sendMessage`;
+    console.log(`📱 [TELEGRAM] Telegram API URL: https://api.telegram.org/bot***/sendMessage (token hidden)`);
     
     // Handle channel ID format - Telegram channels need -100 prefix for numeric IDs
     let chatId = config.telegram.channelId;
     let messageThreadId = config.telegram.messageThreadId;
+    
+    console.log(`📱 [TELEGRAM] Original channel ID: ${chatId}`);
+    console.log(`📱 [TELEGRAM] Original thread ID: ${messageThreadId || 'none'}`);
     
     // Check if channel ID contains thread ID (format: -1001234567890_529)
     if (chatId.includes('_')) {
       const parts = chatId.split('_');
       chatId = parts[0]; // Channel ID is the part before underscore
       messageThreadId = parts[1]; // Thread ID is the part after underscore
-      console.log(`📝 Parsed channel ID: ${chatId}, thread ID: ${messageThreadId}`);
+      console.log(`📱 [TELEGRAM] Parsed channel ID: ${chatId}, thread ID: ${messageThreadId}`);
     }
     
     // If it's a plain numeric ID (not starting with @ or -), try adding -100 prefix for channels
     if (/^\d+$/.test(chatId)) {
       // It's a plain number, try with -100 prefix (standard for Telegram channels)
       chatId = `-100${chatId}`;
-      console.log(`📝 Using channel ID with -100 prefix: ${chatId}`);
+      console.log(`📱 [TELEGRAM] Added -100 prefix: ${chatId}`);
     }
     
     const payload = {
@@ -845,8 +872,15 @@ app.post('/api/articles/send-telegram', async (req, res) => {
     // Add message_thread_id if configured (for topics in channels)
     if (messageThreadId) {
       payload.message_thread_id = parseInt(messageThreadId);
-      console.log(`📝 Sending to topic/thread: ${messageThreadId}`);
+      console.log(`📱 [TELEGRAM] Added thread ID to payload: ${messageThreadId}`);
     }
+    
+    console.log(`📱 [TELEGRAM] Final payload:`, {
+      chat_id: payload.chat_id,
+      message_thread_id: payload.message_thread_id || 'none',
+      parse_mode: payload.parse_mode,
+      text_length: payload.text.length
+    });
 
     const results = {
       telegram: { success: false, error: null },
@@ -854,24 +888,50 @@ app.post('/api/articles/send-telegram', async (req, res) => {
     };
 
     // Step 1: Send to Telegram
+    console.log(`📱 [TELEGRAM] Sending to Telegram API...`);
+    const telegramStartTime = Date.now();
     try {
       const telegramResponse = await axios.post(telegramApiUrl, payload, {
         timeout: 10000
       });
 
+      const telegramDuration = Date.now() - telegramStartTime;
+      console.log(`📱 [TELEGRAM] Telegram API response received in ${telegramDuration}ms`);
+      console.log(`📱 [TELEGRAM] Response status: ${telegramResponse.status}`);
+      console.log(`📱 [TELEGRAM] Response data:`, JSON.stringify(telegramResponse.data, null, 2));
+
       if (telegramResponse.data.ok) {
-        console.log(`✅ Article "${article.title}" sent to Telegram successfully`);
+        console.log(`✅ [TELEGRAM] Article "${article.title}" sent to Telegram successfully`);
+        console.log(`✅ [TELEGRAM] Message ID: ${telegramResponse.data.result.message_id}`);
         results.telegram.success = true;
         results.telegram.messageId = telegramResponse.data.result.message_id;
       } else {
+        console.error(`❌ [TELEGRAM] Telegram API returned ok=false`);
+        console.error(`❌ [TELEGRAM] Error description: ${telegramResponse.data.description}`);
         throw new Error(telegramResponse.data.description || 'Unknown Telegram API error');
       }
     } catch (telegramError) {
-      console.error('Telegram API error:', telegramError.response?.data || telegramError.message);
+      const telegramDuration = Date.now() - telegramStartTime;
+      console.error(`❌ [TELEGRAM] Error after ${telegramDuration}ms`);
+      console.error(`❌ [TELEGRAM] Error type: ${telegramError.name}`);
+      console.error(`❌ [TELEGRAM] Error message: ${telegramError.message}`);
+      
+      if (telegramError.response) {
+        console.error(`❌ [TELEGRAM] Response status: ${telegramError.response.status}`);
+        console.error(`❌ [TELEGRAM] Response data:`, JSON.stringify(telegramError.response.data, null, 2));
+      } else if (telegramError.request) {
+        console.error(`❌ [TELEGRAM] No response received from Telegram API`);
+        console.error(`❌ [TELEGRAM] Request config:`, {
+          url: telegramError.config?.url,
+          method: telegramError.config?.method,
+          timeout: telegramError.config?.timeout
+        });
+      }
       
       let errorMessage = 'Failed to send to Telegram';
       if (telegramError.response?.data?.description) {
         errorMessage = telegramError.response.data.description;
+        console.error(`❌ [TELEGRAM] Error description: ${errorMessage}`);
       } else if (telegramError.message) {
         errorMessage = telegramError.message;
       }
@@ -880,6 +940,8 @@ app.post('/api/articles/send-telegram', async (req, res) => {
     }
 
     // Step 2: Send to external API (pulse-chain)
+    console.log(`📱 [TELEGRAM] Sending to external API: ${config.distro.apiEndpoint}`);
+    const externalStartTime = Date.now();
     try {
       const externalPayload = {
         user_info: {
@@ -893,6 +955,13 @@ app.post('/api/articles/send-telegram', async (req, res) => {
         content: article.content || ''
       };
 
+      console.log(`📱 [TELEGRAM] External API payload:`, {
+        title: externalPayload.title,
+        source: externalPayload.source,
+        preview_length: externalPayload.preview.length,
+        content_length: externalPayload.content.length
+      });
+
       const externalResponse = await axios.post(config.distro.apiEndpoint, externalPayload, {
         headers: {
           'Content-Type': 'application/json',
@@ -902,19 +971,33 @@ app.post('/api/articles/send-telegram', async (req, res) => {
         timeout: 10000
       });
 
-      console.log(`✅ Article "${article.title}" sent to external API successfully`);
+      const externalDuration = Date.now() - externalStartTime;
+      console.log(`✅ [TELEGRAM] Article "${article.title}" sent to external API successfully in ${externalDuration}ms`);
+      console.log(`✅ [TELEGRAM] External API response:`, JSON.stringify(externalResponse.data, null, 2));
       results.externalApi.success = true;
       results.externalApi.response = externalResponse.data;
     } catch (externalError) {
-      console.error(`Error sending "${article.title}" to external API:`, externalError.message);
+      const externalDuration = Date.now() - externalStartTime;
+      console.error(`❌ [TELEGRAM] Error sending to external API after ${externalDuration}ms`);
+      console.error(`❌ [TELEGRAM] Error: ${externalError.message}`);
+      if (externalError.response) {
+        console.error(`❌ [TELEGRAM] External API response status: ${externalError.response.status}`);
+        console.error(`❌ [TELEGRAM] External API response data:`, JSON.stringify(externalError.response.data, null, 2));
+      }
       results.externalApi.error = externalError.message;
     }
 
     // Return combined results
+    const totalDuration = Date.now() - startTime;
     const telegramSuccess = results.telegram.success;
     const externalSuccess = results.externalApi.success;
     
+    console.log(`\n📱 [TELEGRAM] Summary (${totalDuration}ms total):`);
+    console.log(`📱 [TELEGRAM] Telegram: ${telegramSuccess ? '✅ Success' : '❌ Failed'}`);
+    console.log(`📱 [TELEGRAM] External API: ${externalSuccess ? '✅ Success' : '❌ Failed'}`);
+    
     if (telegramSuccess && externalSuccess) {
+      console.log(`✅ [TELEGRAM] Both services succeeded`);
       res.json({ 
         success: true, 
         message: 'Article sent to Telegram and external API successfully',
@@ -922,6 +1005,7 @@ app.post('/api/articles/send-telegram', async (req, res) => {
         externalApi: results.externalApi
       });
     } else if (telegramSuccess) {
+      console.log(`⚠️  [TELEGRAM] Telegram succeeded, external API failed`);
       res.json({ 
         success: true, 
         message: 'Article sent to Telegram successfully, but failed to send to external API',
@@ -929,6 +1013,7 @@ app.post('/api/articles/send-telegram', async (req, res) => {
         externalApi: results.externalApi
       });
     } else if (externalSuccess) {
+      console.log(`⚠️  [TELEGRAM] External API succeeded, Telegram failed`);
       res.json({ 
         success: false, 
         message: 'Article sent to external API successfully, but failed to send to Telegram',
@@ -936,6 +1021,7 @@ app.post('/api/articles/send-telegram', async (req, res) => {
         externalApi: results.externalApi
       });
     } else {
+      console.log(`❌ [TELEGRAM] Both services failed`);
       res.status(500).json({ 
         success: false, 
         message: 'Failed to send to both Telegram and external API',
@@ -944,7 +1030,9 @@ app.post('/api/articles/send-telegram', async (req, res) => {
       });
     }
   } catch (error) {
-    console.error('Error sending article to Telegram:', error);
+    const totalDuration = Date.now() - startTime;
+    console.error(`❌ [TELEGRAM] Unexpected error after ${totalDuration}ms:`, error);
+    console.error(`❌ [TELEGRAM] Error stack:`, error.stack);
     res.status(500).json({ 
       success: false, 
       error: 'Failed to send article to Telegram',
