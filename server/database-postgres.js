@@ -812,7 +812,6 @@ class Database {
   async close() {
     await this.pool.end();
   }
-}
 
   // Clean up old articles to prevent database bloat and memory issues
   // Deletes articles older than specified days that are not 'sent' status
