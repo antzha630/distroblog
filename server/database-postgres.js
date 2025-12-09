@@ -383,36 +383,31 @@ class Database {
   }
 
   // Articles methods
-  async getAllArticles(limit = 100) {
-    // MEMORY OPTIMIZATION: Added limit to prevent loading all articles
+  async getAllArticles() {
     const result = await this.pool.query(`
       SELECT a.*, s.name as source_name 
       FROM articles a 
       LEFT JOIN sources s ON a.source_id = s.id 
       ORDER BY a.created_at DESC
-      LIMIT $1
-    `, [limit]);
+    `);
     return result.rows;
   }
 
-  async getArticlesByStatus(status, limit = 100) {
-    // MEMORY OPTIMIZATION: Added limit to prevent loading all articles
+  async getArticlesByStatus(status) {
     const result = await this.pool.query(`
       SELECT a.*, s.name as source_name 
       FROM articles a 
       LEFT JOIN sources s ON a.source_id = s.id 
       WHERE a.status = $1 
       ORDER BY a.created_at DESC
-      LIMIT $2
-    `, [status, limit]);
+    `, [status]);
     return result.rows;
   }
 
-  async getArticlesByDateRange(days, limit = 500) {
+  async getArticlesByDateRange(days) {
     // Get articles where pub_date is within the last N days
     // ONLY use pub_date - no fallback to created_at
     // Articles without publication dates will NOT show in dashboard
-    // MEMORY OPTIMIZATION: Added limit to prevent loading thousands of articles
     const result = await this.pool.query(`
       SELECT a.*, s.name as source_name 
       FROM articles a 
@@ -420,11 +415,10 @@ class Database {
       WHERE a.pub_date IS NOT NULL 
         AND a.pub_date >= NOW() - INTERVAL '${days} days'
       ORDER BY a.pub_date DESC
-      LIMIT $1
-    `, [limit]);
+    `);
     
     // Log for debugging
-    console.log(`📊 Database query: Found ${result.rows.length} articles with pub_date from last ${days} days (limited to ${limit})`);
+    console.log(`📊 Database query: Found ${result.rows.length} articles with pub_date from last ${days} days`);
     
     return result.rows;
   }

@@ -1191,9 +1191,7 @@ app.get('/api/articles/recent/:days', async (req, res) => {
       return res.status(400).json({ error: 'Invalid days parameter' });
     }
     
-    // MEMORY OPTIMIZATION: Add optional limit parameter (default 500)
-    const limit = parseInt(req.query.limit) || 500;
-    const articles = await database.getArticlesByDateRange(days, limit);
+    const articles = await database.getArticlesByDateRange(days);
     
     console.log(`📊 Found ${articles.length} articles with pub_date from last ${days} days (articles without dates are excluded)`);
     
