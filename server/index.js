@@ -1191,7 +1191,9 @@ app.get('/api/articles/recent/:days', async (req, res) => {
       return res.status(400).json({ error: 'Invalid days parameter' });
     }
     
-    const articles = await database.getArticlesByDateRange(days);
+    // MEMORY OPTIMIZATION: Add optional limit parameter (default 500)
+    const limit = parseInt(req.query.limit) || 500;
+    const articles = await database.getArticlesByDateRange(days, limit);
     
     console.log(`📊 Found ${articles.length} articles with pub_date from last ${days} days (articles without dates are excluded)`);
     
@@ -2642,6 +2644,30 @@ const startServer = async () => {
       } else {
         console.log('ℹ️  Automatic feed monitoring disabled (use ENABLE_AUTO_MONITORING=true to enable)');
         console.log('ℹ️  Use "Check Now" button for manual feed checks');
+      }
+      
+      // Optional: Run automatic cleanup of old articles (if enabled)
+      // This helps prevent database bloat and memory issues from accumulating articles
+      if (process.env.ENABLE_AUTO_CLEANUP === 'true') {
+        const cleanupDays = parseInt(process.env.CLEANUP_DAYS_OLD) || 90;
+        const cleanupInterval = parseInt(process.env.CLEANUP_INTERVAL_HOURS) || 24; // Default: daily
+        
+        console.log(`🧹 Automatic cleanup enabled: removing articles older than ${cleanupDays} days every ${cleanupInterval} hours`);
+        
+        // Run cleanup immediately on startup
+        database.cleanupOldArticles(cleanupDays).catch(err => {
+          console.error('Error in initial cleanup:', err);
+        });
+        
+        // Then run cleanup on schedule
+        setInterval(() => {
+          database.cleanupOldArticles(cleanupDays).catch(err => {
+            console.error('Error in scheduled cleanup:', err);
+          });
+        }, cleanupInterval * 60 * 60 * 1000);
+      } else {
+        console.log('ℹ️  Automatic cleanup disabled (use ENABLE_AUTO_CLEANUP=true to enable)');
+        console.log('ℹ️  Use POST /api/maintenance/cleanup-old-articles for manual cleanup');
       }
     });
   } catch (error) {
