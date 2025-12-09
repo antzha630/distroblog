@@ -259,7 +259,8 @@ class FeedMonitor {
       const results = [];
       
       // MEMORY OPTIMIZATION: Process sources sequentially with delays
-      // Process all new articles but in batches with proper cleanup to stay under 512MB
+      // For manual checks, run faster and skip heavy metadata fetches
+      const isManual = allowManual;
       const BATCH_SIZE = 3; // Process articles in batches to control memory
       let totalNewArticlesProcessed = 0;
       
@@ -287,8 +288,10 @@ class FeedMonitor {
               console.warn(`⚠️  [CHECK NOW] [${source.name}] Could not close webScraper browser: ${closeError.message}`);
             }
             
-            // MEMORY OPTIMIZATION: Delay to allow garbage collection
-            await new Promise(resolve => setTimeout(resolve, 500));
+            // MEMORY OPTIMIZATION: Delay to allow garbage collection (skip for manual to speed up)
+            if (!isManual) {
+              await new Promise(resolve => setTimeout(resolve, 500));
+            }
             
             console.log(`📰 [CHECK NOW] [${source.name}] Checking ${articles.length} articles for new ones...`);
             
@@ -343,70 +346,73 @@ class FeedMonitor {
                   }
                   
                   // Use optimized scraping logic (same as re-scrape) to get better titles/dates
-                  // CRITICAL: Fetch metadata from article page for better title/date
-                  // This is what makes the optimized scraping work - same as re-scrape
+                  // For manual checks, skip metadata fetch to speed up
                   let improvedTitle = article.title.trim();
                   let improvedDate = article.datePublished ? new Date(article.datePublished) : null;
                   
-                  try {
-                    console.log(`🔍 [CHECK NOW] [${source.name}] Fetching optimized metadata (title/date) for: ${article.link.substring(0, 60)}...`);
-                    const metadataStartTime = Date.now();
-                    
-                    // Use extractArticleMetadata - same optimized logic as re-scrape
-                    const metadata = await this.extractArticleMetadata(article.link);
-                    const metadataDuration = Date.now() - metadataStartTime;
-                    console.log(`✅ [CHECK NOW] [${source.name}] Optimized metadata fetched in ${metadataDuration}ms`);
-                    
-                    // MEMORY OPTIMIZATION: Delay after metadata fetch to allow browser cleanup
-                    await new Promise(resolve => setTimeout(resolve, 500));
-                    
-                    // Use article page title if available and better (same logic as re-scrape)
-                    if (metadata.title && metadata.title.trim().length > 10) {
-                      const newTitle = metadata.title.trim();
-                      const newTitleLower = newTitle.toLowerCase();
-                      const isGeneric = newTitleLower.includes('blog') ||
-                                       newTitleLower.includes('all posts') ||
-                                       newTitleLower.includes('latest by topic') ||
-                                       newTitleLower.includes('mothership') ||
-                                       newTitleLower.includes('backbone of ai infrastructure') ||
-                                       (newTitle.length < 25 && (
-                                         newTitleLower === 'blockchain web3' ||
-                                         newTitleLower === 'cybersecurity' ||
-                                         newTitleLower === 'company updates' ||
-                                         newTitleLower === 'io intelligence' ||
-                                         newTitleLower === 'ai infrastructure compute' ||
-                                         newTitleLower === 'ai startup corner' ||
-                                         newTitleLower === 'developer resources' ||
-                                         (newTitleLower.includes('swarm community call') && newTitleLower.includes('recap'))
-                                       ));
+                  if (!isManual) {
+                    try {
+                      console.log(`🔍 [CHECK NOW] [${source.name}] Fetching optimized metadata (title/date) for: ${article.link.substring(0, 60)}...`);
+                      const metadataStartTime = Date.now();
                       
-                      if (!isGeneric) {
-                        improvedTitle = newTitle;
-                        console.log(`📝 [CHECK NOW] [${source.name}] Using optimized title: "${improvedTitle.substring(0, 60)}..."`);
-                      } else {
-                        console.log(`⚠️  [CHECK NOW] [${source.name}] Article page title is generic, keeping original`);
-                      }
-                    } else {
-                      console.log(`⚠️  [CHECK NOW] [${source.name}] Article page title not found, keeping original`);
-                    }
-                    
-                    // Use article page date if available (same logic as re-scrape)
-                    if (metadata.pubDate) {
-                      try {
-                        const articlePageDate = new Date(metadata.pubDate);
-                        if (!isNaN(articlePageDate.getTime())) {
-                          improvedDate = articlePageDate;
-                          console.log(`📅 [CHECK NOW] [${source.name}] Found optimized date: ${improvedDate.toISOString()}`);
+                      // Use extractArticleMetadata - same optimized logic as re-scrape
+                      const metadata = await this.extractArticleMetadata(article.link);
+                      const metadataDuration = Date.now() - metadataStartTime;
+                      console.log(`✅ [CHECK NOW] [${source.name}] Optimized metadata fetched in ${metadataDuration}ms`);
+                      
+                      // MEMORY OPTIMIZATION: Delay after metadata fetch to allow browser cleanup
+                      await new Promise(resolve => setTimeout(resolve, 500));
+                      
+                      // Use article page title if available and better (same logic as re-scrape)
+                      if (metadata.title && metadata.title.trim().length > 10) {
+                        const newTitle = metadata.title.trim();
+                        const newTitleLower = newTitle.toLowerCase();
+                        const isGeneric = newTitleLower.includes('blog') ||
+                                         newTitleLower.includes('all posts') ||
+                                         newTitleLower.includes('latest by topic') ||
+                                         newTitleLower.includes('mothership') ||
+                                         newTitleLower.includes('backbone of ai infrastructure') ||
+                                         (newTitle.length < 25 && (
+                                           newTitleLower === 'blockchain web3' ||
+                                           newTitleLower === 'cybersecurity' ||
+                                           newTitleLower === 'company updates' ||
+                                           newTitleLower === 'io intelligence' ||
+                                           newTitleLower === 'ai infrastructure compute' ||
+                                           newTitleLower === 'ai startup corner' ||
+                                           newTitleLower === 'developer resources' ||
+                                           (newTitleLower.includes('swarm community call') && newTitleLower.includes('recap'))
+                                         ));
+                        
+                        if (!isGeneric) {
+                          improvedTitle = newTitle;
+                          console.log(`📝 [CHECK NOW] [${source.name}] Using optimized title: "${improvedTitle.substring(0, 60)}..."`);
+                        } else {
+                          console.log(`⚠️  [CHECK NOW] [${source.name}] Article page title is generic, keeping original`);
                         }
-                      } catch (e) {
-                        console.log(`⚠️  [CHECK NOW] [${source.name}] Invalid date format: ${metadata.pubDate}`);
+                      } else {
+                        console.log(`⚠️  [CHECK NOW] [${source.name}] Article page title not found, keeping original`);
                       }
-                    } else {
-                      console.log(`⚠️  [CHECK NOW] [${source.name}] No date found on article page`);
+                      
+                      // Use article page date if available (same logic as re-scrape)
+                      if (metadata.pubDate) {
+                        try {
+                          const articlePageDate = new Date(metadata.pubDate);
+                          if (!isNaN(articlePageDate.getTime())) {
+                            improvedDate = articlePageDate;
+                            console.log(`📅 [CHECK NOW] [${source.name}] Found optimized date: ${improvedDate.toISOString()}`);
+                          }
+                        } catch (e) {
+                          console.log(`⚠️  [CHECK NOW] [${source.name}] Invalid date format: ${metadata.pubDate}`);
+                        }
+                      } else {
+                        console.log(`⚠️  [CHECK NOW] [${source.name}] No date found on article page`);
+                      }
+                    } catch (err) {
+                      // If fetching fails, use what we have from listing page
+                      console.log(`❌ [CHECK NOW] [${source.name}] Could not fetch optimized metadata: ${err.message} (using listing page data)`);
                     }
-                  } catch (err) {
-                    // If fetching fails, use what we have from listing page
-                    console.log(`❌ [CHECK NOW] [${source.name}] Could not fetch optimized metadata: ${err.message} (using listing page data)`);
+                  } else {
+                    console.log(`⏩ [CHECK NOW] [${source.name}] Skipping metadata fetch to speed up manual check`);
                   }
                   
                   // Use scraped content from listing page (skip full content fetch to save memory)
@@ -450,8 +456,10 @@ class FeedMonitor {
                     // Log new article found with optimized data
                     console.log(`✨ [CHECK NOW] [${source.name}] NEW ARTICLE ADDED (with optimized title/date): "${articleObj.title.substring(0, 60)}..." | Date: ${articleObj.pubDate || 'NO DATE'}`);
                     
-                    // MEMORY OPTIMIZATION: Delay after each new article to allow garbage collection
-                    await new Promise(resolve => setTimeout(resolve, 500));
+                    // MEMORY OPTIMIZATION: Delay after each new article to allow garbage collection (skip for manual)
+                    if (!isManual) {
+                      await new Promise(resolve => setTimeout(resolve, 500));
+                    }
                   }
                 } catch (articleErr) {
                   console.error(`❌ [CHECK NOW] [${source.name}] Error processing article:`, articleErr.message);
@@ -459,15 +467,17 @@ class FeedMonitor {
                 }
               }
               
-              // MEMORY OPTIMIZATION: Delay after each batch to allow garbage collection
-              if (batchIdx + BATCH_SIZE < newArticlesToProcess.length) {
+              // MEMORY OPTIMIZATION: Delay after each batch to allow garbage collection (skip for manual)
+              if (!isManual && batchIdx + BATCH_SIZE < newArticlesToProcess.length) {
                 console.log(`⏸️  [CHECK NOW] [${source.name}] Pausing 1s after batch to allow memory cleanup...`);
                 await new Promise(resolve => setTimeout(resolve, 1000));
               }
             }
             
-            // MEMORY OPTIMIZATION: Delay after processing all articles from a source
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            // MEMORY OPTIMIZATION: Delay after processing all articles from a source (skip for manual)
+            if (!isManual) {
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            }
             
             if (newArticles.length > 0) {
               console.log(`✅ [CHECK NOW] [${source.name}] Added ${newArticles.length} new article(s)`);
@@ -502,8 +512,8 @@ class FeedMonitor {
             monitoring_type: monitoringType
           });
           
-          // MEMORY OPTIMIZATION: Delay between sources to allow garbage collection
-          if (i < activeSources.length - 1) {
+          // MEMORY OPTIMIZATION: Delay between sources to allow garbage collection (skip for manual)
+          if (!isManual && i < activeSources.length - 1) {
             await new Promise(resolve => setTimeout(resolve, 500));
           }
         } catch (error) {
