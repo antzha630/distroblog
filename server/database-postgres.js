@@ -629,14 +629,23 @@ class Database {
     return result.rows;
   }
 
-  async getArticlesBySourceId(sourceId) {
-    const result = await this.pool.query(`
+  async getArticlesBySourceId(sourceId, limit = null) {
+    // MEMORY OPTIMIZATION: Add limit parameter to prevent loading all articles
+    let query = `
       SELECT a.*, s.name as source_name, s.monitoring_type, s.url as source_url
       FROM articles a 
       LEFT JOIN sources s ON a.source_id = s.id 
       WHERE a.source_id = $1
       ORDER BY COALESCE(a.pub_date, a.created_at) DESC
-    `, [sourceId]);
+    `;
+    const params = [sourceId];
+    
+    if (limit) {
+      query += ` LIMIT $2`;
+      params.push(limit);
+    }
+    
+    const result = await this.pool.query(query, params);
     return result.rows;
   }
 
@@ -802,6 +811,52 @@ class Database {
 
   async close() {
     await this.pool.end();
+  }
+}
+
+  // Clean up old articles to prevent database bloat and memory issues
+  // Deletes articles older than specified days that are not 'sent' status
+  async cleanupOldArticles(daysOld = 90) {
+    try {
+      const cutoffDate = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - daysOld);
+      
+      const result = await this.pool.query(`
+        DELETE FROM articles 
+        WHERE (pub_date IS NOT NULL AND pub_date < $1)
+           OR (pub_date IS NULL AND created_at < $1)
+        AND status != 'sent'
+        RETURNING id, title
+      `, [cutoffDate]);
+      
+      console.log(`🧹 Cleaned up ${result.rowCount} old articles (older than ${daysOld} days, excluding 'sent' status)`);
+      return result.rowCount;
+    } catch (error) {
+      console.error('Error cleaning up old articles:', error);
+      throw error;
+    }
+  }
+
+  // Get database statistics for monitoring
+  async getDatabaseStats() {
+    try {
+      const stats = await this.pool.query(`
+        SELECT 
+          COUNT(*)::int as total_articles,
+          COUNT(CASE WHEN status = 'sent' THEN 1 END)::int as sent_articles,
+          COUNT(CASE WHEN status = 'new' THEN 1 END)::int as new_articles,
+          COUNT(CASE WHEN pub_date IS NOT NULL THEN 1 END)::int as articles_with_date,
+          COUNT(CASE WHEN pub_date IS NULL THEN 1 END)::int as articles_without_date,
+          MIN(created_at) as oldest_article,
+          MAX(created_at) as newest_article
+        FROM articles
+      `);
+      
+      return stats.rows[0];
+    } catch (error) {
+      console.error('Error getting database stats:', error);
+      throw error;
+    }
   }
 }
 

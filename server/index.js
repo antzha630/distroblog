@@ -1361,14 +1361,10 @@ app.post('/api/sources/:id/re-scrape', async (req, res) => {
       let errors = 0;
       const updates = [];
       
-      // CRITICAL: Get ALL existing articles for this source from database
+      // CRITICAL: Get existing articles for this source from database
       // This ensures we check old bad articles even if they're no longer in current scrape
       // MEMORY OPTIMIZATION: Limit to 100 articles per source to avoid memory issues
-      const allExistingArticlesRaw = await database.getArticlesBySourceId(source.id);
-      const allExistingArticles = allExistingArticlesRaw.slice(0, 100); // Limit to 100 most recent
-      if (allExistingArticlesRaw.length > 100) {
-        console.log(`⚠️  [Re-scrape] Limiting to 100 most recent articles (${allExistingArticlesRaw.length} total) to save memory`);
-      }
+      const allExistingArticles = await database.getArticlesBySourceId(source.id, 100);
       console.log(`📋 [Re-scrape] Checking ${allExistingArticles.length} existing articles in database for ${source.name}`);
       
       // MEMORY OPTIMIZATION: Pre-fetch duplicate title check data ONCE (not per article)
@@ -1376,7 +1372,8 @@ app.post('/api/sources/:id/re-scrape', async (req, res) => {
       const getDuplicateTitles = async (title) => {
         if (!duplicateTitleCache) {
           // Load once, not per article
-          const allArticles = await database.getAllArticles(1000);
+          // MEMORY OPTIMIZATION: Reduced from 1000 to 200 to prevent memory issues
+          const allArticles = await database.getAllArticles(200);
           duplicateTitleCache = new Map();
           allArticles.forEach(a => {
             const key = (a.title || '').toLowerCase().trim();
@@ -1793,14 +1790,10 @@ app.post('/api/sources/re-scrape-all', async (req, res) => {
         let deleted = 0;
         let errors = 0;
         
-        // CRITICAL: Get ALL existing articles for this source from database
+        // CRITICAL: Get existing articles for this source from database
         // This ensures we check old bad articles even if they're no longer in current scrape
         // MEMORY OPTIMIZATION: Limit to 100 articles per source to avoid memory issues
-        const allExistingArticlesRaw = await database.getArticlesBySourceId(source.id);
-        const allExistingArticles = allExistingArticlesRaw.slice(0, 100); // Limit to 100 most recent
-        if (allExistingArticlesRaw.length > 100) {
-          console.log(`⚠️  [Bulk Re-scrape] Limiting to 100 most recent articles (${allExistingArticlesRaw.length} total) to save memory`);
-        }
+        const allExistingArticles = await database.getArticlesBySourceId(source.id, 100);
         console.log(`📋 [Bulk Re-scrape] Checking ${allExistingArticles.length} existing articles in database for ${source.name}`);
         
         // MEMORY OPTIMIZATION: Pre-fetch duplicate title check data ONCE per source (not per article)
@@ -1809,7 +1802,8 @@ app.post('/api/sources/re-scrape-all', async (req, res) => {
         const getDuplicateTitles = async (title) => {
           if (!duplicateTitleCache) {
             // Load once per source, not per article
-            const allArticles = await database.getAllArticles(1000);
+            // MEMORY OPTIMIZATION: Reduced from 1000 to 200 to prevent memory issues
+          const allArticles = await database.getAllArticles(200);
             duplicateTitleCache = new Map();
             allArticles.forEach(a => {
               const key = (a.title || '').toLowerCase().trim();
@@ -1947,7 +1941,8 @@ app.post('/api/sources/re-scrape-all', async (req, res) => {
               // Check for duplicate titles (same title = likely category pages)
               const currentTitleLower = (existing.title || '').toLowerCase().trim();
               if (currentTitleLower) {
-                const allArticles = await database.getAllArticles(1000);
+                // MEMORY OPTIMIZATION: Reduced from 1000 to 200 to prevent memory issues
+          const allArticles = await database.getAllArticles(200);
                 const duplicateTitles = allArticles.filter(a => 
                   a.id !== existing.id && 
                   a.title && 
@@ -2286,6 +2281,33 @@ app.post('/api/maintenance/backfill-source-domains', async (req, res) => {
   }
 });
 
+// Maintenance: Clean up old articles to prevent database bloat
+app.post('/api/maintenance/cleanup-old-articles', async (req, res) => {
+  try {
+    const daysOld = parseInt(req.body.daysOld) || 90; // Default: 90 days
+    const deletedCount = await database.cleanupOldArticles(daysOld);
+    res.json({ 
+      success: true, 
+      message: `Cleaned up ${deletedCount} old articles (older than ${daysOld} days)`,
+      deletedCount 
+    });
+  } catch (error) {
+    console.error('Error cleaning up old articles:', error);
+    res.status(500).json({ success: false, error: 'Failed to clean up old articles' });
+  }
+});
+
+// Maintenance: Get database statistics
+app.get('/api/maintenance/database-stats', async (req, res) => {
+  try {
+    const stats = await database.getDatabaseStats();
+    res.json({ success: true, stats });
+  } catch (error) {
+    console.error('Error getting database stats:', error);
+    res.status(500).json({ success: false, error: 'Failed to get database stats' });
+  }
+});
+
 // Maintenance: backfill missing pub_date by re-parsing RSS items and matching by link
 app.post('/api/maintenance/backfill-pubdates', async (req, res) => {
   try {
@@ -2611,8 +2633,16 @@ const startServer = async () => {
       console.log(`Distro Scoopstream server running on port ${PORT}`);
       console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
       
-      // Start feed monitoring
-      feedMonitor.startMonitoring();
+      // Start feed monitoring (only if ENABLE_AUTO_MONITORING is set)
+      // DISABLED BY DEFAULT to prevent memory issues on Render (512MB limit)
+      // Automatic monitoring runs every 30 minutes and can cause memory spikes
+      if (process.env.ENABLE_AUTO_MONITORING === 'true') {
+        console.log('⚠️  Automatic feed monitoring enabled (runs every 30 minutes)');
+        feedMonitor.startMonitoring();
+      } else {
+        console.log('ℹ️  Automatic feed monitoring disabled (use ENABLE_AUTO_MONITORING=true to enable)');
+        console.log('ℹ️  Use "Check Now" button for manual feed checks');
+      }
     });
   } catch (error) {
     console.error('Failed to start server:', error);
