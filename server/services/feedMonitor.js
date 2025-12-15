@@ -343,8 +343,8 @@ class FeedMonitor {
                   }
                   
                   // Use optimized scraping logic (same as re-scrape) to get better titles/dates
-                  // For manual checks, skip metadata fetch to speed up
-                  let improvedTitle = article.title.trim();
+                  // For manual checks, skip metadata fetch to speed up, but do basic title cleaning
+                  let improvedTitle = this.cleanTitle(article.title.trim());
                   let improvedDate = article.datePublished ? new Date(article.datePublished) : null;
                   
                   if (!isManual) {
@@ -479,14 +479,14 @@ class FeedMonitor {
             const rssStartTime = Date.now();
             
             // Process recent articles from RSS feed (limit to 50 for speed)
-            newArticles = await this.checkFeedLimited(source, 50);
+            // Pass allowManual flag to optimize RSS processing for manual checks
+            newArticles = await this.checkFeedLimited(source, 50, isManual);
             const rssDuration = Date.now() - rssStartTime;
             console.log(`✅ [CHECK NOW] [${source.name}] RSS check completed in ${rssDuration}ms, found ${newArticles.length} new articles`);
             
             totalNewArticlesProcessed += newArticles.length;
             
-            // MEMORY OPTIMIZATION: Small delay after RSS feed processing
-            await new Promise(resolve => setTimeout(resolve, 300));
+            // Removed delay to speed up RSS processing
           }
           
           results.push({
@@ -597,7 +597,8 @@ class FeedMonitor {
   }
 
   // Check feed with limited number of articles (for new sources)
-  async checkFeedLimited(source, maxArticles = 5) {
+  // allowManual: if true, skip expensive content enhancement to speed up
+  async checkFeedLimited(source, maxArticles = 5, allowManual = false) {
     try {
       // Check if it's a JSON Feed first
       let feed;
@@ -631,8 +632,10 @@ class FeedMonitor {
             continue; // Skip existing articles
           }
           
-          // Generate AI-enhanced content
-          const enhancedContent = await this.enhanceArticleContent(item);
+          // Generate AI-enhanced content (skip for manual checks to speed up)
+          const enhancedContent = allowManual 
+            ? { title: item.title || 'Untitled', content: item.content || item.contentSnippet || item.description || '', preview: (item.contentSnippet || item.description || '').substring(0, 200) }
+            : await this.enhanceArticleContent(item);
           
           // Extract publication date from multiple possible fields
           let pubDate = null;
@@ -1198,6 +1201,21 @@ class FeedMonitor {
       // Re-throw errors - caller will handle 403s gracefully
       throw error;
     }
+  }
+
+  // Basic title cleaning for scraped articles (remove common prefixes)
+  cleanTitle(title) {
+    if (!title) return 'Untitled Article';
+    
+    let cleaned = title.trim();
+    
+    // Remove common prefixes like "articlePINNED", "article", "PINNED"
+    cleaned = cleaned.replace(/^(articlePINNED|PINNED|article|Article)\s*/i, '');
+    
+    // Remove extra whitespace
+    cleaned = cleaned.replace(/\s+/g, ' ').trim();
+    
+    return cleaned || 'Untitled Article';
   }
 
   // Extract article metadata from a URL
