@@ -1590,8 +1590,11 @@ class FeedMonitor {
       let enriched = 0;
       
       // Process in small batches
+      const totalBatches = Math.ceil(articles.length / BATCH_SIZE);
       for (let i = 0; i < articles.length; i += BATCH_SIZE) {
         const batch = articles.slice(i, i + BATCH_SIZE);
+        const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+        console.log(`   📦 [ENRICH] Processing batch ${batchNum}/${totalBatches} (${batch.length} articles)`);
         
         // Check memory before batch
         const memoryBefore = getMemoryMB();
@@ -1603,13 +1606,16 @@ class FeedMonitor {
         // Process each article in batch
         for (const article of batch) {
           try {
+            console.log(`   🔍 [ENRICH] Processing article ${article.id}: ${article.title?.substring(0, 60)}...`);
             // Use extractArticleMetadata to get date from fully rendered page
             const metadata = await this.extractArticleMetadata(article.link);
             
-            if (metadata && metadata.datePublished) {
-              await database.updateArticle(article.id, { pub_date: metadata.datePublished });
+            if (metadata && metadata.pubDate) {
+              await database.updateArticle(article.id, { pub_date: metadata.pubDate });
               enriched++;
-              console.log(`   ✅ [ENRICH] Enriched date for: ${article.title?.substring(0, 50)}...`);
+              console.log(`   ✅ [ENRICH] Enriched date (${metadata.pubDate}) for: ${article.title?.substring(0, 50)}...`);
+            } else {
+              console.log(`   ⚠️  [ENRICH] No date found for: ${article.title?.substring(0, 50)}...`);
             }
             
             // Small delay between articles
