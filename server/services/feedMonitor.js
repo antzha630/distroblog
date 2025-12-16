@@ -683,9 +683,14 @@ class FeedMonitor {
       if (totalNewArticles > 0 && allowManual) {
         console.log(`\n🔍 [CHECK NOW] Auto-enriching dates for new articles without dates...`);
         try {
-          const enrichedCount = await this.enrichNewArticlesDates(totalNewArticles);
+          // Use a reasonable limit - try to enrich up to the number of new articles found
+          // But cap at 30 to keep it fast
+          const enrichLimit = Math.min(totalNewArticles, 30);
+          const enrichedCount = await this.enrichNewArticlesDates(enrichLimit);
           if (enrichedCount > 0) {
             console.log(`✨ [CHECK NOW] Auto-enriched dates for ${enrichedCount} new articles`);
+          } else {
+            console.log(`ℹ️  [CHECK NOW] No dates found for new articles (may require full page rendering)`);
           }
         } catch (enrichError) {
           console.warn(`⚠️  [CHECK NOW] Auto-enrichment failed (non-critical): ${enrichError.message}`);
