@@ -681,6 +681,21 @@ class FeedMonitor {
       
       console.log(`\n✅ [CHECK NOW] Feed check completed in ${totalDuration}ms`);
       console.log(`📊 [CHECK NOW] Summary: ${successfulSources}/${results.length} sources successful, ${totalNewArticles} new articles found`);
+      
+      // Automatically enrich dates for newly found scraping articles that don't have dates
+      if (totalNewArticles > 0 && allowManual) {
+        console.log(`\n🔍 [CHECK NOW] Auto-enriching dates for new articles without dates...`);
+        try {
+          const enrichedCount = await this.enrichNewArticlesDates(totalNewArticles);
+          if (enrichedCount > 0) {
+            console.log(`✨ [CHECK NOW] Auto-enriched dates for ${enrichedCount} new articles`);
+          }
+        } catch (enrichError) {
+          console.warn(`⚠️  [CHECK NOW] Auto-enrichment failed (non-critical): ${enrichError.message}`);
+          // Don't fail Check Now if enrichment fails
+        }
+      }
+      
       console.log(`🚀 [CHECK NOW] Finished at ${new Date().toISOString()}\n`);
       
       return results;
