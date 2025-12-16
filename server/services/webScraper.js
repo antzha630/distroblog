@@ -560,8 +560,17 @@ class WebScraper {
             // Do NOT use page-level headings - they will be the same for all articles
             
             // Strategy 1: Look for headings WITHIN the container (not page-level)
-            // Get all headings in the container, but prioritize ones that are NOT in the link
+            // Prioritize headings that are direct children or in article-like structures
+            // Get all headings in the container, prioritizing h2/h3 (common for article cards)
             const containerHeadings = Array.from(container.querySelectorAll('h1, h2, h3, h4, h5, h6'));
+            
+            // Sort headings by priority: h2/h3 first (common in cards), then h1, then others
+            const headingPriority = { 'H2': 1, 'H3': 2, 'H1': 3, 'H4': 4, 'H5': 5, 'H6': 6 };
+            containerHeadings.sort((a, b) => {
+              const priorityA = headingPriority[a.tagName] || 99;
+              const priorityB = headingPriority[b.tagName] || 99;
+              return priorityA - priorityB;
+            });
             
             // Filter out headings that are page-level (usually h1 at the top of the page)
             // Prefer headings that are NOT the first h1 on the page or are within the card structure
@@ -573,7 +582,20 @@ class WebScraper {
               const headingParent = heading.closest('header, nav, [class*="header"], [class*="nav"]');
               if (headingParent && !container.contains(headingParent)) continue;
               
-              const headingText = heading.textContent.trim();
+              // Skip if heading is inside the link itself (might be redundant)
+              if (link.contains(heading) && heading !== link) {
+                // Only skip if there are other headings available
+                if (containerHeadings.length > 1) continue;
+              }
+              
+              let headingText = heading.textContent.trim();
+              
+              // Clean up common prefixes/suffixes
+              headingText = headingText
+                .replace(/^(articlePINNED|PINNED|article|Article)\s*/i, '')
+                .replace(/\s*\d{4}-\d{2}-\d{1,2}\s*\d+\s*min\s*read.*$/i, '')
+                .replace(/\s*\d+\s*min\s*read.*$/i, '')
+                .trim();
               
               // Skip if it's too short, generic, or looks like a section header
               const headingLower = headingText.toLowerCase();
@@ -591,7 +613,9 @@ class WebScraper {
                   !headingLower.includes('all posts') &&
                   !headingLower.includes('quarterly updates') &&
                   !headingLower.includes('case studies') &&
-                  !headingLower.includes('read more')) {
+                  !headingLower.includes('read more') &&
+                  !headingLower.match(/^follow us/i) &&
+                  !headingLower.match(/^posts? related/i)) {
                 title = headingText;
                 break; // Use the first valid heading we find in this container
               }
