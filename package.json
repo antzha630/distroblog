@@ -4,8 +4,8 @@
   "description": "news monitoring tool for journalists",
   "main": "server/index.js",
   "scripts": {
-    "start": "bash -c 'node server/index.js'",
-    "start-direct": "node server/index.js",
+    "start": "bash -c 'node --expose-gc --max-old-space-size=400 server/index.js'",
+    "start-direct": "node --expose-gc --max-old-space-size=400 server/index.js",
     "dev": "concurrently \"npm run server\" \"npm run client\"",
     "server": "nodemon server/index.js",
     "client": "cd client && npm start",

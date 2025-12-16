@@ -264,9 +264,38 @@ class FeedMonitor {
       const BATCH_SIZE = 3; // Process articles in batches to control memory
       let totalNewArticlesProcessed = 0;
       
+      // Memory monitoring helper
+      const getMemoryMB = () => {
+        if (process.memoryUsage) {
+          return Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
+        }
+        return 0;
+      };
+      
+      const MEMORY_LIMIT_MB = 450; // Stop if we exceed 450MB to stay under 512MB limit
+      
       for (let i = 0; i < activeSources.length; i++) {
         const source = activeSources[i];
         console.log(`\n📊 [CHECK NOW] [${i + 1}/${activeSources.length}] Processing source: ${source.name}`);
+        
+        // Memory check: Skip scraping sources if memory is too high (but continue with RSS)
+        const currentMemMB = getMemoryMB();
+        if (currentMemMB > MEMORY_LIMIT_MB) {
+          if (source.monitoring_type === 'SCRAPING') {
+            console.warn(`⚠️  [CHECK NOW] Memory usage (${currentMemMB}MB) exceeds limit (${MEMORY_LIMIT_MB}MB). Skipping scraping source "${source.name}" to prevent crash.`);
+            results.push({
+              source: source.name,
+              url: source.url,
+              newArticles: 0,
+              success: false,
+              error: 'Skipped due to memory limit',
+              skipped: true
+            });
+            continue; // Skip this scraping source, but continue with others
+          }
+          // RSS feeds are lightweight, so continue processing them
+        }
+        
         try {
           const monitoringType = source.monitoring_type || 'RSS';
           let newArticles = [];
@@ -294,12 +323,20 @@ class FeedMonitor {
             try {
               await this.webScraper.close();
               console.log(`🧹 [CHECK NOW] [${source.name}] Closed webScraper browser`);
+              
+              // Force garbage collection if available (requires --expose-gc flag)
+              if (global.gc) {
+                global.gc();
+                console.log(`♻️  [CHECK NOW] [${source.name}] Forced garbage collection`);
+              }
             } catch (closeError) {
               console.warn(`⚠️  [CHECK NOW] [${source.name}] Could not close webScraper browser: ${closeError.message}`);
               // Don't throw - continue processing even if browser close fails
             }
             
-            // Removed GC delay to speed up
+            // MEMORY OPTIMIZATION: Small delay after scraping to allow GC (even for manual checks)
+            // This is critical to prevent memory buildup on 512MB Render instances
+            await new Promise(resolve => setTimeout(resolve, 1000));
             
             console.log(`📰 [CHECK NOW] [${source.name}] Checking ${articles.length} articles for new ones...`);
             
@@ -513,7 +550,18 @@ class FeedMonitor {
             monitoring_type: monitoringType
           });
           
-          // Removed inter-source delay to speed up
+          // MEMORY OPTIMIZATION: Small delay between sources to allow GC
+          // Especially important after scraping sources that use Playwright
+          if (monitoringType === 'SCRAPING' && i < activeSources.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+          }
+          
+          // Log memory usage if available (for monitoring)
+          if (process.memoryUsage && i % 3 === 0) {
+            const memUsage = process.memoryUsage();
+            const memMB = Math.round(memUsage.heapUsed / 1024 / 1024);
+            console.log(`💾 [CHECK NOW] Memory usage after source ${i + 1}: ${memMB}MB`);
+          }
         } catch (error) {
           console.error(`❌ [CHECK NOW] [${source.name}] Error checking ${source.monitoring_type || 'RSS'} source:`, error.message);
           console.error(`❌ [CHECK NOW] [${source.name}] Stack trace:`, error.stack);

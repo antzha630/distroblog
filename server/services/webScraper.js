@@ -1019,12 +1019,29 @@ class WebScraper {
   }
 
   /**
-   * Clean up browser instance
+   * Clean up browser instance and all pages
    */
   async close() {
     if (this.browser) {
-      await this.browser.close();
-      this.browser = null;
+      try {
+        // Close all pages first (important for memory cleanup)
+        const pages = this.browser.pages ? await this.browser.pages() : [];
+        for (const page of pages) {
+          try {
+            await page.close();
+          } catch (e) {
+            // Ignore page close errors
+          }
+        }
+        
+        // Then close browser
+        await this.browser.close();
+        this.browser = null;
+      } catch (error) {
+        // If close fails, at least null out the reference
+        this.browser = null;
+        throw error;
+      }
     }
   }
 }
