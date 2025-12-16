@@ -444,7 +444,42 @@ class FeedMonitor {
                   // Use optimized scraping logic (same as re-scrape) to get better titles/dates
                   // For manual checks, skip metadata fetch to speed up, but do basic title cleaning
                   let improvedTitle = this.cleanTitle(article.title.trim());
+                  
+                  // Filter out generic titles
+                  if (this.isGenericTitle(improvedTitle)) {
+                    console.log(`⚠️  [CHECK NOW] [${source.name}] Skipping article with generic title: "${improvedTitle}"`);
+                    continue;
+                  }
+                  
+                  // Extract date from scraped article (lightweight, no full page fetch)
                   let improvedDate = article.datePublished ? new Date(article.datePublished) : null;
+                  
+                  // For manual checks, try lightweight date extraction from description/content if available
+                  if (isManual && !improvedDate && article.description) {
+                    // Try to extract date from description text (common patterns)
+                    const datePatterns = [
+                      /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b/i,
+                      /\b(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})\b/i,
+                      /\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b/,
+                      /\b(\d{1,2})[-/](\d{1,2})[-/](\d{4})\b/
+                    ];
+                    
+                    for (const pattern of datePatterns) {
+                      const match = article.description.match(pattern);
+                      if (match) {
+                        try {
+                          const dateStr = match[0];
+                          improvedDate = new Date(dateStr);
+                          if (!isNaN(improvedDate.getTime())) {
+                            console.log(`📅 [CHECK NOW] [${source.name}] Extracted date from description: ${improvedDate.toISOString()}`);
+                            break;
+                          }
+                        } catch (e) {
+                          // Continue to next pattern
+                        }
+                      }
+                    }
+                  }
                   
                   if (!isManual) {
                     try {
@@ -511,13 +546,26 @@ class FeedMonitor {
                   }
                   
                   // Use scraped content from listing page (skip full content fetch to save memory)
-                  const articleContent = article.content || article.description || '';
+                  let articleContent = article.content || article.description || '';
+                  
+                  // Filter out articles with very short content (likely not real articles)
+                  if (articleContent.length < 50 && !article.description) {
+                    console.log(`⚠️  [CHECK NOW] [${source.name}] Skipping article with very short content (${articleContent.length} chars): "${improvedTitle.substring(0, 50)}..."`);
+                    continue;
+                  }
+                  
+                  // Ensure we have at least a preview
+                  const preview = article.description || article.contentSnippet || articleContent.substring(0, 200);
+                  if (preview.length < 20) {
+                    console.log(`⚠️  [CHECK NOW] [${source.name}] Skipping article with insufficient preview: "${improvedTitle.substring(0, 50)}..."`);
+                    continue;
+                  }
                   
                   // MEMORY OPTIMIZATION: Skip AI summary generation for "Check Now" to save memory
                   // AI summaries can be generated later when articles are selected/reviewed
                   const enhancedContent = {
                     content: articleContent,
-                    preview: article.description || article.contentSnippet || articleContent.substring(0, 200) + '...',
+                    preview: preview.length > 200 ? preview.substring(0, 200) + '...' : preview,
                     title: improvedTitle
                   };
                   
