@@ -264,25 +264,70 @@ class FeedMonitor {
       const BATCH_SIZE = 3; // Process articles in batches to control memory
       let totalNewArticlesProcessed = 0;
       
-      // Memory monitoring helper
+      // Memory monitoring helper - use RSS (Resident Set Size) which includes all memory
+      // RSS is total memory used, not just heap (includes Playwright browser processes)
       const getMemoryMB = () => {
         if (process.memoryUsage) {
-          return Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
+          const memUsage = process.memoryUsage();
+          // Use RSS (Resident Set Size) - total memory including native memory from Playwright
+          return Math.round(memUsage.rss / 1024 / 1024);
         }
         return 0;
       };
       
-      const MEMORY_LIMIT_MB = 450; // Stop if we exceed 450MB to stay under 512MB limit
+      const getMemoryDetails = () => {
+        if (process.memoryUsage) {
+          const memUsage = process.memoryUsage();
+          return {
+            rss: Math.round(memUsage.rss / 1024 / 1024), // Total memory (including Playwright)
+            heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024), // Heap only
+            heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024),
+            external: Math.round(memUsage.external / 1024 / 1024) // Native memory (Playwright)
+          };
+        }
+        return null;
+      };
+      
+      const MEMORY_LIMIT_MB = 450; // Stop if we exceed 450MB RSS to stay under 512MB limit
+      
+      // Skip list for problematic sources that cause memory issues
+      const SKIP_SOURCES = [
+        'hypercycle.ai',
+        'www.hypercycle.ai',
+        'Hyper Cycle'
+      ];
       
       for (let i = 0; i < activeSources.length; i++) {
         const source = activeSources[i];
         console.log(`\n📊 [CHECK NOW] [${i + 1}/${activeSources.length}] Processing source: ${source.name}`);
         
+        // Skip problematic sources
+        const shouldSkip = SKIP_SOURCES.some(skipPattern => 
+          source.name.toLowerCase().includes(skipPattern.toLowerCase()) ||
+          source.url.toLowerCase().includes(skipPattern.toLowerCase())
+        );
+        
+        if (shouldSkip) {
+          console.warn(`⚠️  [CHECK NOW] Skipping problematic source "${source.name}" (known to cause memory issues)`);
+          results.push({
+            source: source.name,
+            url: source.url,
+            newArticles: 0,
+            success: false,
+            error: 'Skipped - known problematic source',
+            skipped: true
+          });
+          continue;
+        }
+        
         // Memory check: Skip scraping sources if memory is too high (but continue with RSS)
         const currentMemMB = getMemoryMB();
+        const memDetails = getMemoryDetails();
+        
         if (currentMemMB > MEMORY_LIMIT_MB) {
           if (source.monitoring_type === 'SCRAPING') {
-            console.warn(`⚠️  [CHECK NOW] Memory usage (${currentMemMB}MB) exceeds limit (${MEMORY_LIMIT_MB}MB). Skipping scraping source "${source.name}" to prevent crash.`);
+            const detailsStr = memDetails ? ` (RSS=${memDetails.rss}MB, heap=${memDetails.heapUsed}MB, external=${memDetails.external}MB)` : '';
+            console.warn(`⚠️  [CHECK NOW] Memory usage (${currentMemMB}MB) exceeds limit (${MEMORY_LIMIT_MB}MB)${detailsStr}. Skipping scraping source "${source.name}" to prevent crash.`);
             results.push({
               source: source.name,
               url: source.url,
@@ -294,6 +339,12 @@ class FeedMonitor {
             continue; // Skip this scraping source, but continue with others
           }
           // RSS feeds are lightweight, so continue processing them
+        }
+        
+        // Additional check: If memory is getting high (>400MB), add extra delay before scraping
+        if (source.monitoring_type === 'SCRAPING' && currentMemMB > 400) {
+          console.warn(`⚠️  [CHECK NOW] Memory is high (${currentMemMB}MB), adding extra delay before scraping "${source.name}"...`);
+          await new Promise(resolve => setTimeout(resolve, 2000)); // Extra 2s delay
         }
         
         try {
@@ -336,7 +387,7 @@ class FeedMonitor {
             
             // MEMORY OPTIMIZATION: Small delay after scraping to allow GC (even for manual checks)
             // This is critical to prevent memory buildup on 512MB Render instances
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            await new Promise(resolve => setTimeout(resolve, 2000)); // Increased to 2s for better GC
             
             console.log(`📰 [CHECK NOW] [${source.name}] Checking ${articles.length} articles for new ones...`);
             
@@ -556,11 +607,12 @@ class FeedMonitor {
             await new Promise(resolve => setTimeout(resolve, 500));
           }
           
-          // Log memory usage if available (for monitoring)
+          // Log memory usage if available (for monitoring) - use RSS for total memory
           if (process.memoryUsage && i % 3 === 0) {
-            const memUsage = process.memoryUsage();
-            const memMB = Math.round(memUsage.heapUsed / 1024 / 1024);
-            console.log(`💾 [CHECK NOW] Memory usage after source ${i + 1}: ${memMB}MB`);
+            const memDetails = getMemoryDetails();
+            if (memDetails) {
+              console.log(`💾 [CHECK NOW] Memory after source ${i + 1}: RSS=${memDetails.rss}MB (heap=${memDetails.heapUsed}MB, external=${memDetails.external}MB)`);
+            }
           }
         } catch (error) {
           console.error(`❌ [CHECK NOW] [${source.name}] Error checking ${source.monitoring_type || 'RSS'} source:`, error.message);
