@@ -454,30 +454,19 @@ class FeedMonitor {
                   // Extract date from scraped article (lightweight, no full page fetch)
                   let improvedDate = article.datePublished ? new Date(article.datePublished) : null;
                   
-                  // For manual checks, try lightweight date extraction from description/content if available
-                  if (isManual && !improvedDate && article.description) {
-                    // Try to extract date from description text (common patterns)
-                    const datePatterns = [
-                      /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b/i,
-                      /\b(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})\b/i,
-                      /\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b/,
-                      /\b(\d{1,2})[-/](\d{1,2})[-/](\d{4})\b/
-                    ];
-                    
-                    for (const pattern of datePatterns) {
-                      const match = article.description.match(pattern);
-                      if (match) {
-                        try {
-                          const dateStr = match[0];
-                          improvedDate = new Date(dateStr);
-                          if (!isNaN(improvedDate.getTime())) {
-                            console.log(`📅 [CHECK NOW] [${source.name}] Extracted date from description: ${improvedDate.toISOString()}`);
-                            break;
-                          }
-                        } catch (e) {
-                          // Continue to next pattern
+                  // For manual checks, try lightweight date extraction (static HTTP fetch) if still no date
+                  if (isManual && (!improvedDate || isNaN(improvedDate.getTime()))) {
+                    try {
+                      const staticDate = await this.extractDateStatic(article.link);
+                      if (staticDate) {
+                        const d = new Date(staticDate);
+                        if (!isNaN(d.getTime())) {
+                          improvedDate = d;
+                          console.log(`📅 [CHECK NOW] [${source.name}] Extracted date via static fetch: ${d.toISOString()}`);
                         }
                       }
+                    } catch (e) {
+                      console.log(`⚠️  [CHECK NOW] [${source.name}] Static date fetch failed: ${e.message}`);
                     }
                   }
                   
@@ -1400,6 +1389,117 @@ class FeedMonitor {
     cleaned = cleaned.replace(/\.{3,}/g, '...'); // Normalize ellipsis
     
     return cleaned || 'Untitled Article';
+  }
+
+  // Lightweight static date extraction (no Playwright) for manual runs
+  async extractDateStatic(url) {
+    const parseDate = (text) => {
+      if (!text) return null;
+      const patterns = [
+        // Full month name: November 12, 2025 or Nov 12, 2025
+        /\b(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2}),?\s+(\d{4})\b/i,
+        // 12 November 2025
+        /\b(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})\b/i,
+        // YYYY-MM-DD
+        /\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b/,
+        // MM/DD/YYYY or DD/MM/YYYY
+        /\b(\d{1,2})[-/](\d{1,2})[-/](\d{4})\b/,
+      ];
+      for (const pattern of patterns) {
+        const match = text.match(pattern);
+        if (match) {
+          const dt = new Date(match[0]);
+          if (!isNaN(dt.getTime())) {
+            return dt.toISOString();
+          }
+        }
+      }
+      // Fallback: Date.parse
+      const dt = new Date(text);
+      return isNaN(dt.getTime()) ? null : dt.toISOString();
+    };
+
+    try {
+      const resp = await axios.get(url, {
+        timeout: 8000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; DistroScraper/1.0)',
+        },
+        maxContentLength: 2 * 1024 * 1024, // 2MB to avoid huge pages
+      });
+      const html = resp.data;
+      const $ = cheerio.load(html);
+
+      // Try structured selectors first
+      const selectors = [
+        'meta[property="article:published_time"]',
+        'meta[name="article:published_time"]',
+        'meta[property="og:article:published_time"]',
+        'meta[name="publishdate"]',
+        'meta[name="pubdate"]',
+        'meta[name="date"]',
+        'time[datetime]',
+        'time',
+        '[datetime]',
+        '[data-date]',
+        '[data-published]',
+        '[class*="date"]',
+        '[class*="published"]',
+        '[class*="publish"]',
+      ];
+
+      for (const sel of selectors) {
+        const el = $(sel).first();
+        if (el && el.length) {
+          const val =
+            el.attr('content') ||
+            el.attr('datetime') ||
+            el.attr('date') ||
+            el.attr('data-date') ||
+            el.text();
+          const parsed = parseDate(val);
+          if (parsed) return parsed;
+        }
+      }
+
+      // Try JSON-LD
+      try {
+        $('script[type="application/ld+json"]').each((_, script) => {
+          if (!script || !script.children || script.children.length === 0) return;
+          const jsonText = $(script).html();
+          if (!jsonText) return;
+          const data = JSON.parse(jsonText);
+          const pick = (obj) => {
+            if (!obj) return null;
+            if (obj.datePublished) return parseDate(obj.datePublished);
+            if (obj.dateCreated) return parseDate(obj.dateCreated);
+            return null;
+          };
+          let cand = pick(data);
+          if (!cand && Array.isArray(data)) {
+            for (const item of data) {
+              cand = pick(item);
+              if (cand) break;
+            }
+          }
+          if (cand) throw new Error(`DATE_FOUND:${cand}`);
+        });
+      } catch (e) {
+        if (typeof e.message === 'string' && e.message.startsWith('DATE_FOUND:')) {
+          return e.message.replace('DATE_FOUND:', '');
+        }
+        // else ignore JSON parse errors
+      }
+
+      // As a last resort, scan body text
+      const bodyText = $('body').text().substring(0, 5000); // limit for perf
+      const parsed = parseDate(bodyText);
+      return parsed;
+    } catch (err) {
+      // Log softly and return null
+      console.log(`⚠️  extractDateStatic failed for ${url}: ${err.message}`);
+      return null;
+    }
   }
   
   // Check if title is generic/non-article (should be filtered out)
