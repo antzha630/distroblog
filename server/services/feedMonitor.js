@@ -275,17 +275,28 @@ class FeedMonitor {
             // Scraping: get articles and check for new ones
             console.log(`🔍 [CHECK NOW] [${source.name}] Scraping articles from: ${source.url}`);
             const scrapeStartTime = Date.now();
-            const articles = await this.webScraper.scrapeArticles(source);
-            const scrapeDuration = Date.now() - scrapeStartTime;
-            console.log(`✅ [CHECK NOW] [${source.name}] Scraped ${articles.length} articles in ${scrapeDuration}ms`);
+            let articles = [];
+            
+            try {
+              articles = await this.webScraper.scrapeArticles(source);
+              const scrapeDuration = Date.now() - scrapeStartTime;
+              console.log(`✅ [CHECK NOW] [${source.name}] Scraped ${articles.length} articles in ${scrapeDuration}ms`);
+            } catch (scrapeError) {
+              console.error(`❌ [CHECK NOW] [${source.name}] Error during scraping: ${scrapeError.message}`);
+              console.error(`❌ [CHECK NOW] [${source.name}] Stack: ${scrapeError.stack}`);
+              // Continue with empty articles array - don't crash the entire process
+              articles = [];
+            }
             
             // MEMORY OPTIMIZATION: Close webScraper browser immediately after scraping
             // to free memory before processing articles
+            // Wrap in try-catch and ensure it doesn't crash the process
             try {
               await this.webScraper.close();
               console.log(`🧹 [CHECK NOW] [${source.name}] Closed webScraper browser`);
             } catch (closeError) {
               console.warn(`⚠️  [CHECK NOW] [${source.name}] Could not close webScraper browser: ${closeError.message}`);
+              // Don't throw - continue processing even if browser close fails
             }
             
             // Removed GC delay to speed up
@@ -472,7 +483,12 @@ class FeedMonitor {
             }
             
             // Update last_checked timestamp (scraping result is already stored by webScraper)
-            await database.updateSourceLastChecked(source.id);
+            try {
+              await database.updateSourceLastChecked(source.id);
+            } catch (updateError) {
+              console.warn(`⚠️  [CHECK NOW] [${source.name}] Could not update last_checked timestamp: ${updateError.message}`);
+              // Don't fail the entire process if timestamp update fails
+            }
           } else {
             // RSS/JSON Feed: process ALL new articles from the feed
             console.log(`📡 [CHECK NOW] [${source.name}] Checking RSS/JSON feed: ${source.url}`);
@@ -500,6 +516,15 @@ class FeedMonitor {
           // Removed inter-source delay to speed up
         } catch (error) {
           console.error(`❌ [CHECK NOW] [${source.name}] Error checking ${source.monitoring_type || 'RSS'} source:`, error.message);
+          console.error(`❌ [CHECK NOW] [${source.name}] Stack trace:`, error.stack);
+          
+          // Ensure browser is closed even if error occurred
+          try {
+            await this.webScraper.close();
+          } catch (closeError) {
+            // Ignore close errors during error handling
+          }
+          
           results.push({
             source: source.name,
             url: source.url,
@@ -507,6 +532,9 @@ class FeedMonitor {
             success: false,
             error: error.message
           });
+          
+          // Continue to next source - don't crash the entire process
+          console.log(`⏭️  [CHECK NOW] Continuing with next source despite error...`);
         }
       }
       
