@@ -636,25 +636,50 @@ class WebScraper {
             }
             
             // Look for date in container - check multiple patterns
-            // First, look for date elements
+            // First, look for date elements (prioritize semantic HTML)
             const dateSelectors = [
-              'time[datetime]',
-              'time',
-              '[datetime]',
-              '[class*="date"]',
-              '[class*="time"]',
-              '[class*="published"]',
-              '[class*="pub-date"]'
+              'time[datetime]',           // Semantic HTML5 time element with datetime
+              'time',                      // Any time element
+              '[datetime]',                // Any element with datetime attribute
+              '[data-date]',               // Data attribute for dates
+              '[class*="date"]',           // Elements with "date" in class
+              '[class*="time"]',           // Elements with "time" in class
+              '[class*="published"]',      // Elements with "published" in class
+              '[class*="pub-date"]',       // Elements with "pub-date" in class
+              '[class*="publish"]',        // Elements with "publish" in class
+              '[class*="meta"] time',      // Time elements within meta sections
+              '[class*="meta"] [class*="date"]', // Date elements within meta sections
+              '[class*="author"] + [class*="date"]', // Date after author info
+              '[class*="byline"] [class*="date"]',   // Date in byline
+              'header [class*="date"]',    // Date in header section
+              'header time'                // Time in header section
             ];
             
             for (const selector of dateSelectors) {
-              const dateEl = container.querySelector(selector);
-              if (dateEl) {
-                dateText = dateEl.getAttribute('datetime') || 
-                          dateEl.getAttribute('date') ||
-                          dateEl.getAttribute('data-date') ||
-                          dateEl.textContent.trim();
-                if (dateText) break;
+              try {
+                const dateEl = container.querySelector(selector);
+                if (dateEl) {
+                  // Try attributes first (most reliable)
+                  dateText = dateEl.getAttribute('datetime') || 
+                            dateEl.getAttribute('date') ||
+                            dateEl.getAttribute('data-date') ||
+                            dateEl.getAttribute('content') ||
+                            dateEl.getAttribute('data-published') ||
+                            null;
+                  
+                  // If no attribute, try text content
+                  if (!dateText) {
+                    const text = dateEl.textContent.trim();
+                    // Only use text if it looks like a date (has numbers and month/date indicators)
+                    if (text && (/\d/.test(text) && (/\d{4}/.test(text) || /(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|January|February|March|April|May|June|July|August|September|October|November|December)/i.test(text)))) {
+                      dateText = text;
+                    }
+                  }
+                  
+                  if (dateText) break;
+                }
+              } catch (e) {
+                // Invalid selector, continue
               }
             }
             
@@ -662,16 +687,73 @@ class WebScraper {
             if (!dateText) {
               // Get all text from container (but exclude link text to avoid false matches)
               const containerClone = container.cloneNode(true);
-              // Remove the link to avoid duplicate text
-              containerClone.querySelectorAll('a').forEach(a => a.remove());
+              // Remove the link and other interactive elements to avoid noise
+              containerClone.querySelectorAll('a, button, nav, header, footer').forEach(el => el.remove());
               const containerText = containerClone.textContent || container.textContent || '';
               
-              // Look for date patterns in the text
-              dateText = extractDate(containerText);
+              // Look for date patterns in the text (prioritize common blog formats)
+              // Try to find dates near the beginning of the text (more likely to be publication date)
+              const textSamples = [
+                containerText.substring(0, 200),  // First 200 chars (most likely location)
+                containerText.substring(0, 500),  // First 500 chars
+                containerText                      // Full text as fallback
+              ];
+              
+              for (const sample of textSamples) {
+                dateText = extractDate(sample);
+                if (dateText) break;
+              }
             }
             
-            // Extract description
-            description = (container.querySelector('[class*="excerpt"], [class*="summary"], [class*="description"], p')?.textContent.trim() || '').substring(0, 300);
+            // Extract description - try multiple strategies
+            const descSelectors = [
+              '[class*="excerpt"]',           // Common excerpt class
+              '[class*="summary"]',            // Summary class
+              '[class*="description"]',        // Description class
+              '[class*="preview"]',            // Preview class
+              '[class*="intro"]',              // Introduction class
+              '[class*="lead"]',               // Lead paragraph class
+              '[class*="snippet"]',            // Snippet class
+              'p:not([class*="meta"]):not([class*="date"])', // Paragraphs (but not meta/date)
+              '[class*="content"] p',          // Paragraphs in content sections
+              'p'                              // Any paragraph as fallback
+            ];
+            
+            for (const selector of descSelectors) {
+              try {
+                const descEl = container.querySelector(selector);
+                if (descEl && container.contains(descEl) && descEl !== link) {
+                  let descText = descEl.textContent.trim();
+                  
+                  // Skip if it's too short or looks like metadata
+                  if (descText.length > 20 && 
+                      descText.length < 500 &&
+                      !descText.match(/^\d{4}[-/]\d{1,2}[-/]\d{1,2}/) && // Not a date
+                      !descText.match(/^(by|author|published|date):/i) && // Not metadata
+                      !descText.toLowerCase().includes('read more') &&
+                      !descText.toLowerCase().includes('learn more')) {
+                    description = descText.substring(0, 300);
+                    break;
+                  }
+                }
+              } catch (e) {
+                // Invalid selector, continue
+              }
+            }
+            
+            // If still no description, try getting first substantial paragraph
+            if (!description || description.length < 20) {
+              const paragraphs = container.querySelectorAll('p');
+              for (const p of paragraphs) {
+                if (container.contains(p) && p !== link && !link.contains(p)) {
+                  const text = p.textContent.trim();
+                  if (text.length > 50 && text.length < 500) {
+                    description = text.substring(0, 300);
+                    break;
+                  }
+                }
+              }
+            }
           } else {
             // Fallback: use link text if container not found
             title = link.textContent.trim();
