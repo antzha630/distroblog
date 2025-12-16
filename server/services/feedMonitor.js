@@ -1546,6 +1546,102 @@ class FeedMonitor {
     return genericPatterns.some(pattern => pattern.test(lowerTitle));
   }
 
+  // Auto-enrich dates for newly found articles (called automatically after Check Now)
+  async enrichNewArticlesDates(maxArticles = 20) {
+    const getMemoryMB = () => {
+      if (process.memoryUsage) {
+        const memUsage = process.memoryUsage();
+        return Math.round(memUsage.rss / 1024 / 1024);
+      }
+      return 0;
+    };
+    
+    const MEMORY_LIMIT_MB = 450;
+    const BATCH_SIZE = 2; // Smaller batches for auto-enrichment (less aggressive)
+    const ENRICH_LIMIT = Math.min(maxArticles, 20); // Limit to 20 articles max for auto-enrichment
+    
+    try {
+      // Get recently added articles (last 5 minutes) with missing dates from scraping sources
+      const result = await database.pool.query(`
+        SELECT a.id, a.title, a.link, a.pub_date, a.source_id, a.source_name, a.created_at,
+               s.monitoring_type
+        FROM articles a
+        LEFT JOIN sources s ON a.source_id = s.id
+        WHERE a.pub_date IS NULL
+          AND (s.monitoring_type = 'SCRAPING' OR a.source_name IN (
+            SELECT name FROM sources WHERE monitoring_type = 'SCRAPING'
+          ))
+          AND a.created_at >= NOW() - INTERVAL '5 minutes'
+        ORDER BY a.created_at DESC
+        LIMIT $1
+      `, [ENRICH_LIMIT]);
+      
+      const articles = result.rows;
+      
+      if (articles.length === 0) {
+        return 0;
+      }
+      
+      console.log(`📊 [ENRICH] Found ${articles.length} new articles without dates to enrich`);
+      
+      let enriched = 0;
+      
+      // Process in small batches
+      for (let i = 0; i < articles.length; i += BATCH_SIZE) {
+        const batch = articles.slice(i, i + BATCH_SIZE);
+        
+        // Check memory before batch
+        const memoryBefore = getMemoryMB();
+        if (memoryBefore > MEMORY_LIMIT_MB) {
+          console.log(`⚠️  [ENRICH] Memory too high (${memoryBefore}MB), stopping auto-enrichment`);
+          break;
+        }
+        
+        // Process each article in batch
+        for (const article of batch) {
+          try {
+            // Use extractArticleMetadata to get date from fully rendered page
+            const metadata = await this.extractArticleMetadata(article.link);
+            
+            if (metadata && metadata.datePublished) {
+              await database.updateArticle(article.id, { pub_date: metadata.datePublished });
+              enriched++;
+              console.log(`   ✅ [ENRICH] Enriched date for: ${article.title?.substring(0, 50)}...`);
+            }
+            
+            // Small delay between articles
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            // Check memory after each article
+            const memoryAfter = getMemoryMB();
+            if (memoryAfter > MEMORY_LIMIT_MB) {
+              console.log(`⚠️  [ENRICH] Memory exceeded limit (${memoryAfter}MB), stopping`);
+              return enriched;
+            }
+          } catch (error) {
+            console.warn(`   ⚠️  [ENRICH] Failed to enrich ${article.id}: ${error.message}`);
+            // Continue with next article
+          }
+        }
+        
+        // Delay between batches
+        if (i + BATCH_SIZE < articles.length) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          
+          // Force GC if available
+          if (global.gc) {
+            global.gc();
+          }
+        }
+      }
+      
+      return enriched;
+    } catch (error) {
+      console.error(`❌ [ENRICH] Error in auto-enrichment: ${error.message}`);
+      return 0; // Return 0 on error, don't throw
+    }
+  }
+
   // Extract article metadata from a URL
   // Tries Playwright first (for JS-rendered sites), then falls back to static scraping
   async extractArticleMetadata(url) {
