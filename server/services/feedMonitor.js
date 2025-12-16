@@ -483,51 +483,51 @@ class FeedMonitor {
                       // Skip post-metadata delay to speed up
                       
                       // Use article page title if available and better (same logic as re-scrape)
-                      if (metadata.title && metadata.title.trim().length > 10) {
-                        const newTitle = metadata.title.trim();
-                        const newTitleLower = newTitle.toLowerCase();
-                        const isGeneric = newTitleLower.includes('blog') ||
-                                         newTitleLower.includes('all posts') ||
-                                         newTitleLower.includes('latest by topic') ||
-                                         newTitleLower.includes('mothership') ||
-                                         newTitleLower.includes('backbone of ai infrastructure') ||
-                                         (newTitle.length < 25 && (
-                                           newTitleLower === 'blockchain web3' ||
-                                           newTitleLower === 'cybersecurity' ||
-                                           newTitleLower === 'company updates' ||
-                                           newTitleLower === 'io intelligence' ||
-                                           newTitleLower === 'ai infrastructure compute' ||
-                                           newTitleLower === 'ai startup corner' ||
-                                           newTitleLower === 'developer resources' ||
-                                           (newTitleLower.includes('swarm community call') && newTitleLower.includes('recap'))
-                                         ));
-                        
-                        if (!isGeneric) {
+                    if (metadata.title && metadata.title.trim().length > 10) {
+                      const newTitle = metadata.title.trim();
+                      const newTitleLower = newTitle.toLowerCase();
+                      const isGeneric = newTitleLower.includes('blog') ||
+                                       newTitleLower.includes('all posts') ||
+                                       newTitleLower.includes('latest by topic') ||
+                                       newTitleLower.includes('mothership') ||
+                                       newTitleLower.includes('backbone of ai infrastructure') ||
+                                       (newTitle.length < 25 && (
+                                         newTitleLower === 'blockchain web3' ||
+                                         newTitleLower === 'cybersecurity' ||
+                                         newTitleLower === 'company updates' ||
+                                         newTitleLower === 'io intelligence' ||
+                                         newTitleLower === 'ai infrastructure compute' ||
+                                         newTitleLower === 'ai startup corner' ||
+                                         newTitleLower === 'developer resources' ||
+                                         (newTitleLower.includes('swarm community call') && newTitleLower.includes('recap'))
+                                       ));
+                      
+                      if (!isGeneric) {
                           improvedTitle = newTitle;
                           console.log(`📝 [CHECK NOW] [${source.name}] Using optimized title: "${improvedTitle.substring(0, 60)}..."`);
-                        } else {
-                          console.log(`⚠️  [CHECK NOW] [${source.name}] Article page title is generic, keeping original`);
-                        }
                       } else {
-                        console.log(`⚠️  [CHECK NOW] [${source.name}] Article page title not found, keeping original`);
+                          console.log(`⚠️  [CHECK NOW] [${source.name}] Article page title is generic, keeping original`);
                       }
-                      
+                    } else {
+                        console.log(`⚠️  [CHECK NOW] [${source.name}] Article page title not found, keeping original`);
+                    }
+                    
                       // Use article page date if available (same logic as re-scrape)
-                      if (metadata.pubDate) {
-                        try {
-                          const articlePageDate = new Date(metadata.pubDate);
-                          if (!isNaN(articlePageDate.getTime())) {
+                    if (metadata.pubDate) {
+                      try {
+                        const articlePageDate = new Date(metadata.pubDate);
+                        if (!isNaN(articlePageDate.getTime())) {
                             improvedDate = articlePageDate;
                             console.log(`📅 [CHECK NOW] [${source.name}] Found optimized date: ${improvedDate.toISOString()}`);
-                          }
-                        } catch (e) {
-                          console.log(`⚠️  [CHECK NOW] [${source.name}] Invalid date format: ${metadata.pubDate}`);
                         }
-                      } else {
-                        console.log(`⚠️  [CHECK NOW] [${source.name}] No date found on article page`);
+                      } catch (e) {
+                          console.log(`⚠️  [CHECK NOW] [${source.name}] Invalid date format: ${metadata.pubDate}`);
                       }
-                    } catch (err) {
-                      // If fetching fails, use what we have from listing page
+                    } else {
+                        console.log(`⚠️  [CHECK NOW] [${source.name}] No date found on article page`);
+                    }
+                  } catch (err) {
+                    // If fetching fails, use what we have from listing page
                       console.log(`❌ [CHECK NOW] [${source.name}] Could not fetch optimized metadata: ${err.message} (using listing page data)`);
                     }
                   } else {
@@ -537,16 +537,13 @@ class FeedMonitor {
                   // Use scraped content from listing page (skip full content fetch to save memory)
                   let articleContent = article.content || article.description || '';
                   
-                  // Filter out articles with very short content (likely not real articles)
-                  if (articleContent.length < 50 && !article.description) {
-                    console.log(`⚠️  [CHECK NOW] [${source.name}] Skipping article with very short content (${articleContent.length} chars): "${improvedTitle.substring(0, 50)}..."`);
-                    continue;
-                  }
-                  
-                  // Ensure we have at least a preview
+                  // Ensure we have at least a preview or description
+                  // Don't skip articles with short content if they have a description (from RSS or listing page)
                   const preview = article.description || article.contentSnippet || articleContent.substring(0, 200);
-                  if (preview.length < 20) {
-                    console.log(`⚠️  [CHECK NOW] [${source.name}] Skipping article with insufficient preview: "${improvedTitle.substring(0, 50)}..."`);
+                  
+                  // Only skip if both content AND preview are too short (likely not a real article)
+                  if (articleContent.length < 20 && (!preview || preview.length < 20)) {
+                    console.log(`⚠️  [CHECK NOW] [${source.name}] Skipping article with insufficient content/preview (${articleContent.length} chars content, ${preview?.length || 0} chars preview): "${improvedTitle.substring(0, 50)}..."`);
                     continue;
                   }
                   
@@ -609,7 +606,7 @@ class FeedMonitor {
             
             // Update last_checked timestamp (scraping result is already stored by webScraper)
             try {
-              await database.updateSourceLastChecked(source.id);
+            await database.updateSourceLastChecked(source.id);
             } catch (updateError) {
               console.warn(`⚠️  [CHECK NOW] [${source.name}] Could not update last_checked timestamp: ${updateError.message}`);
               // Don't fail the entire process if timestamp update fails
@@ -806,8 +803,8 @@ class FeedMonitor {
             continue;
           }
           
-          // Check if article already exists
-          const exists = await database.articleExists(item.link);
+        // Check if article already exists
+        const exists = await database.articleExists(item.link);
           if (exists) {
             continue; // Skip existing articles
           }
@@ -900,12 +897,12 @@ class FeedMonitor {
 
           // Try to add article, handle duplicate key errors gracefully
           try {
-            const articleId = await database.addArticle(article);
-            newArticles.push({
-              id: articleId,
-              title: article.title,
-              link: article.link
-            });
+          const articleId = await database.addArticle(article);
+          newArticles.push({
+            id: articleId,
+            title: article.title,
+            link: article.link
+          });
           } catch (addError) {
             // Handle duplicate key error gracefully (might happen due to race conditions)
             if (addError.code === '23505' || addError.message?.includes('duplicate key')) {
@@ -1561,7 +1558,8 @@ class FeedMonitor {
     const ENRICH_LIMIT = Math.min(maxArticles, 20); // Limit to 20 articles max for auto-enrichment
     
     try {
-      // Get recently added articles (last 5 minutes) with missing dates from scraping sources
+      // Get recently added articles (last 1 hour) with missing dates from scraping sources
+      // This catches articles from the current Check Now run and any recent ones
       const result = await database.pool.query(`
         SELECT a.id, a.title, a.link, a.pub_date, a.source_id, a.source_name, a.created_at,
                s.monitoring_type
@@ -1571,7 +1569,7 @@ class FeedMonitor {
           AND (s.monitoring_type = 'SCRAPING' OR a.source_name IN (
             SELECT name FROM sources WHERE monitoring_type = 'SCRAPING'
           ))
-          AND a.created_at >= NOW() - INTERVAL '5 minutes'
+          AND a.created_at >= NOW() - INTERVAL '1 hour'
         ORDER BY a.created_at DESC
         LIMIT $1
       `, [ENRICH_LIMIT]);
