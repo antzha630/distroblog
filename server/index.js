@@ -2422,6 +2422,169 @@ app.post('/api/articles/dismiss-all', async (req, res) => {
   }
 });
 
+// Enrich metadata (dates, titles, descriptions) for scraping articles using Playwright
+app.post('/api/articles/enrich-metadata', async (req, res) => {
+  const startTime = Date.now();
+  const feedMonitor = require('./services/feedMonitor');
+  
+  // Memory monitoring helper
+  const getMemoryMB = () => {
+    if (process.memoryUsage) {
+      const memUsage = process.memoryUsage();
+      return Math.round(memUsage.rss / 1024 / 1024);
+    }
+    return 0;
+  };
+  
+  const MEMORY_LIMIT_MB = 450; // Bail if memory gets too high
+  const BATCH_SIZE = 3; // Process 3 articles at a time
+  const MAX_ARTICLES = parseInt(req.query.limit) || 30; // Default to 30 articles max
+  
+  try {
+    console.log(`🔍 [ENRICH] Starting metadata enrichment for up to ${MAX_ARTICLES} articles...`);
+    
+    // Get articles with missing dates from scraping sources
+    const articles = await database.getArticlesWithMissingDates(MAX_ARTICLES);
+    
+    if (articles.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No articles with missing dates found',
+        processed: 0,
+        enriched: 0,
+        skipped: 0,
+        duration: Date.now() - startTime
+      });
+    }
+    
+    console.log(`📊 [ENRICH] Found ${articles.length} articles with missing dates`);
+    
+    let processed = 0;
+    let enriched = 0;
+    let skipped = 0;
+    const errors = [];
+    
+    // Process in batches
+    for (let i = 0; i < articles.length; i += BATCH_SIZE) {
+      const batch = articles.slice(i, i + BATCH_SIZE);
+      const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+      const totalBatches = Math.ceil(articles.length / BATCH_SIZE);
+      
+      console.log(`\n🔄 [ENRICH] Processing batch ${batchNum}/${totalBatches} (${batch.length} articles)`);
+      
+      // Check memory before processing batch
+      const memoryBefore = getMemoryMB();
+      if (memoryBefore > MEMORY_LIMIT_MB) {
+        console.log(`⚠️  [ENRICH] Memory too high (${memoryBefore}MB), stopping enrichment`);
+        break;
+      }
+      
+      // Process each article in the batch
+      for (const article of batch) {
+        try {
+          processed++;
+          console.log(`\n📄 [ENRICH] [${processed}/${articles.length}] Processing: ${article.title?.substring(0, 50)}...`);
+          console.log(`   URL: ${article.link}`);
+          
+          // Use extractArticleMetadata which uses Playwright to get full metadata
+          const metadata = await feedMonitor.extractArticleMetadata(article.link);
+          
+          if (!metadata) {
+            console.log(`   ⚠️  No metadata extracted, skipping`);
+            skipped++;
+            continue;
+          }
+          
+          // Update article with new metadata
+          const updates = {};
+          let hasUpdates = false;
+          
+          if (metadata.datePublished) {
+            updates.pub_date = metadata.datePublished;
+            console.log(`   ✅ Found date: ${metadata.datePublished}`);
+            hasUpdates = true;
+          }
+          
+          if (metadata.title && metadata.title.trim().length > 10) {
+            updates.title = metadata.title.trim();
+            console.log(`   ✅ Updated title: ${metadata.title.substring(0, 50)}...`);
+            hasUpdates = true;
+          }
+          
+          if (metadata.description && metadata.description.trim().length > 20) {
+            updates.preview = metadata.description.trim().substring(0, 500);
+            console.log(`   ✅ Updated preview (${updates.preview.length} chars)`);
+            hasUpdates = true;
+          }
+          
+          if (hasUpdates) {
+            await database.updateArticle(article.id, updates);
+            enriched++;
+            console.log(`   ✨ Article enriched successfully`);
+          } else {
+            console.log(`   ⚠️  No useful metadata found, skipping update`);
+            skipped++;
+          }
+          
+          // Small delay between articles to allow GC
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          
+        } catch (error) {
+          console.error(`   ❌ Error processing article ${article.id}:`, error.message);
+          errors.push({ articleId: article.id, title: article.title, error: error.message });
+          skipped++;
+        }
+        
+        // Check memory after each article
+        const memoryAfter = getMemoryMB();
+        if (memoryAfter > MEMORY_LIMIT_MB) {
+          console.log(`⚠️  [ENRICH] Memory exceeded limit (${memoryAfter}MB), stopping enrichment`);
+          break;
+        }
+      }
+      
+      // Delay between batches to allow garbage collection
+      if (i + BATCH_SIZE < articles.length) {
+        console.log(`\n⏸️  [ENRICH] Waiting 2 seconds before next batch (allowing GC)...`);
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        // Force garbage collection if available
+        if (global.gc) {
+          global.gc();
+          const memoryAfterGC = getMemoryMB();
+          console.log(`   ♻️  Memory after GC: ${memoryAfterGC}MB`);
+        }
+      }
+    }
+    
+    const duration = Date.now() - startTime;
+    const finalMemory = getMemoryMB();
+    
+    console.log(`\n✅ [ENRICH] Enrichment completed in ${duration}ms`);
+    console.log(`📊 [ENRICH] Summary: ${processed} processed, ${enriched} enriched, ${skipped} skipped`);
+    console.log(`💾 [ENRICH] Final memory: ${finalMemory}MB`);
+    
+    res.json({
+      success: true,
+      message: `Enrichment completed: ${enriched} articles enriched, ${skipped} skipped`,
+      processed,
+      enriched,
+      skipped,
+      errors: errors.length > 0 ? errors : undefined,
+      duration,
+      finalMemory: finalMemory
+    });
+    
+  } catch (error) {
+    console.error('❌ [ENRICH] Error in metadata enrichment:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to enrich metadata',
+      message: error.message
+    });
+  }
+});
+
 // Debug endpoint to check scraping sources and articles
 app.get('/api/debug/scraping', async (req, res) => {
   try {
