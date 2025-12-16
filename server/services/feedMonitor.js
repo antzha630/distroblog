@@ -1762,8 +1762,6 @@ class FeedMonitor {
             titleSource = 'page title';
           }
           
-          return { title, titleSource };
-          
           // Extract description
           let description = '';
           const ogDesc = document.querySelector('meta[property="og:description"]');
