@@ -541,9 +541,10 @@ class FeedMonitor {
                   // Don't skip articles with short content if they have a description (from RSS or listing page)
                   const preview = article.description || article.contentSnippet || articleContent.substring(0, 200);
                   
-                  // Only skip if both content AND preview are too short (likely not a real article)
-                  if (articleContent.length < 20 && (!preview || preview.length < 20)) {
-                    console.log(`⚠️  [CHECK NOW] [${source.name}] Skipping article with insufficient content/preview (${articleContent.length} chars content, ${preview?.length || 0} chars preview): "${improvedTitle.substring(0, 50)}..."`);
+                  // Only skip if BOTH title is too short AND (content AND preview are too short)
+                  // Allow articles with good titles even if content/preview is missing (they'll be enriched later)
+                  if (improvedTitle.length < 10 && articleContent.length < 20 && (!preview || preview.length < 20)) {
+                    console.log(`⚠️  [CHECK NOW] [${source.name}] Skipping article with insufficient title/content/preview (title: ${improvedTitle.length} chars, content: ${articleContent.length} chars, preview: ${preview?.length || 0} chars): "${improvedTitle.substring(0, 50)}..."`);
                     continue;
                   }
                   
@@ -1392,7 +1393,15 @@ class FeedMonitor {
     let cleaned = title.trim();
     
     // Remove common prefixes like "articlePINNED", "article", "PINNED"
-    cleaned = cleaned.replace(/^(articlePINNED|PINNED|article|Article)\s*/i, '');
+    // Handle "articlePINNED" as a single word (case-insensitive)
+    if (/^articlePINNED/i.test(cleaned)) {
+      cleaned = cleaned.replace(/^articlePINNED\s*/i, '');
+    }
+    // Remove other variations
+    cleaned = cleaned.replace(/^(PINNED|article|Article)\s*/i, '');
+    // Remove prefixes that might have different casing variations (with spaces)
+    cleaned = cleaned.replace(/^article\s*pinned\s*/i, '');
+    cleaned = cleaned.replace(/^pinned\s*article\s*/i, '');
     
     // Remove common suffixes like "2025-12-113 min read", "3 min read", etc.
     cleaned = cleaned.replace(/\s*\d{4}-\d{2}-\d{1,2}\s*\d+\s*min\s*read.*$/i, '');

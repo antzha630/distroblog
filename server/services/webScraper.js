@@ -1101,7 +1101,6 @@ class WebScraper {
         console.log(`   - Page structure is different than expected`);
         console.log(`   - Site might be blocking scrapers (Cloudflare?)`);
         console.log(`   - Articles might be loaded via API calls after page load`);
-        console.log(`💡 Debug info: ${JSON.stringify(debug.slice(0, 10))}`);
       } else {
         console.log(`✅ [${url}] Playwright found ${limited.length} articles (from ${unique.length} total, showing most recent)`);
         limited.forEach((article, i) => {
