@@ -685,8 +685,8 @@ class FeedMonitor {
         console.log(`\n🔍 [CHECK NOW] Auto-enriching dates for new articles without dates...`);
         try {
           // Use a reasonable limit - try to enrich up to the number of new articles found
-          // But cap at 30 to keep it fast
-          const enrichLimit = Math.min(totalNewArticles, 30);
+          // Increased limit to 50 to cover more articles
+          const enrichLimit = Math.min(totalNewArticles, 50);
           const enrichedCount = await this.enrichNewArticlesDates(enrichLimit);
           if (enrichedCount > 0) {
             console.log(`✨ [CHECK NOW] Auto-enriched dates for ${enrichedCount} new articles`);
@@ -1569,7 +1569,7 @@ class FeedMonitor {
     
     const MEMORY_LIMIT_MB = 450;
     const BATCH_SIZE = 2; // Smaller batches for auto-enrichment (less aggressive)
-    const ENRICH_LIMIT = Math.min(maxArticles, 20); // Limit to 20 articles max for auto-enrichment
+    const ENRICH_LIMIT = Math.min(maxArticles, 50); // Increased limit to 50 articles for better coverage
     
     try {
       // Get recently added articles (last 1 hour) with missing dates from scraping sources
@@ -1583,7 +1583,7 @@ class FeedMonitor {
           AND (s.monitoring_type = 'SCRAPING' OR a.source_name IN (
             SELECT name FROM sources WHERE monitoring_type = 'SCRAPING'
           ))
-          AND a.created_at >= NOW() - INTERVAL '1 hour'
+          AND a.created_at >= NOW() - INTERVAL '2 hours'
         ORDER BY a.created_at DESC
         LIMIT $1
       `, [ENRICH_LIMIT]);
