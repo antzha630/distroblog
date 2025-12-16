@@ -1331,7 +1331,7 @@ class FeedMonitor {
     }
   }
 
-  // Basic title cleaning for scraped articles (remove common prefixes)
+  // Basic title cleaning for scraped articles (remove common prefixes and suffixes)
   cleanTitle(title) {
     if (!title) return 'Untitled Article';
     
@@ -1340,10 +1340,47 @@ class FeedMonitor {
     // Remove common prefixes like "articlePINNED", "article", "PINNED"
     cleaned = cleaned.replace(/^(articlePINNED|PINNED|article|Article)\s*/i, '');
     
-    // Remove extra whitespace
+    // Remove common suffixes like "2025-12-113 min read", "3 min read", etc.
+    cleaned = cleaned.replace(/\s*\d{4}-\d{2}-\d{1,2}\s*\d+\s*min\s*read.*$/i, '');
+    cleaned = cleaned.replace(/\s*\d+\s*min\s*read.*$/i, '');
+    
+    // Remove trailing dates in various formats
+    cleaned = cleaned.replace(/\s*\d{4}-\d{2}-\d{2}.*$/i, '');
+    
+    // Remove extra whitespace and dots
     cleaned = cleaned.replace(/\s+/g, ' ').trim();
+    cleaned = cleaned.replace(/\.{3,}/g, '...'); // Normalize ellipsis
     
     return cleaned || 'Untitled Article';
+  }
+  
+  // Check if title is generic/non-article (should be filtered out)
+  isGenericTitle(title) {
+    if (!title || title.length < 10) return true;
+    
+    const lowerTitle = title.toLowerCase();
+    const genericPatterns = [
+      /^follow us on/i,
+      /^posts? related to/i,
+      /^latest by topic/i,
+      /^read more/i,
+      /^view all/i,
+      /^see more/i,
+      /^click here/i,
+      /^subscribe/i,
+      /^newsletter/i,
+      /^blog$/i,
+      /^home$/i,
+      /^search$/i,
+      /^category/i,
+      /^tag:/i,
+      /^author:/i,
+      /^swarm community call.*recap$/i,
+      /^article$/i,
+      /^untitled/i
+    ];
+    
+    return genericPatterns.some(pattern => pattern.test(lowerTitle));
   }
 
   // Extract article metadata from a URL
