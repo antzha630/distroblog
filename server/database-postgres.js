@@ -681,6 +681,23 @@ class Database {
     return result.rows[0];
   }
 
+  // Get articles with missing dates from scraping sources
+  async getArticlesWithMissingDates(limit = 50) {
+    const result = await this.pool.query(`
+      SELECT a.id, a.title, a.link, a.pub_date, a.source_id, a.source_name, a.created_at,
+             s.monitoring_type, s.name as source_name_from_table
+      FROM articles a
+      LEFT JOIN sources s ON a.source_id = s.id
+      WHERE a.pub_date IS NULL
+        AND (s.monitoring_type = 'SCRAPING' OR a.source_name IN (
+          SELECT name FROM sources WHERE monitoring_type = 'SCRAPING'
+        ))
+      ORDER BY a.created_at DESC
+      LIMIT $1
+    `, [limit]);
+    return result.rows;
+  }
+
   async updateArticlePubDateByApproxLink(link, pubDateIso) {
     // Match exact link or same link without query params; only fill when missing
     const result = await this.pool.query(`
