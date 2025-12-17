@@ -21,8 +21,14 @@ app.use(cors());
 app.use(express.json());
 
 // Routes
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+app.get('/api/health', async (req, res) => {
+  // Check if database is initialized
+  const dbStatus = database.pool ? 'connected' : 'not initialized';
+  res.json({ 
+    status: 'OK', 
+    timestamp: new Date().toISOString(),
+    database: dbStatus
+  });
 });
 
 // Get all monitored sources
