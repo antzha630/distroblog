@@ -2793,16 +2793,18 @@ app.get('*', (req, res) => {
 // Start the server
 const startServer = async () => {
   try {
-    // Initialize database first
-    await database.init();
-    console.log('Database initialized successfully');
-    
-    // Start the server
-    app.listen(PORT, () => {
+    // Start the server immediately (non-blocking) so Render knows it's ready
+    // Database initialization will happen in the background
+    app.listen(PORT, async () => {
       console.log(`Distro Scoopstream server running on port ${PORT}`);
       console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
       
-      // Start feed monitoring (only if ENABLE_AUTO_MONITORING is set)
+      // Initialize database in the background (non-blocking)
+      database.init()
+        .then(() => {
+          console.log('Database initialized successfully');
+          
+          // Start feed monitoring (only if ENABLE_AUTO_MONITORING is set)
       // DISABLED BY DEFAULT to prevent memory issues on Render (512MB limit)
       // Automatic monitoring runs every 30 minutes and can cause memory spikes
       if (process.env.ENABLE_AUTO_MONITORING === 'true') {
@@ -2833,9 +2835,15 @@ const startServer = async () => {
           });
         }, cleanupInterval * 60 * 60 * 1000);
       } else {
-        console.log('ℹ️  Automatic cleanup disabled (use ENABLE_AUTO_CLEANUP=true to enable)');
-        console.log('ℹ️  Use POST /api/maintenance/cleanup-old-articles for manual cleanup');
-      }
+          console.log('ℹ️  Automatic cleanup disabled (use ENABLE_AUTO_CLEANUP=true to enable)');
+          console.log('ℹ️  Use POST /api/maintenance/cleanup-old-articles for manual cleanup');
+        }
+        })
+        .catch(err => {
+          console.error('Database initialization failed:', err);
+          // Don't exit - server can still serve static files and health checks
+          // Database-dependent endpoints will handle errors gracefully
+        });
     });
   } catch (error) {
     console.error('Failed to start server:', error);
