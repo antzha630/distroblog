@@ -496,12 +496,19 @@ class WebScraper {
             // Check if it's a non-article page (but allow if it has /blog/, /post/, etc. in path)
             const isNonArticlePath = (pathname === '/' || 
                                      pathname === '/contact' ||
+                                     pathname === '/contact-us' ||
+                                     pathname === '/partners' ||
+                                     pathname === '/research' ||
                                      pathname === '/about' ||
                                      pathname === '/careers' ||
                                      pathname === '/company' ||
                                      pathname === '/solutions' ||
                                      pathname === '/marketplace' ||
                                      pathname === '/search' ||
+                                     pathname.startsWith('/contact/') ||
+                                     pathname.startsWith('/contact-us/') ||
+                                     pathname.startsWith('/partners/') ||
+                                     pathname.startsWith('/research/') ||
                                      pathname.startsWith('/press') ||
                                      pathname.startsWith('/privacy') ||
                                      pathname.startsWith('/terms') ||
@@ -510,6 +517,7 @@ class WebScraper {
                                      pathname.startsWith('/litepaper') ||
                                      pathname.startsWith('/faq') ||
                                      pathname.startsWith('/products') ||
+                                     pathname.startsWith('/docs') ||
                                      pathname.startsWith('/c/') || // Category pages (e.g., /c/tutorials)
                                      pathname.match(/^\/[a-z]{2}$/i) || // Language codes (e.g., /en, /zh)
                                      pathname.match(/^\/tag[s]?\/|\/category\/|\/archive\/|\/author\//i)) && // Tag/category/archive/author pages
@@ -839,13 +847,21 @@ class WebScraper {
             const urlPath = new URL(href).pathname.toLowerCase();
             const isNonArticleUrl = urlPath === '/search' ||
                                    urlPath === '/partners' ||
+                                   urlPath === '/contact' ||
+                                   urlPath === '/contact-us' ||
+                                   urlPath === '/research' ||
                                    urlPath.startsWith('/partners/') ||
+                                   urlPath.startsWith('/contact/') ||
+                                   urlPath.startsWith('/contact-us/') ||
+                                   urlPath.startsWith('/research/') ||
                                    urlPath.startsWith('/c/') ||
                                    urlPath.match(/^\/[a-z]{2}$/i) || // Language codes
                                    urlPath.match(/^\/tag[s]?\/|\/category\/|\/archive\/|\/author\//i) ||
                                    urlPath.includes('/search?') ||
                                    urlPath.includes('/category/') ||
                                    urlPath.includes('/tag/') ||
+                                   // Filter PDFs and other file types
+                                   href.match(/\.(pdf|doc|docx|xls|xlsx|zip|tar|gz)$/i) ||
                                    // Filter category pages: /blog/quick-reads, /blog/artificial-intelligence, etc.
                                    urlPath.match(/\/(blog|post|article|articles)\/(quick-reads|artificial-intelligence|blockchain|cybersecurity|company-updates|io-intelligence|ai-infrastructure-compute|ai-startup-corner|developer-resources)(\/|$)/i);
             
@@ -864,6 +880,11 @@ class WebScraper {
                 lowerTitle === 'about' ||
                 lowerTitle === 'articles' ||
                 lowerTitle === 'posts' ||
+                lowerTitle === 'partners' ||
+                lowerTitle === 'contact' ||
+                lowerTitle === 'contact us' ||
+                lowerTitle === 'whitepaper' ||
+                lowerTitle.includes('read the documentation') ||
                 lowerTitle.includes('all posts') ||
                 lowerTitle.includes('view all') ||
                 // Reject very short generic titles
