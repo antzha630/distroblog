@@ -987,6 +987,7 @@ class WebScraper {
                   if (!results.some(r => r.url === item.url)) {
                     results.push({
                       url: item.url,
+                      link: item.url, // Ensure link property exists
                       title: item.headline || item.name || '',
                       description: item.description || '',
                       datePublished: item.datePublished || item.dateCreated || null
@@ -1026,6 +1027,7 @@ class WebScraper {
             if (!results.some(r => r.url === link.href)) {
               results.push({
                 url: link.href,
+                link: link.href, // Ensure link property exists
                 title: title,
                 description: el.querySelector('[class*="excerpt"], [class*="summary"], p')?.textContent.trim() || '',
                 datePublished: dateText
@@ -1061,6 +1063,7 @@ class WebScraper {
               if (title && title.length > 10 && !results.some(r => r.url === link.href)) {
                 results.push({
                   url: link.href,
+                  link: link.href, // Ensure link property exists
                   title: title,
                   description: item.querySelector('[class*="excerpt"], [class*="summary"], p')?.textContent.trim() || '',
                   datePublished: extractDate(item.textContent)

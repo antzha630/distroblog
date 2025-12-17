@@ -400,9 +400,19 @@ class FeedMonitor {
             for (const article of articles) {
               checkedCount++;
               try {
-                const exists = await database.articleExists(article.link);
+                // Ensure article has link property (some scrapers return 'url' instead)
+                const articleLink = article.link || article.url;
+                if (!articleLink) {
+                  console.warn(`⚠️  [CHECK NOW] [${source.name}] Article missing link/url: ${JSON.stringify({title: article.title, link: article.link, url: article.url})}`);
+                  continue;
+                }
+                const exists = await database.articleExists(articleLink);
                 if (exists) {
                   continue; // Skip existing articles
+                }
+                // Ensure article object has link property for consistency
+                if (!article.link && article.url) {
+                  article.link = article.url;
                 }
                 // This is a new article - add to queue
                 newArticlesToProcess.push(article);
