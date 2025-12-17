@@ -862,6 +862,8 @@ class WebScraper {
                                    urlPath.includes('/tag/') ||
                                    // Filter PDFs and other file types
                                    href.match(/\.(pdf|doc|docx|xls|xlsx|zip|tar|gz)$/i) ||
+                                   // Filter external documentation sites
+                                   (href.includes('docs.') && !href.includes('/blog')) ||
                                    // Filter category pages: /blog/quick-reads, /blog/artificial-intelligence, etc.
                                    urlPath.match(/\/(blog|post|article|articles)\/(quick-reads|artificial-intelligence|blockchain|cybersecurity|company-updates|io-intelligence|ai-infrastructure-compute|ai-startup-corner|developer-resources)(\/|$)/i);
             
