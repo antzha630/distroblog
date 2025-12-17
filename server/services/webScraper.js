@@ -838,6 +838,8 @@ class WebScraper {
             // CRITICAL: Filter out non-article URLs FIRST (before title check)
             const urlPath = new URL(href).pathname.toLowerCase();
             const isNonArticleUrl = urlPath === '/search' ||
+                                   urlPath === '/partners' ||
+                                   urlPath.startsWith('/partners/') ||
                                    urlPath.startsWith('/c/') ||
                                    urlPath.match(/^\/[a-z]{2}$/i) || // Language codes
                                    urlPath.match(/^\/tag[s]?\/|\/category\/|\/archive\/|\/author\//i) ||

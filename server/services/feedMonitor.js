@@ -534,12 +534,26 @@ class FeedMonitor {
                     console.log(`⏩ [CHECK NOW] [${source.name}] Skipping metadata fetch to speed up manual check`);
                   }
                   
+                  // Try lightweight description fetch even during manual checks (static HTML only, no Playwright)
+                  let articleDescription = article.description || article.contentSnippet || '';
+                  if (!articleDescription || articleDescription.length < 50) {
+                    try {
+                      const staticDesc = await this.extractDescriptionStatic(article.link);
+                      if (staticDesc && staticDesc.length > 50) {
+                        articleDescription = staticDesc;
+                        console.log(`📝 [CHECK NOW] [${source.name}] Extracted description via static fetch: ${articleDescription.substring(0, 60)}...`);
+                      }
+                    } catch (descError) {
+                      // If description fetch fails, continue with what we have (silent fail for speed)
+                    }
+                  }
+                  
                   // Use scraped content from listing page (skip full content fetch to save memory)
-                  let articleContent = article.content || article.description || '';
+                  let articleContent = article.content || articleDescription || '';
                   
                   // Ensure we have at least a preview or description
                   // Don't skip articles with short content if they have a description (from RSS or listing page)
-                  const preview = article.description || article.contentSnippet || articleContent.substring(0, 200);
+                  const preview = articleDescription || article.contentSnippet || articleContent.substring(0, 200);
                   
                   // Only skip if BOTH title is too short AND (content AND preview are too short)
                   // Allow articles with good titles even if content/preview is missing (they'll be enriched later)
@@ -567,7 +581,7 @@ class FeedMonitor {
                     title: improvedTitle, // Use optimized title from article page
                     link: article.link,
                     content: enhancedContent.content || articleContent || '',
-                    preview: enhancedContent.preview || article.description || article.contentSnippet || '',
+                    preview: enhancedContent.preview || articleDescription || article.description || article.contentSnippet || '',
                     pubDate: finalPubDate, // Use optimized date from article page
                     sourceName: source.name || 'Unknown Source',
                     category: source.category || 'General',
@@ -1417,6 +1431,52 @@ class FeedMonitor {
     return cleaned || 'Untitled Article';
   }
 
+  // Lightweight static description extraction (no Playwright) for manual runs
+  async extractDescriptionStatic(url) {
+    try {
+      const resp = await axios.get(url, {
+        timeout: 8000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; DistroScraper/1.0)',
+        },
+        maxContentLength: 2 * 1024 * 1024, // 2MB
+      });
+      const html = resp.data;
+      const $ = cheerio.load(html);
+
+      // Try meta tags first
+      let description = '';
+      const ogDesc = $('meta[property="og:description"]').attr('content') || '';
+      const metaDesc = $('meta[name="description"]').attr('content') || '';
+      const titleText = $('meta[property="og:title"]').attr('content') || $('title').text() || '';
+      
+      // Use OG description if it exists and is meaningful (not just the title)
+      if (ogDesc && ogDesc.length > 50 && ogDesc.toLowerCase() !== titleText.toLowerCase()) {
+        description = ogDesc;
+      } else if (metaDesc && metaDesc.length > 50 && metaDesc.toLowerCase() !== titleText.toLowerCase()) {
+        description = metaDesc;
+      }
+      
+      // If no good meta description, use first paragraph from article content
+      if (!description || description.length < 50) {
+        const firstParagraph = $('article p, main p, [class*="article-content"] p, [class*="post-content"] p').first().text().trim();
+        if (firstParagraph && firstParagraph.length > 50) {
+          description = firstParagraph.substring(0, 300) + (firstParagraph.length > 300 ? '...' : '');
+        } else {
+          // Last resort: any paragraph
+          const anyParagraph = $('p').first().text().trim();
+          if (anyParagraph && anyParagraph.length > 50) {
+            description = anyParagraph.substring(0, 300) + (anyParagraph.length > 300 ? '...' : '');
+          }
+        }
+      }
+      
+      return description || null;
+    } catch (err) {
+      return null;
+    }
+  }
+
   // Lightweight static date extraction (no Playwright) for manual runs
   async extractDateStatic(url) {
     const parseDate = (text) => {
@@ -1775,6 +1835,17 @@ class FeedMonitor {
             }
           }
           
+          // If OG description is just the title (too short or same as title), use first paragraph
+          if (description && description.length < 50) {
+            const firstParagraph = document.querySelector('article p, main p, [class*="article-content"] p, [class*="post-content"] p');
+            if (firstParagraph) {
+              const paraText = firstParagraph.textContent.trim();
+              if (paraText && paraText.length > 50) {
+                description = paraText.substring(0, 300);
+              }
+            }
+          }
+          
           // Extract date - try multiple strategies
           let pubDate = null;
           
@@ -2088,10 +2159,20 @@ class FeedMonitor {
       }
 
       // Fallback: extract first paragraph or intro text
-      if (!description) {
-        const firstParagraph = $('p').first().text().trim();
+      // Also use first paragraph if OG description is just the title (too short or same as title)
+      const ogDescValue = $('meta[property="og:description"]').attr('content') || '';
+      const titleText = $('meta[property="og:title"]').attr('content') || $('title').text() || '';
+      
+      if (!description || description.length < 50 || (ogDescValue && ogDescValue.toLowerCase() === titleText.toLowerCase())) {
+        const firstParagraph = $('article p, main p, [class*="article-content"] p, [class*="post-content"] p').first().text().trim();
         if (firstParagraph && firstParagraph.length > 50) {
           description = firstParagraph.substring(0, 300) + (firstParagraph.length > 300 ? '...' : '');
+        } else {
+          // Try any paragraph as last resort
+          const anyParagraph = $('p').first().text().trim();
+          if (anyParagraph && anyParagraph.length > 50) {
+            description = anyParagraph.substring(0, 300) + (anyParagraph.length > 300 ? '...' : '');
+          }
         }
       }
 
