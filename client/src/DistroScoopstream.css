@@ -1,12 +1,12 @@
-/* Distro Scout Landing Page Styles */
-.distro-scout-landing {
+/* Distro Scoopstream Landing Page Styles */
+.distro-scoopstream-landing {
   max-width: 1200px;
   margin: 0 auto;
   padding: 20px;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
 }
 
-.distro-scout-header {
+.distro-scoopstream-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -15,7 +15,7 @@
   border-bottom: 2px solid #e9ecef;
 }
 
-.distro-scout-header h1 {
+.distro-scoopstream-header h1 {
   font-size: 2.2rem;
   color: #2c3e50;
   margin: 0;
@@ -265,7 +265,7 @@
 }
 
 /* Edit/Send Posts Styles */
-.distro-scout-edit-send {
+.distro-scoopstream-edit-send {
   max-width: 1200px;
   margin: 0 auto;
   padding: 20px;
@@ -311,7 +311,7 @@
 }
 
 /* Ensure articles-container works for edit-send page with single column layout */
-.distro-scout-edit-send .articles-container {
+.distro-scoopstream-edit-send .articles-container {
   display: flex;
   flex-direction: column;
   gap: 25px;

@@ -1,4 +1,4 @@
-# Distro Scout Server Startup
+# Distro Scoopstream Server Startup
 
 ## Quick Start (Recommended)
 

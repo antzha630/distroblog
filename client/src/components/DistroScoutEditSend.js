@@ -143,11 +143,11 @@ function DistroScoutEditSend({ articles, onBack, onEditArticle, onRemoveArticle,
   };
 
   return (
-    <div className="distro-scout-edit-send">
+    <div className="distro-scoopstream-edit-send">
       {/* Header */}
       <div className="edit-send-header">
         <div className="header-left">
-          <h1>Distro Scout - Edit/Send Posts</h1>
+          <h1>Distro Scoopstream - Edit/Send Posts</h1>
         </div>
         <button onClick={onBack} className="back-btn">
           Back

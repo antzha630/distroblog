@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import './App.css';
-import './DistroScout.css';
+import './DistroScoopstream.css';
 import SourceManager from './components/SourceManager';
 import DistroScoutLanding from './components/DistroScoutLanding';
 import DistroScoutEditSend from './components/DistroScoutEditSend';
 import config from './config';
 
 function App() {
-  const [activeTab, setActiveTab] = useState('distro-scout');
+  const [activeTab, setActiveTab] = useState('distro-scoopstream');
   const [sources, setSources] = useState([]);
   const [selectedArticles, setSelectedArticles] = useState([]);
   const [workflowStep, setWorkflowStep] = useState('review'); // 'review', 'edit', 'send'
@@ -98,7 +98,7 @@ function App() {
         body: JSON.stringify({
           articleIds: articles.map(article => article.id),
           userInfo: {
-            name: "Distro Scout User"
+            name: "Distro Scoopstream User"
           }
         }),
       });
@@ -201,19 +201,19 @@ function App() {
       <header className="header">
         <div className="header-content">
           <div>
-            <h1>Distro Scout</h1>
+            <h1>Distro Scoopstream</h1>
             <p className="header-stats">news monitoring tool for journalists</p>
           </div>
           <nav className="header-nav">
             {activeTab === 'sources' && (
               <button 
                 className="nav-link"
-                onClick={() => setActiveTab('distro-scout')}
+                onClick={() => setActiveTab('distro-scoopstream')}
               >
                 Dashboard
               </button>
             )}
-            {activeTab === 'distro-scout' && (
+            {activeTab === 'distro-scoopstream' && (
               <button 
                 className="nav-link"
                 onClick={() => setActiveTab('sources')}
@@ -226,14 +226,14 @@ function App() {
       </header>
 
       <main className="main-content">
-        {activeTab === 'distro-scout' && distroScoutStep === 'landing' && (
+        {activeTab === 'distro-scoopstream' && distroScoutStep === 'landing' && (
           <DistroScoutLanding 
             onArticlesSelected={handleDistroScoutArticlesSelected}
             onCheckNow={handleCheckNow}
             isCheckingFeeds={isCheckingFeeds}
           />
         )}
-        {activeTab === 'distro-scout' && distroScoutStep === 'edit-send' && (
+        {activeTab === 'distro-scoopstream' && distroScoutStep === 'edit-send' && (
           <DistroScoutEditSend 
             articles={selectedArticles}
             onBack={handleBackToDistroScoutLanding}

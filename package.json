@@ -1,5 +1,5 @@
 {
-  "name": "distro-scout",
+  "name": "distro-scoopstream",
   "version": "1.0.0",
   "description": "news monitoring tool for journalists",
   "main": "server/index.js",

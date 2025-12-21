@@ -776,7 +776,7 @@
   background: #c82333;
 }
 
-/* Distro Scout Mode Toggle */
+/* Distro Scoopstream Mode Toggle */
 .mode-toggle {
   display: flex;
   gap: 8px;
@@ -806,12 +806,12 @@
   border-color: #3498db;
 }
 
-/* Distro Scout Specific Styles */
-.distro-scout-container {
+/* Distro Scoopstream Specific Styles */
+.distro-scoopstream-container {
   max-width: 100%;
 }
 
-.distro-scout-header {
+.distro-scoopstream-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -820,7 +820,7 @@
   border-bottom: 2px solid #e9ecef;
 }
 
-.distro-scout-title {
+.distro-scoopstream-title {
   margin: 0;
   font-size: 1.5rem;
   color: #2c3e50;

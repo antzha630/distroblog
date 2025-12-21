@@ -242,7 +242,7 @@ function DistroScoutLanding({ onArticlesSelected, onCheckNow, isCheckingFeeds })
 
   if (loading) {
     return (
-      <div className="distro-scout-loading">
+      <div className="distro-scoopstream-loading">
         <div className="loading-spinner"></div>
         <p>Loading articles...</p>
       </div>
@@ -251,7 +251,7 @@ function DistroScoutLanding({ onArticlesSelected, onCheckNow, isCheckingFeeds })
 
   if (error) {
     return (
-      <div className="distro-scout-error">
+      <div className="distro-scoopstream-error">
         <p className="error-message">{error}</p>
         <button onClick={fetchArticles} className="retry-btn">
           Try Again
@@ -261,10 +261,10 @@ function DistroScoutLanding({ onArticlesSelected, onCheckNow, isCheckingFeeds })
   }
 
   return (
-    <div className="distro-scout-landing">
+    <div className="distro-scoopstream-landing">
       {/* Header */}
-      <div className="distro-scout-header">
-        <h1>Distro Scout</h1>
+      <div className="distro-scoopstream-header">
+        <h1>Distro Scoopstream</h1>
         <div className="header-controls">
           <div className="mode-toggle" role="group" aria-label="Article time range">
             <button

@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# Distro Scout Server Startup Script
+# Distro Scoopstream Server Startup Script
 # This script ensures the server starts reliably
 
-echo "🚀 Starting Distro Scout Server..."
+echo "🚀 Starting Distro Scoopstream Server..."
 
 # Kill any existing server processes
 echo "🔄 Checking for existing server processes..."
