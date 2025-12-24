@@ -240,7 +240,7 @@
   position: absolute;
   top: 20px;
   right: 20px;
-  background: #28a745;
+  background: #6c757d;
   color: white;
   border: none;
   padding: 10px 20px;
@@ -252,16 +252,16 @@
 }
 
 .select-btn:hover {
-  background: #218838;
+  background: #5a6268;
   transform: translateY(-1px);
 }
 
 .select-btn.selected {
-  background: #dc3545;
+  background: #28a745;
 }
 
 .select-btn.selected:hover {
-  background: #c82333;
+  background: #218838;
 }
 
 /* Edit/Send Posts Styles */

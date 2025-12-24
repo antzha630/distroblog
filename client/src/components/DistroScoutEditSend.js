@@ -51,7 +51,7 @@ function DistroScoutEditSend({ articles, onBack, onEditArticle, onRemoveArticle,
 
   const handleSaveEdit = async (articleId) => {
     try {
-      await fetch(`/api/articles/${articleId}`, {
+      await fetch(`${config.API_BASE_URL}/api/articles/${articleId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -66,6 +66,8 @@ function DistroScoutEditSend({ articles, onBack, onEditArticle, onRemoveArticle,
         ...a,
         title: editForm.title,
         content: editForm.content,
+        ai_summary: editForm.content,
+        publisher_description: editForm.content,
         preview: editForm.content ? `${editForm.content.substring(0, 200)}${editForm.content.length > 200 ? '...' : ''}` : '',
         link: editForm.url || a.link
       } : a));

@@ -485,11 +485,19 @@
 }
 
 .select-btn {
-  background: #28a745;
+  background: #6c757d;
   color: white;
 }
 
 .select-btn:hover:not(:disabled) {
+  background: #5a6268;
+}
+
+.select-btn.selected {
+  background: #28a745;
+}
+
+.select-btn.selected:hover:not(:disabled) {
   background: #218838;
 }
 

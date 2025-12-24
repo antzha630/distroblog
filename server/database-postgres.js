@@ -652,7 +652,7 @@ class Database {
   async updateArticleContent(id, title, content, preview) {
     const result = await this.pool.query(`
       UPDATE articles 
-      SET title = $1, content = $2, preview = $3, updated_at = CURRENT_TIMESTAMP 
+      SET title = $1, content = $2, preview = $3, ai_summary = $2, publisher_description = $2, updated_at = CURRENT_TIMESTAMP 
       WHERE id = $4 
       RETURNING *
     `, [title, content, preview, id]);
