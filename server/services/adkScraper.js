@@ -170,6 +170,16 @@ Focus on articles from the specified domain only. Ignore navigation links, foote
         // Extract articles from agent response
         if (event.content && event.content.parts) {
           for (const part of event.content.parts) {
+            // Log function calls to see if Google Search is being used
+            if (part.functionCall) {
+              console.log(`🔧 [ADK] Agent called function: ${part.functionCall.name}`);
+              if (part.functionCall.args) {
+                console.log(`   Args: ${JSON.stringify(part.functionCall.args).substring(0, 200)}...`);
+              }
+            }
+            if (part.functionResponse) {
+              console.log(`📥 [ADK] Agent received function response: ${part.functionResponse.name}`);
+            }
             if (part.text) {
               fullResponse += part.text + '\n';
               
@@ -189,6 +199,7 @@ Focus on articles from the specified domain only. Ignore navigation links, foote
                   const parsed = JSON.parse(jsonMatch[0]);
                   if (Array.isArray(parsed) && parsed.length > 0) {
                     articles = parsed;
+                    console.log(`✅ [ADK] Found ${articles.length} articles in JSON response`);
                     break;
                   }
                 }
@@ -202,20 +213,29 @@ Focus on articles from the specified domain only. Ignore navigation links, foote
 
       // If no articles found in structured format, try to extract from full response
       if (articles.length === 0 && fullResponse) {
+        console.log(`📝 [ADK] Full agent response (first 800 chars):\n${fullResponse.substring(0, 800)}${fullResponse.length > 800 ? '...' : ''}`);
+        
         try {
           // Look for JSON anywhere in the full response
           const jsonMatch = fullResponse.match(/\[[\s\S]*?\]/);
           if (jsonMatch) {
             const parsed = JSON.parse(jsonMatch[0]);
-            if (Array.isArray(parsed)) {
+            if (Array.isArray(parsed) && parsed.length > 0) {
               articles = parsed;
+              console.log(`✅ [ADK] Found ${articles.length} articles in full response JSON`);
+            } else {
+              console.log(`⚠️ [ADK] Found JSON array but it's empty`);
             }
+          } else {
+            console.log(`⚠️ [ADK] No JSON array found in response. Response might be text-only.`);
           }
         } catch (e) {
           console.log(`⚠️ [ADK] Could not parse JSON from agent response: ${e.message}`);
         }
+      } else if (articles.length > 0) {
+        console.log(`✅ [ADK] Successfully extracted ${articles.length} articles from agent response`);
       }
-
+      
       // Filter articles to only include those from the same domain
       const sourceDomain = new URL(source.url).hostname.replace(/^www\./, '').toLowerCase();
       const articlesBeforeFilter = articles.length;
