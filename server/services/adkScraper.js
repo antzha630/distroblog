@@ -146,8 +146,22 @@ Focus on articles from the specified domain only. Ignore navigation links, foote
       });
 
       // Ask the agent to find articles from the website using Google Search
-      // Simplified query similar to Python ADK pattern
-      const searchQuery = `Find the 5 most recent blog posts or articles from ${source.url}. Return results as a JSON array with title, url, description, and datePublished for each article.`;
+      // Be explicit about using Google Search to ensure it's invoked
+      const searchQuery = `I need you to use Google Search to find the 5 most recent blog posts or articles from ${source.url}. 
+
+IMPORTANT: You must use Google Search to look up recent articles from this website. Do not rely on your training data - perform a live search.
+
+After searching, return the results as a JSON array with this exact format:
+[
+  {
+    "title": "Article Title",
+    "url": "https://full-url-to-article.com/article-slug",
+    "description": "Article description or excerpt",
+    "datePublished": "2025-12-17T10:00:00Z" or null
+  }
+]
+
+Only include articles from ${source.url} domain. Return only valid JSON, no other text.`;
       
       let articles = [];
       let lastEvent = null;
@@ -211,9 +225,15 @@ Focus on articles from the specified domain only. Ignore navigation links, foote
         }
       }
 
+      // Always log the response for debugging
+      if (fullResponse) {
+        console.log(`📝 [ADK] Full agent response (first 1000 chars):\n${fullResponse.substring(0, 1000)}${fullResponse.length > 1000 ? '...' : ''}`);
+      } else {
+        console.log(`⚠️ [ADK] No response text received from agent`);
+      }
+
       // If no articles found in structured format, try to extract from full response
       if (articles.length === 0 && fullResponse) {
-        console.log(`📝 [ADK] Full agent response (first 800 chars):\n${fullResponse.substring(0, 800)}${fullResponse.length > 800 ? '...' : ''}`);
         
         try {
           // Look for JSON anywhere in the full response
