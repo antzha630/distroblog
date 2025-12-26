@@ -232,7 +232,7 @@ function DistroScoutEditSend({ articles, onBack, onEditArticle, onRemoveArticle,
                 <button 
                   onClick={() => handleSendToDistro()}
                   className="send-btn"
-                  disabled={isGenerating}
+                  disabled={isGenerating || editingId === article.id}
                 >
                   {isGenerating ? 'Sending...' : 'Send to Distro'}
                 </button>
@@ -240,7 +240,7 @@ function DistroScoutEditSend({ articles, onBack, onEditArticle, onRemoveArticle,
                 <button 
                   onClick={() => handleSendToTelegram(article.id)}
                   className="telegram-btn"
-                  disabled={telegramSending[article.id]}
+                  disabled={telegramSending[article.id] || editingId === article.id}
                 >
                   {telegramSending[article.id] ? 'Sending...' : 'Send to Telegram'}
                 </button>
@@ -248,6 +248,7 @@ function DistroScoutEditSend({ articles, onBack, onEditArticle, onRemoveArticle,
                 <button 
                   onClick={() => handleRemove(article.id)}
                   className="remove-btn"
+                  disabled={editingId === article.id}
                 >
                   Remove
                 </button>

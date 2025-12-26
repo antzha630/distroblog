@@ -4,6 +4,7 @@ const cheerio = require('cheerio');
 const database = require('../database-postgres');
 const FeedDiscovery = require('./feedDiscovery');
 const WebScraper = require('./webScraper');
+const ADKScraper = require('./adkScraper');
 
 const parser = new Parser();
 
@@ -13,6 +14,8 @@ class FeedMonitor {
     this.monitoringInterval = null;
     this.feedDiscovery = new FeedDiscovery();
     this.webScraper = new WebScraper();
+    // Use ADK scraper for AI-powered extraction (faster and more consistent than Playwright/Cheerio)
+    this.adkScraper = new ADKScraper();
     this.isScrapingInProgress = false; // Lock to prevent concurrent scraping
   }
 
@@ -352,42 +355,42 @@ class FeedMonitor {
           let newArticles = [];
           
           if (monitoringType === 'SCRAPING') {
-            // Scraping: get articles and check for new ones
-            console.log(`🔍 [CHECK NOW] [${source.name}] Scraping articles from: ${source.url}`);
+            // Scraping: get articles using ADK (AI-powered extraction) - faster and more consistent
+            console.log(`🤖 [CHECK NOW] [${source.name}] Extracting articles using ADK from: ${source.url}`);
             const scrapeStartTime = Date.now();
             let articles = [];
             
             try {
-              articles = await this.webScraper.scrapeArticles(source);
+              // Use ADK scraper for AI-powered extraction
+              articles = await this.adkScraper.scrapeArticles(source);
               const scrapeDuration = Date.now() - scrapeStartTime;
-              console.log(`✅ [CHECK NOW] [${source.name}] Scraped ${articles.length} articles in ${scrapeDuration}ms`);
+              console.log(`✅ [CHECK NOW] [${source.name}] ADK extracted ${articles.length} articles in ${scrapeDuration}ms`);
             } catch (scrapeError) {
-              console.error(`❌ [CHECK NOW] [${source.name}] Error during scraping: ${scrapeError.message}`);
+              console.error(`❌ [CHECK NOW] [${source.name}] Error during ADK scraping: ${scrapeError.message}`);
               console.error(`❌ [CHECK NOW] [${source.name}] Stack: ${scrapeError.stack}`);
-              // Continue with empty articles array - don't crash the entire process
-              articles = [];
+              // Fallback to traditional scraping if ADK fails
+              console.log(`🔄 [CHECK NOW] [${source.name}] Falling back to traditional scraping...`);
+              try {
+                articles = await this.webScraper.scrapeArticles(source);
+                await this.webScraper.close();
+              } catch (fallbackError) {
+                console.error(`❌ [CHECK NOW] [${source.name}] Fallback scraping also failed: ${fallbackError.message}`);
+                articles = [];
+              }
             }
             
-            // MEMORY OPTIMIZATION: Close webScraper browser immediately after scraping
-            // to free memory before processing articles
-            // Wrap in try-catch and ensure it doesn't crash the process
+            // ADK doesn't need browser cleanup (no Playwright), but clean up traditional scraper if used
             try {
               await this.webScraper.close();
-              console.log(`🧹 [CHECK NOW] [${source.name}] Closed webScraper browser`);
-              
-              // Force garbage collection if available (requires --expose-gc flag)
               if (global.gc) {
                 global.gc();
-                console.log(`♻️  [CHECK NOW] [${source.name}] Forced garbage collection`);
               }
             } catch (closeError) {
-              console.warn(`⚠️  [CHECK NOW] [${source.name}] Could not close webScraper browser: ${closeError.message}`);
-              // Don't throw - continue processing even if browser close fails
+              // Ignore cleanup errors
             }
             
-            // MEMORY OPTIMIZATION: Small delay after scraping to allow GC (even for manual checks)
-            // This is critical to prevent memory buildup on 512MB Render instances
-            await new Promise(resolve => setTimeout(resolve, 2000)); // Increased to 2s for better GC
+            // Small delay for stability (reduced since ADK is lighter than Playwright)
+            await new Promise(resolve => setTimeout(resolve, 500));
             
             console.log(`📰 [CHECK NOW] [${source.name}] Checking ${articles.length} articles for new ones...`);
             

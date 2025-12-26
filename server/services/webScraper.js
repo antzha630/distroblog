@@ -193,29 +193,28 @@ class WebScraper {
       // Try to require Playwright (might not be installed)
       const { chromium } = require('playwright');
       
-      // Launch browser (reuse if possible)
-      if (!this.browser) {
-        try {
-          this.browser = await chromium.launch({
-            headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-          });
-          if (!this.browser) {
-            throw new Error('Browser launch returned null');
-          }
-        } catch (launchError) {
-          // Browser launch failed - likely missing system dependencies
-          if (launchError.message.includes('Executable doesn\'t exist') || 
-              launchError.message.includes('browserType.launch')) {
-            throw new Error('Playwright browsers not installed. Run "npx playwright install chromium" during build.');
-          }
-          throw launchError;
+      // MEMORY FIX: Always create new browser and close it (no reuse to prevent memory leaks)
+      // This ensures browser is cleaned up after each scrape, preventing accumulation
+      try {
+        browser = await chromium.launch({
+          headless: true,
+          args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+        });
+        if (!browser) {
+          throw new Error('Browser launch returned null');
         }
+      } catch (launchError) {
+        // Browser launch failed - likely missing system dependencies
+        if (launchError.message.includes('Executable doesn\'t exist') || 
+            launchError.message.includes('browserType.launch')) {
+          throw new Error('Playwright browsers not installed. Run "npx playwright install chromium" during build.');
+        }
+        throw launchError;
       }
       
       // Create new page
       try {
-        page = await this.browser.newPage();
+        page = await browser.newPage();
         if (!page) {
           throw new Error('Browser.newPage() returned null or undefined');
         }
@@ -1135,13 +1134,22 @@ class WebScraper {
           console.log(`   ${i + 1}. "${article.title.substring(0, 50)}..." (date: ${article.datePublished || 'none'})`);
         });
       }
+      // MEMORY FIX: Always close browser after use (no reuse)
+      await browser.close();
       return limited;
       
     } catch (error) {
-      // Clean up page if it was created
+      // Clean up page and browser if they were created
       if (page) {
         try {
           await page.close();
+        } catch (e) {
+          // Ignore cleanup errors
+        }
+      }
+      if (browser) {
+        try {
+          await browser.close();
         } catch (e) {
           // Ignore cleanup errors
         }

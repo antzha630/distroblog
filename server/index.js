@@ -8,10 +8,12 @@ require('dotenv').config();
 const feedMonitor = require('./services/feedMonitor');
 const FeedDiscovery = require('./services/feedDiscovery');
 const WebScraper = require('./services/webScraper');
+const ADKScraper = require('./services/adkScraper');
 const llmService = require('./services/llmService');
 const database = require('./database-postgres');
 
 const webScraper = new WebScraper();
+const adkScraper = new ADKScraper(); // ADK scraper for AI-powered extraction
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -226,20 +228,28 @@ app.post('/api/sources/setup-scraping', async (req, res) => {
       throw dbError; // Re-throw if it's a different error
     }
     
-    // Scrape articles ONCE (test and fetch in one go, like old workflow)
-    // This avoids double browser usage that could cause memory issues
+    // Scrape articles using ADK (AI-powered extraction) - faster and more consistent
     let scrapingError = null;
     let articles = [];
     try {
-      articles = await webScraper.scrapeArticles({ id: sourceId, url, name, category: categoryName });
-      
-      // Explicit cleanup: Close browser pages after scraping to free memory
-      // The browser instance itself stays open for reuse, but we ensure pages are closed
-      // This matches the old working version's behavior
+      // Use ADK scraper for AI-powered extraction
+      articles = await adkScraper.scrapeArticles({ id: sourceId, url, name, category: categoryName });
     } catch (scrapeErr) {
       scrapingError = scrapeErr;
-      console.log(`⚠️ Scraping failed: ${scrapeErr.message}`);
-      
+      console.log(`⚠️ ADK scraping failed: ${scrapeErr.message}`);
+      // Fallback to traditional scraping if ADK fails
+      try {
+        console.log(`🔄 Falling back to traditional scraping...`);
+        articles = await webScraper.scrapeArticles({ id: sourceId, url, name, category: categoryName });
+        await webScraper.close();
+      } catch (fallbackErr) {
+        scrapingError = fallbackErr;
+        console.log(`⚠️ Fallback scraping also failed: ${fallbackErr.message}`);
+      }
+    }
+    
+    // Check if scraping worked
+    if (articles.length === 0) {
       // If scraping fails, remove the source we just created
       try {
         await database.removeSource(sourceId);
@@ -1347,12 +1357,10 @@ app.post('/api/sources/:id/re-scrape', async (req, res) => {
   console.log('🔒 [Re-scrape] Pausing automatic feed monitoring during re-scrape');
   
   try {
-      // Scrape articles with improved logic
-      const WebScraper = require('./services/webScraper');
-      const webScraper = new WebScraper();
-      const articles = await webScraper.scrapeArticles(source);
+      // Extract articles using ADK (AI-powered extraction) - faster and more consistent
+      const articles = await adkScraper.scrapeArticles(source);
       
-      // CRITICAL: Close Playwright browser immediately after scraping to free memory
+      // ADK doesn't need browser cleanup, but ensure traditional scraper is closed
       await webScraper.close();
       
       console.log(`📰 [Re-scrape] Found ${articles.length} articles from listing page, checking for existing ones to update...`);
@@ -1785,11 +1793,10 @@ app.post('/api/sources/re-scrape-all', async (req, res) => {
     }
     
     try {
-      const WebScraper = require('./services/webScraper');
-      const webScraper = new WebScraper();
-      const articles = await webScraper.scrapeArticles(source);
+      // Extract articles using ADK (AI-powered extraction) - faster and more consistent
+      const articles = await adkScraper.scrapeArticles(source);
       
-      // CRITICAL: Close Playwright browser immediately after scraping to free memory
+      // ADK doesn't need browser cleanup, but ensure traditional scraper is closed
       await webScraper.close();
         
         let updated = 0;
