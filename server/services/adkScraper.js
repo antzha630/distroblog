@@ -181,9 +181,16 @@ Only include articles from ${source.url} domain. Return only valid JSON, no othe
       })) {
         lastEvent = event;
         
+        // Log the entire event for debugging
+        console.log(`📦 [ADK] Event received - author: ${event.author}, has content: ${!!event.content}, has parts: ${!!(event.content && event.content.parts)}`);
+        
         // Extract articles from agent response
         if (event.content && event.content.parts) {
-          for (const part of event.content.parts) {
+          console.log(`📦 [ADK] Event has ${event.content.parts.length} parts`);
+          for (let i = 0; i < event.content.parts.length; i++) {
+            const part = event.content.parts[i];
+            console.log(`📦 [ADK] Part ${i}: has text=${!!part.text}, has functionCall=${!!part.functionCall}, has functionResponse=${!!part.functionResponse}`);
+            
             // Log function calls to see if Google Search is being used
             if (part.functionCall) {
               console.log(`🔧 [ADK] Agent called function: ${part.functionCall.name}`);
@@ -193,9 +200,13 @@ Only include articles from ${source.url} domain. Return only valid JSON, no othe
             }
             if (part.functionResponse) {
               console.log(`📥 [ADK] Agent received function response: ${part.functionResponse.name}`);
+              if (part.functionResponse.response) {
+                console.log(`   Response preview: ${JSON.stringify(part.functionResponse.response).substring(0, 300)}...`);
+              }
             }
             if (part.text) {
               fullResponse += part.text + '\n';
+              console.log(`📝 [ADK] Received text (${part.text.length} chars): ${part.text.substring(0, 200)}...`);
               
               // Try to parse JSON from the response
               try {
