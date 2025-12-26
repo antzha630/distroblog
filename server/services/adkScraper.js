@@ -157,7 +157,20 @@ class ADKScraper {
         });
         
         page = await browser.newPage();
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+        
+        // Set user agent via context or extra headers (more reliable than setUserAgent)
+        try {
+          if (typeof page.setUserAgent === 'function') {
+            await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+          } else if (typeof page.setExtraHTTPHeaders === 'function') {
+            await page.setExtraHTTPHeaders({
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            });
+          }
+        } catch (uaError) {
+          // If user agent setting fails, continue anyway - not critical
+          console.log('⚠️ [ADK] Could not set user agent, continuing...');
+        }
         
         await page.goto(url, { 
           waitUntil: 'domcontentloaded',
@@ -210,8 +223,6 @@ class ADKScraper {
    */
   async extractArticlesWithGemini(url, htmlContent, source) {
     try {
-      const model = this.genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-
       // Clean HTML content - remove scripts, styles, etc. to reduce token usage
       const $ = cheerio.load(htmlContent);
       $('script, style, nav, footer, header, aside').remove();
@@ -245,7 +256,21 @@ ${cleanedHTML}
 
 Return ONLY valid JSON, no markdown, no explanation:`;
 
-      const result = await model.generateContent(prompt);
+      // Try gemini-1.5-flash first, fallback to gemini-pro if model not available
+      let result;
+      try {
+        const model = this.genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+        result = await model.generateContent(prompt);
+      } catch (modelError) {
+        // If gemini-1.5-flash fails (404 or not available), try gemini-pro
+        if (modelError.message && (modelError.message.includes('404') || modelError.message.includes('not found'))) {
+          console.log(`⚠️ [ADK] gemini-1.5-flash not available, trying gemini-pro: ${modelError.message}`);
+          const fallbackModel = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
+          result = await fallbackModel.generateContent(prompt);
+        } else {
+          throw modelError; // Re-throw if it's a different error
+        }
+      }
       const response = await result.response;
       const text = response.text();
 
