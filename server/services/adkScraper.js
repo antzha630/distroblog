@@ -36,18 +36,23 @@ class ADKScraper {
       // Create Gemini LLM with API key
       // Try Gemini 2.0 first (has Google Search built-in), fallback to 1.5 if not available
       let llm;
+      let modelName = 'gemini-2.0-flash-exp'; // Use Gemini 2.0 for Google Search support
+      
       try {
         llm = new adk.Gemini({
-          model: 'gemini-2.0-flash-exp', // Use Gemini 2.0 for Google Search support
+          model: modelName,
           apiKey: apiKey
         });
+        console.log(`✅ [ADK] Using model: ${modelName}`);
       } catch (e) {
         // Fallback to Gemini 1.5 if 2.0 not available
-        console.log('⚠️ [ADK] Gemini 2.0 not available, trying 1.5...');
+        console.log(`⚠️ [ADK] Gemini 2.0 not available (${e.message}), trying 1.5...`);
+        modelName = 'gemini-1.5-flash-latest';
         llm = new adk.Gemini({
-          model: 'gemini-1.5-flash-latest',
+          model: modelName,
           apiKey: apiKey
         });
+        console.log(`✅ [ADK] Using fallback model: ${modelName}`);
       }
 
       // Create LlmAgent with Google Search tool
@@ -55,7 +60,7 @@ class ADKScraper {
       // Based on Python ADK pattern: tools=[google_search] with simple instruction
       this.agent = new adk.LlmAgent({
         name: 'article_finder',
-        llm: llm,
+        model: llm, // Pass the LLM object directly (not model name string)
         description: 'Agent to find recent blog posts and articles from a website URL using Google Search.',
         instruction: `Use the Google Search tool to find the 5 most recent blog posts or articles from the given website URL. 
 
@@ -85,10 +90,30 @@ Focus on articles from the specified domain only. Ignore navigation links, foote
         appName: 'distroblog'
       });
 
+      // Verify the agent was created correctly
+      if (!this.agent) {
+        throw new Error('Failed to create ADK agent');
+      }
+      
+      // Verify the canonical model is available
+      try {
+        const canonicalModel = this.agent.canonicalModel;
+        if (!canonicalModel) {
+          throw new Error('Agent created but canonical model is not available');
+        }
+        console.log(`✅ [ADK] Agent canonical model: ${canonicalModel.model || 'unknown'}`);
+      } catch (modelError) {
+        console.error('⚠️ [ADK] Warning: Could not verify canonical model:', modelError.message);
+        // Continue anyway - might work at runtime
+      }
+
       this.initialized = true;
       console.log('✅ ADK agent initialized successfully with Google Search tool');
     } catch (error) {
       console.error('❌ Error initializing ADK agent:', error.message);
+      if (error.stack) {
+        console.error('Stack:', error.stack);
+      }
       if (error.message.includes('Cannot find module')) {
         console.error('   Make sure @google/adk is installed: npm install @google/adk');
       }
