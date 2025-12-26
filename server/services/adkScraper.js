@@ -167,7 +167,8 @@ Only include articles from ${source.url} domain. Return only valid JSON, no othe
       let lastEvent = null;
       let fullResponse = '';
 
-      // Run the agent
+      // Run the agent and collect all events
+      let eventCount = 0;
       for await (const event of this.runner.runAsync({
         userId: session.userId,
         sessionId: session.id,
@@ -179,10 +180,27 @@ Only include articles from ${source.url} domain. Return only valid JSON, no othe
           maxLlmCalls: 5 // Limit to prevent infinite loops
         }
       })) {
+        eventCount++;
         lastEvent = event;
         
         // Log the entire event for debugging
-        console.log(`📦 [ADK] Event received - author: ${event.author}, has content: ${!!event.content}, has parts: ${!!(event.content && event.content.parts)}`);
+        console.log(`📦 [ADK] Event #${eventCount} - author: ${event.author}, has content: ${!!event.content}, partial: ${event.partial || false}`);
+        if (event.content) {
+          console.log(`📦 [ADK] Content role: ${event.content.role}, has parts: ${!!event.content.parts}, parts count: ${event.content.parts ? event.content.parts.length : 0}`);
+        }
+        
+        // Check for errors in the event
+        if (event.errorCode || event.errorMessage) {
+          console.error(`❌ [ADK] API Error - Code: ${event.errorCode}, Message: ${event.errorMessage}`);
+          if (event.errorCode === '429') {
+            console.error(`⚠️ [ADK] Rate limit/quota exceeded. You may need to wait or enable billing.`);
+          }
+        }
+        
+        // Check if this is a final response
+        const adk = await import('@google/adk');
+        const isFinal = adk.isFinalResponse ? adk.isFinalResponse(event) : (!event.partial && event.content);
+        console.log(`📦 [ADK] Is final response: ${isFinal}`);
         
         // Extract articles from agent response
         if (event.content && event.content.parts) {
@@ -237,10 +255,17 @@ Only include articles from ${source.url} domain. Return only valid JSON, no othe
       }
 
       // Always log the response for debugging
+      console.log(`📊 [ADK] Total events received: ${eventCount}`);
+      if (lastEvent) {
+        console.log(`📊 [ADK] Last event author: ${lastEvent.author}, partial: ${lastEvent.partial || false}`);
+        console.log(`📊 [ADK] Last event content: ${JSON.stringify(lastEvent.content || {}).substring(0, 500)}`);
+      }
+      
       if (fullResponse) {
         console.log(`📝 [ADK] Full agent response (first 1000 chars):\n${fullResponse.substring(0, 1000)}${fullResponse.length > 1000 ? '...' : ''}`);
       } else {
         console.log(`⚠️ [ADK] No response text received from agent`);
+        console.log(`⚠️ [ADK] Last event structure: ${JSON.stringify(lastEvent || {}).substring(0, 1000)}`);
       }
 
       // If no articles found in structured format, try to extract from full response
