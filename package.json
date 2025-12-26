@@ -13,6 +13,7 @@
     "build": "cd client && npm run build"
   },
   "dependencies": {
+    "@google/adk": "^0.2.1",
     "@google/generative-ai": "^0.24.1",
     "axios": "^1.6.0",
     "cheerio": "^1.1.2",
