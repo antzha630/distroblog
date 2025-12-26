@@ -52,19 +52,18 @@ class ADKScraper {
 
       // Create LlmAgent with Google Search tool
       // The agent will use Google Search to find articles from websites
+      // Based on Python ADK pattern: tools=[google_search] with simple instruction
       this.agent = new adk.LlmAgent({
         name: 'article_finder',
         llm: llm,
-        instruction: `You are an article finder agent. Your task is to find recent blog posts and articles from a given website URL.
+        description: 'Agent to find recent blog posts and articles from a website URL using Google Search.',
+        instruction: `Use the Google Search tool to find the 5 most recent blog posts or articles from the given website URL. 
 
-When given a website URL:
-1. Use Google Search to find recent articles/blog posts from that website
-2. Extract up to 5 most recent articles
-3. For each article, provide:
-   - title: The article headline/title
-   - url: Full URL to the article
-   - description: Brief description or excerpt (if available)
-   - datePublished: Publication date in ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:mm:ssZ), or null if not found
+For each article found, extract:
+- title: The article headline/title
+- url: Full URL to the article  
+- description: Brief description or excerpt (if available)
+- datePublished: Publication date in ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:mm:ssZ), or null if not found
 
 Return the results as a JSON array with this exact structure:
 [
@@ -72,12 +71,12 @@ Return the results as a JSON array with this exact structure:
     "title": "Article Title",
     "url": "https://full-url-to-article.com/article-slug",
     "description": "Article description or excerpt",
-    "datePublished": "2025-12-17T10:00:00Z" // or null
+    "datePublished": "2025-12-17T10:00:00Z"
   }
 ]
 
 Focus on articles from the specified domain only. Ignore navigation links, footer links, and non-article content.`,
-        tools: [adk.GOOGLE_SEARCH] // Use Google Search tool
+        tools: [adk.GOOGLE_SEARCH] // Use Google Search tool (equivalent to Python's google_search)
       });
 
       // Create in-memory runner to execute the agent
@@ -122,7 +121,8 @@ Focus on articles from the specified domain only. Ignore navigation links, foote
       });
 
       // Ask the agent to find articles from the website using Google Search
-      const searchQuery = `Use Google Search to find the 5 most recent blog posts or articles from ${source.url}. Return a JSON array with title, url, description, and datePublished for each article.`;
+      // Simplified query similar to Python ADK pattern
+      const searchQuery = `Find the 5 most recent blog posts or articles from ${source.url}. Return results as a JSON array with title, url, description, and datePublished for each article.`;
       
       let articles = [];
       let lastEvent = null;
