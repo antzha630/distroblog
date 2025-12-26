@@ -256,20 +256,37 @@ ${cleanedHTML}
 
 Return ONLY valid JSON, no markdown, no explanation:`;
 
-      // Try gemini-1.5-flash first, fallback to gemini-pro if model not available
+      // Try different model names - API version might affect availability
+      // Try models in order: gemini-1.5-flash-latest, gemini-1.5-flash, gemini-pro
       let result;
-      try {
-        const model = this.genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-        result = await model.generateContent(prompt);
-      } catch (modelError) {
-        // If gemini-1.5-flash fails (404 or not available), try gemini-pro
-        if (modelError.message && (modelError.message.includes('404') || modelError.message.includes('not found'))) {
-          console.log(`⚠️ [ADK] gemini-1.5-flash not available, trying gemini-pro: ${modelError.message}`);
-          const fallbackModel = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
-          result = await fallbackModel.generateContent(prompt);
-        } else {
-          throw modelError; // Re-throw if it's a different error
+      let lastError = null;
+      const modelNames = ['gemini-1.5-flash-latest', 'gemini-1.5-flash', 'gemini-pro'];
+      
+      for (const modelName of modelNames) {
+        try {
+          const model = this.genAI.getGenerativeModel({ model: modelName });
+          result = await model.generateContent(prompt);
+          if (modelName !== modelNames[0]) {
+            console.log(`✅ [ADK] Using model: ${modelName}`);
+          }
+          break; // Success, exit loop
+        } catch (modelError) {
+          lastError = modelError;
+          // If it's a 404 or not found, try next model
+          if (modelError.message && (modelError.message.includes('404') || modelError.message.includes('not found'))) {
+            if (modelName !== modelNames[modelNames.length - 1]) {
+              console.log(`⚠️ [ADK] ${modelName} not available, trying next model...`);
+              continue; // Try next model
+            }
+          }
+          // If it's not a 404, re-throw immediately
+          throw modelError;
         }
+      }
+      
+      // If all models failed, throw the last error
+      if (!result) {
+        throw lastError || new Error('All Gemini models failed');
       }
       const response = await result.response;
       const text = response.text();
@@ -319,34 +336,60 @@ Return ONLY valid JSON, no markdown, no explanation:`;
 
   /**
    * Fallback extraction using basic HTML parsing if Gemini fails
+   * Improved to filter out generic titles and duplicates
    */
   fallbackExtraction(htmlContent, baseURL) {
     try {
       const $ = cheerio.load(htmlContent);
       const articles = [];
+      const seenUrls = new Set();
       
       // Look for common article patterns
       $('article, [class*="article"], [class*="post"], [class*="blog"]').each((i, elem) => {
-        if (i >= 5) return false; // Limit to 5
+        if (i >= 10) return false; // Check more, filter later
         
         const $elem = $(elem);
         const link = $elem.find('a[href]').first().attr('href');
-        const title = $elem.find('h1, h2, h3, [class*="title"], [class*="headline"]').first().text().trim();
+        let title = $elem.find('h1, h2, h3, [class*="title"], [class*="headline"]').first().text().trim();
         const description = $elem.find('[class*="excerpt"], [class*="summary"], p').first().text().trim();
         
-        if (link && title) {
-          articles.push({
-            title,
-            url: this.resolveURL(link, baseURL),
-            link: this.resolveURL(link, baseURL),
-            description,
-            content: description,
-            datePublished: null
-          });
-        }
+        if (!link || !title) return;
+        
+        // Filter out generic titles
+        const titleLower = title.toLowerCase();
+        const isGeneric = titleLower.length < 10 || 
+                         titleLower === 'blog' || 
+                         titleLower === 'read more' ||
+                         titleLower === 'learn more' ||
+                         titleLower.includes('...') && titleLower.length < 20 ||
+                         titleLower.match(/^(trending|blog|read|learn|more|view|see)$/i);
+        
+        if (isGeneric) return; // Skip generic titles
+        
+        const resolvedUrl = this.resolveURL(link, baseURL);
+        
+        // Skip duplicates
+        if (!resolvedUrl || seenUrls.has(resolvedUrl)) return;
+        seenUrls.add(resolvedUrl);
+        
+        // Only add if URL looks like an article (has /blog/, /post/, /article/, etc.)
+        const isArticleUrl = resolvedUrl.match(/\/(blog|post|article|articles|news|updates)\//i);
+        if (!isArticleUrl && title.length < 30) return; // Skip if not article URL and title is too short
+        
+        articles.push({
+          title,
+          url: resolvedUrl,
+          link: resolvedUrl,
+          description: description.substring(0, 300),
+          content: description.substring(0, 300),
+          datePublished: null
+        });
       });
 
-      return articles;
+      // Return only first 5, sorted by title length (longer = more likely to be real article)
+      return articles
+        .sort((a, b) => b.title.length - a.title.length)
+        .slice(0, 5);
     } catch (error) {
       console.error('Fallback extraction failed:', error.message);
       return [];

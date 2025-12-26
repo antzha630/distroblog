@@ -602,20 +602,34 @@ class FeedMonitor {
                   };
                   
                   if (articleObj.title && articleObj.title.trim() !== '' && articleObj.link) {
-                    await database.addArticle(articleObj);
-                    newArticles.push({
-                      id: articleObj.sourceId,
-                      title: articleObj.title,
-                      link: articleObj.link,
-                      pubDate: articleObj.pubDate
-                    });
-                    
-                    // Log new article found with optimized data
-                    console.log(`✨ [CHECK NOW] [${source.name}] NEW ARTICLE ADDED (with optimized title/date): "${articleObj.title.substring(0, 60)}..." | Date: ${articleObj.pubDate || 'NO DATE'}`);
-                    
-                    // Removed per-article delay to speed up
+                    try {
+                      await database.addArticle(articleObj);
+                      newArticles.push({
+                        id: articleObj.sourceId,
+                        title: articleObj.title,
+                        link: articleObj.link,
+                        pubDate: articleObj.pubDate
+                      });
+                      
+                      // Log new article found with optimized data
+                      console.log(`✨ [CHECK NOW] [${source.name}] NEW ARTICLE ADDED (with optimized title/date): "${articleObj.title.substring(0, 60)}..." | Date: ${articleObj.pubDate || 'NO DATE'}`);
+                      
+                      // Removed per-article delay to speed up
+                    } catch (addErr) {
+                      // Handle duplicate key error gracefully (might happen due to race conditions or duplicate links)
+                      if (addErr.code === '23505' || addErr.message?.includes('duplicate key')) {
+                        console.log(`ℹ️  [CHECK NOW] [${source.name}] Article already exists (duplicate link): ${articleObj.link.substring(0, 60)}...`);
+                        continue; // Skip this article, it was already added
+                      }
+                      throw addErr; // Re-throw if it's a different error
+                    }
                   }
                 } catch (articleErr) {
+                  // Handle duplicate key error gracefully
+                  if (articleErr.code === '23505' || articleErr.message?.includes('duplicate key')) {
+                    console.log(`ℹ️  [CHECK NOW] [${source.name}] Article already exists: ${article.link?.substring(0, 60) || 'unknown'}...`);
+                    continue; // Skip this article
+                  }
                   console.error(`❌ [CHECK NOW] [${source.name}] Error processing article:`, articleErr.message);
                   // Continue with next article
                 }
