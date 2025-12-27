@@ -376,7 +376,8 @@ Only include articles from ${domain}. Return only valid JSON array, no other tex
         return 0; // Both have no date, keep original order
       });
 
-      // Return lightweight articles (limit to 5 most recent)
+      // Return lightweight articles (limit to 5 most recent articles)
+      // This ensures we get the most recent articles from each source
       const lightweightArticles = filteredArticles.slice(0, 5).map(article => {
         let articleUrl = article.url || article.link;
         if (articleUrl && !articleUrl.startsWith('http')) {
