@@ -62,25 +62,32 @@ class ADKScraper {
         name: 'article_finder',
         model: llm, // Pass the LLM object directly (not model name string)
         description: 'Agent to find recent blog posts and articles from a website URL using Google Search.',
-        instruction: `Use the Google Search tool to find the 5 most recent blog posts or articles from the given website URL. 
+        instruction: `You are an article finder agent. Use Google Search to find the 5 most recent blog posts or articles from a given website URL.
 
-For each article found, extract:
-- title: The article headline/title
-- url: Full URL to the article  
+CRITICAL REQUIREMENTS:
+1. Use Google Search to perform a live search - do not rely on training data
+2. Extract FULL article URLs (not just the blog homepage). Each article must have a unique URL path like "/article-slug" or "/blog/post-title"
+3. Only include articles from the exact domain specified
+4. Ignore generic pages like homepages, "About" pages, or navigation pages
+5. Extract publication dates when available
+
+For each article found, provide:
+- title: The complete article headline/title (not generic titles like "Blog" or "Home")
+- url: The FULL URL to the specific article page (must include the article path, not just the domain)
 - description: Brief description or excerpt (if available)
 - datePublished: Publication date in ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:mm:ssZ), or null if not found
 
-Return the results as a JSON array with this exact structure:
+Return ONLY a valid JSON array with this exact structure:
 [
   {
-    "title": "Article Title",
-    "url": "https://full-url-to-article.com/article-slug",
+    "title": "Complete Article Title",
+    "url": "https://domain.com/blog/specific-article-slug",
     "description": "Article description or excerpt",
-    "datePublished": "2025-12-17T10:00:00Z"
+    "datePublished": "2025-12-17T10:00:00Z" or null
   }
 ]
 
-Focus on articles from the specified domain only. Ignore navigation links, footer links, and non-article content.`,
+Do not include explanatory text. Return only the JSON array.`,
         tools: [adk.GOOGLE_SEARCH] // Use Google Search tool (equivalent to Python's google_search)
       });
 
@@ -146,22 +153,19 @@ Focus on articles from the specified domain only. Ignore navigation links, foote
       });
 
       // Ask the agent to find articles from the website using Google Search
-      // Be explicit about using Google Search to ensure it's invoked
-      const searchQuery = `I need you to use Google Search to find the 5 most recent blog posts or articles from ${source.url}. 
+      // Improved prompt to get specific article URLs and better results
+      const domain = new URL(source.url).hostname;
+      const searchQuery = `Use Google Search to find the 5 most recent blog posts or articles from ${source.url}.
 
-IMPORTANT: You must use Google Search to look up recent articles from this website. Do not rely on your training data - perform a live search.
+Search for specific article pages from ${domain}, not just the homepage. Each article must have a unique URL path.
 
-After searching, return the results as a JSON array with this exact format:
-[
-  {
-    "title": "Article Title",
-    "url": "https://full-url-to-article.com/article-slug",
-    "description": "Article description or excerpt",
-    "datePublished": "2025-12-17T10:00:00Z" or null
-  }
-]
+Return a JSON array with:
+- title: Complete article title (not generic)
+- url: Full URL to the specific article page (must include article path like /blog/article-name)
+- description: Article excerpt if available
+- datePublished: Publication date (YYYY-MM-DD format) or null
 
-Only include articles from ${source.url} domain. Return only valid JSON, no other text.`;
+Only include articles from ${domain}. Return only valid JSON array, no other text.`;
       
       let articles = [];
       let lastEvent = null;
@@ -293,14 +297,37 @@ Only include articles from ${source.url} domain. Return only valid JSON, no othe
       }
       
       // Filter articles to only include those from the same domain
+      // Also filter out generic URLs (homepage, base blog URL without article path)
       const sourceDomain = new URL(source.url).hostname.replace(/^www\./, '').toLowerCase();
+      const sourceUrlObj = new URL(source.url);
+      const basePath = sourceUrlObj.pathname.endsWith('/') ? sourceUrlObj.pathname.slice(0, -1) : sourceUrlObj.pathname;
+      
       const articlesBeforeFilter = articles.length;
       const filteredArticles = articles.filter(article => {
         try {
           const articleUrl = article.url || article.link;
           if (!articleUrl) return false;
-          const articleDomain = new URL(articleUrl).hostname.replace(/^www\./, '').toLowerCase();
-          return articleDomain === sourceDomain;
+          const articleUrlObj = new URL(articleUrl);
+          const articleDomain = articleUrlObj.hostname.replace(/^www\./, '').toLowerCase();
+          
+          // Must match domain
+          if (articleDomain !== sourceDomain) {
+            return false;
+          }
+          
+          // Filter out generic URLs (homepage, base blog URL without specific article path)
+          const articlePath = articleUrlObj.pathname;
+          // If URL is just the base blog URL or homepage, skip it
+          if (articlePath === '/' || articlePath === basePath || articlePath === basePath + '/') {
+            return false;
+          }
+          
+          // Must have some path beyond the base (indicates a specific article)
+          if (articlePath.length <= basePath.length + 1) {
+            return false;
+          }
+          
+          return true;
         } catch (e) {
           return false;
         }
