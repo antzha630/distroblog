@@ -153,13 +153,15 @@ Do not include explanatory text. Return only the JSON array.`,
       });
 
       // Ask the agent to find articles from the website using Google Search
-      // Improved prompt to get specific article URLs and better results
+      // Improved prompt to get specific article URLs and most recent articles
       const domain = new URL(source.url).hostname;
-      const searchQuery = `Use Google Search to find the 5 most recent blog posts or articles from ${source.url}.
+      const searchQuery = `Use Google Search to find the 5 MOST RECENT blog posts or articles from ${source.url}.
+
+IMPORTANT: Prioritize the most recently published articles. Sort results by publication date (newest first).
 
 Search for specific article pages from ${domain}, not just the homepage. Each article must have a unique URL path.
 
-Return a JSON array with:
+Return a JSON array with articles sorted by date (most recent first):
 - title: Complete article title (not generic)
 - url: Full URL to the specific article page (must include article path like /blog/article-name)
 - description: Article excerpt if available
@@ -362,6 +364,17 @@ Only include articles from ${domain}. Return only valid JSON array, no other tex
           console.warn('Could not store scraping result:', err.message);
         }
       }
+
+      // Sort articles by date (most recent first) before limiting
+      // Articles with dates come first, sorted by date (newest first)
+      filteredArticles.sort((a, b) => {
+        const dateA = a.datePublished ? new Date(a.datePublished).getTime() : 0;
+        const dateB = b.datePublished ? new Date(b.datePublished).getTime() : 0;
+        if (dateA && dateB) return dateB - dateA; // Newest first
+        if (dateA && !dateB) return -1; // Articles with dates first
+        if (!dateA && dateB) return 1;
+        return 0; // Both have no date, keep original order
+      });
 
       // Return lightweight articles (limit to 5 most recent)
       const lightweightArticles = filteredArticles.slice(0, 5).map(article => {
