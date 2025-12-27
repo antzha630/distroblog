@@ -38,36 +38,26 @@ class ADKScraper {
       const adk = await import('@google/adk');
       
       // Create Gemini LLM with API key
-      // Try Gemini 2.5 Flash Image first (higher quota), then 2.0, then 1.5
+      // NOTE: gemini-2.5-flash-image does NOT support Google Search tool, so we skip it
+      // Use gemini-2.0-flash-exp (supports Google Search) as primary, fallback to 1.5
       let llm;
-      let modelName = 'gemini-2.5-flash-image'; // Try 2.5 first (higher quota limits)
+      let modelName = 'gemini-2.0-flash-exp'; // Primary model (supports Google Search)
       
       try {
         llm = new adk.Gemini({
           model: modelName,
           apiKey: apiKey
         });
-        console.log(`✅ [ADK] Using model: ${modelName}`);
+        console.log(`✅ [ADK] Using model: ${modelName} (supports Google Search)`);
       } catch (e) {
-        // Fallback to Gemini 2.0 if 2.5 not available
-        console.log(`⚠️ [ADK] Gemini 2.5 not available (${e.message}), trying 2.0...`);
-        modelName = 'gemini-2.0-flash-exp';
-        try {
-          llm = new adk.Gemini({
-            model: modelName,
-            apiKey: apiKey
-          });
-          console.log(`✅ [ADK] Using model: ${modelName}`);
-        } catch (e2) {
-          // Fallback to Gemini 1.5 if 2.0 not available
-          console.log(`⚠️ [ADK] Gemini 2.0 not available (${e2.message}), trying 1.5...`);
-          modelName = 'gemini-1.5-flash-latest';
-          llm = new adk.Gemini({
-            model: modelName,
-            apiKey: apiKey
-          });
-          console.log(`✅ [ADK] Using fallback model: ${modelName}`);
-        }
+        // Fallback to Gemini 1.5 if 2.0 not available
+        console.log(`⚠️ [ADK] Gemini 2.0 not available (${e.message}), trying 1.5...`);
+        modelName = 'gemini-1.5-flash-latest';
+        llm = new adk.Gemini({
+          model: modelName,
+          apiKey: apiKey
+        });
+        console.log(`✅ [ADK] Using fallback model: ${modelName}`);
       }
 
       // Create LlmAgent with Google Search tool
@@ -235,9 +225,13 @@ ONLY include articles from ${baseDomain}. DO NOT include redirect URLs, generic 
         if (event.errorCode || event.errorMessage) {
           console.error(`❌ [ADK] API Error - Code: ${event.errorCode}, Message: ${event.errorMessage}`);
           if (event.errorCode === '429') {
-            console.error(`⚠️ [ADK] Rate limit/quota exceeded. Error suggests using gemini-2.5-flash-image model.`);
+            console.error(`⚠️ [ADK] Rate limit/quota exceeded. Will fallback to traditional scraper.`);
             // Throw error to trigger fallback
             throw new Error(`Rate limit exceeded (429): ${event.errorMessage}`);
+          } else if (event.errorCode === '400' && event.errorMessage && event.errorMessage.includes('Search as tool is not enabled')) {
+            console.error(`⚠️ [ADK] Model does not support Google Search tool. Will fallback to traditional scraper.`);
+            // Throw error to trigger fallback
+            throw new Error(`Model does not support Google Search: ${event.errorMessage}`);
           }
         }
         
