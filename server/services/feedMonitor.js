@@ -485,64 +485,106 @@ class FeedMonitor {
                   }
                   
                   if (!isManual) {
-                    try {
-                      console.log(`🔍 [CHECK NOW] [${source.name}] Fetching optimized metadata (title/date) for: ${article.link.substring(0, 60)}...`);
-                      const metadataStartTime = Date.now();
-                      
-                      // Use extractArticleMetadata - same optimized logic as re-scrape
-                      const metadata = await this.extractArticleMetadata(article.link);
-                      const metadataDuration = Date.now() - metadataStartTime;
-                      console.log(`✅ [CHECK NOW] [${source.name}] Optimized metadata fetched in ${metadataDuration}ms`);
-                      
-                      // Skip post-metadata delay to speed up
-                      
-                      // Use article page title if available and better (same logic as re-scrape)
-                    if (metadata.title && metadata.title.trim().length > 10) {
-                      const newTitle = metadata.title.trim();
-                      const newTitleLower = newTitle.toLowerCase();
-                      const isGeneric = newTitleLower.includes('blog') ||
-                                       newTitleLower.includes('all posts') ||
-                                       newTitleLower.includes('latest by topic') ||
-                                       newTitleLower.includes('mothership') ||
-                                       newTitleLower.includes('backbone of ai infrastructure') ||
-                                       (newTitle.length < 25 && (
-                                         newTitleLower === 'blockchain web3' ||
-                                         newTitleLower === 'cybersecurity' ||
-                                         newTitleLower === 'company updates' ||
-                                         newTitleLower === 'io intelligence' ||
-                                         newTitleLower === 'ai infrastructure compute' ||
-                                         newTitleLower === 'ai startup corner' ||
-                                         newTitleLower === 'developer resources' ||
-                                         (newTitleLower.includes('swarm community call') && newTitleLower.includes('recap'))
-                                       ));
-                      
-                      if (!isGeneric) {
-                          improvedTitle = newTitle;
-                          console.log(`📝 [CHECK NOW] [${source.name}] Using optimized title: "${improvedTitle.substring(0, 60)}..."`);
-                      } else {
-                          console.log(`⚠️  [CHECK NOW] [${source.name}] Article page title is generic, keeping original`);
-                      }
-                    } else {
-                        console.log(`⚠️  [CHECK NOW] [${source.name}] Article page title not found, keeping original`);
-                    }
-                    
-                      // Use article page date if available (same logic as re-scrape)
-                    if (metadata.pubDate) {
+                    // Validate URL before attempting metadata fetch
+                    // Skip metadata fetching for invalid URLs (Google redirects, generic URLs, etc.)
+                    const shouldSkipMetadata = (() => {
                       try {
-                        const articlePageDate = new Date(metadata.pubDate);
-                        if (!isNaN(articlePageDate.getTime())) {
-                            improvedDate = articlePageDate;
+                        const url = article.link;
+                        if (!url || url === 'null' || url.trim() === '') return true;
+                        
+                        // Skip Google redirect URLs
+                        if (url.includes('vertexaisearch.cloud.google.com') || 
+                            url.includes('grounding-api-redirect') ||
+                            url.includes('google.com/grounding')) {
+                          console.log(`⏩ [CHECK NOW] [${source.name}] Skipping metadata fetch for Google redirect URL`);
+                          return true;
+                        }
+                        
+                        // Skip URLs that are clearly invalid (check if URL is valid)
+                        try {
+                          const urlObj = new URL(url);
+                          // If pathname is too short or just "/", likely invalid
+                          if (urlObj.pathname.length <= 1) {
+                            console.log(`⏩ [CHECK NOW] [${source.name}] Skipping metadata fetch for generic/invalid URL path`);
+                            return true;
+                          }
+                        } catch (e) {
+                          console.log(`⏩ [CHECK NOW] [${source.name}] Skipping metadata fetch for invalid URL format`);
+                          return true;
+                        }
+                        
+                        return false;
+                      } catch (e) {
+                        return true; // Skip on any error
+                      }
+                    })();
+                    
+                    if (shouldSkipMetadata) {
+                      console.log(`⏩ [CHECK NOW] [${source.name}] Skipping metadata fetch for invalid URL`);
+                    } else {
+                      try {
+                        console.log(`🔍 [CHECK NOW] [${source.name}] Fetching optimized metadata (title/date) for: ${article.link.substring(0, 60)}...`);
+                        const metadataStartTime = Date.now();
+                        
+                        // Use extractArticleMetadata - same optimized logic as re-scrape
+                        const metadata = await this.extractArticleMetadata(article.link);
+                        const metadataDuration = Date.now() - metadataStartTime;
+                        console.log(`✅ [CHECK NOW] [${source.name}] Optimized metadata fetched in ${metadataDuration}ms`);
+                        
+                        // Skip post-metadata delay to speed up
+                        
+                        // Use article page title if available and better (same logic as re-scrape)
+                        if (metadata.title && metadata.title.trim().length > 10) {
+                          const newTitle = metadata.title.trim();
+                          const newTitleLower = newTitle.toLowerCase();
+                          const isGeneric = newTitleLower.includes('blog') ||
+                                           newTitleLower.includes('all posts') ||
+                                           newTitleLower.includes('latest by topic') ||
+                                           newTitleLower.includes('mothership') ||
+                                           newTitleLower.includes('backbone of ai infrastructure') ||
+                                           newTitleLower.includes('page not found') ||
+                                           newTitleLower.includes('500') ||
+                                           newTitleLower.includes('internal server error') ||
+                                           newTitleLower.includes('just a moment') ||
+                                           (newTitle.length < 25 && (
+                                             newTitleLower === 'blockchain web3' ||
+                                             newTitleLower === 'cybersecurity' ||
+                                             newTitleLower === 'company updates' ||
+                                             newTitleLower === 'io intelligence' ||
+                                             newTitleLower === 'ai infrastructure compute' ||
+                                             newTitleLower === 'ai startup corner' ||
+                                             newTitleLower === 'developer resources' ||
+                                             (newTitleLower.includes('swarm community call') && newTitleLower.includes('recap'))
+                                           ));
+                          
+                          if (!isGeneric) {
+                              improvedTitle = newTitle;
+                              console.log(`📝 [CHECK NOW] [${source.name}] Using optimized title: "${improvedTitle.substring(0, 60)}..."`);
+                          } else {
+                              console.log(`⚠️  [CHECK NOW] [${source.name}] Article page title is generic/error, keeping original`);
+                          }
+                        } else {
+                            console.log(`⚠️  [CHECK NOW] [${source.name}] Article page title not found, keeping original`);
+                        }
+                        
+                        // Use article page date if available (same logic as re-scrape)
+                        if (metadata.pubDate) {
+                          try {
+                            const articlePageDate = new Date(metadata.pubDate);
+                            if (!isNaN(articlePageDate.getTime())) {
+                                improvedDate = articlePageDate;
                             console.log(`📅 [CHECK NOW] [${source.name}] Found optimized date: ${improvedDate.toISOString()}`);
                         }
                       } catch (e) {
                           console.log(`⚠️  [CHECK NOW] [${source.name}] Invalid date format: ${metadata.pubDate}`);
                       }
-                    } else {
-                        console.log(`⚠️  [CHECK NOW] [${source.name}] No date found on article page`);
-                    }
-                  } catch (err) {
-                    // If fetching fails, use what we have from listing page
-                      console.log(`❌ [CHECK NOW] [${source.name}] Could not fetch optimized metadata: ${err.message} (using listing page data)`);
+                        } else {
+                            console.log(`⚠️  [CHECK NOW] [${source.name}] No date found on article page`);
+                        }
+                      } catch (err) {
+                        // If fetching fails, use what we have from listing page
+                        console.log(`❌ [CHECK NOW] [${source.name}] Could not fetch optimized metadata: ${err.message} (using listing page data)`);
+                      }
                     }
                   } else {
                     console.log(`⏩ [CHECK NOW] [${source.name}] Skipping metadata fetch to speed up manual check`);
@@ -601,6 +643,12 @@ class FeedMonitor {
                     category: source.category || 'General',
                     status: 'new'
                   };
+                  
+                  // Final validation: Skip articles with generic/error titles before adding to database
+                  if (this.isGenericTitle(articleObj.title)) {
+                    console.log(`⚠️  [CHECK NOW] [${source.name}] Skipping article with generic/error title before database add: "${articleObj.title}"`);
+                    continue;
+                  }
                   
                   if (articleObj.title && articleObj.title.trim() !== '' && articleObj.link) {
                     try {
@@ -1639,7 +1687,20 @@ class FeedMonitor {
       /^author:/i,
       /^swarm community call.*recap$/i,
       /^article$/i,
-      /^untitled/i
+      /^untitled/i,
+      // Error titles from invalid URLs
+      /^page not found/i,
+      /^404/i,
+      /^500/i,
+      /internal server error/i,
+      /^just a moment/i,
+      /^cloudflare/i,
+      /access denied/i,
+      /forbidden/i,
+      /could not be found/i,
+      /this page could not be found/i,
+      /page not found/i,
+      /not found/i
     ];
     
     return genericPatterns.some(pattern => pattern.test(lowerTitle));
@@ -1848,6 +1909,19 @@ class FeedMonitor {
           if (!title) {
             title = document.title || '';
             titleSource = 'page title';
+          }
+          
+          // Check if this is a 404 or error page - if so, don't use the title
+          const isErrorPage = title.toLowerCase().includes('404') ||
+                             title.toLowerCase().includes('page not found') ||
+                             title.toLowerCase().includes('could not be found') ||
+                             title.toLowerCase().includes('not found') ||
+                             document.body.textContent.toLowerCase().includes('404') ||
+                             document.body.textContent.toLowerCase().includes('page not found');
+          
+          if (isErrorPage) {
+            console.log(`⚠️  [extractArticleMetadata] Detected 404/error page, returning null title`);
+            title = null; // Don't use error page titles
           }
           
           // Extract description

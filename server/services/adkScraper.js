@@ -157,17 +157,20 @@ Do not include explanatory text. Return only the JSON array.`,
       const domain = new URL(source.url).hostname;
       const searchQuery = `Use Google Search to find the 5 MOST RECENT blog posts or articles from ${source.url}.
 
-IMPORTANT: Prioritize the most recently published articles. Sort results by publication date (newest first).
-
-Search for specific article pages from ${domain}, not just the homepage. Each article must have a unique URL path.
+CRITICAL REQUIREMENTS:
+1. Extract ACTUAL article URLs from search results - NOT Google redirect URLs (avoid any URLs containing "vertexaisearch.cloud.google.com" or "grounding-api-redirect")
+2. Each article URL must be a DIRECT link to the article page on ${domain} (e.g., https://${domain}/blog/article-slug or https://${domain}/article-title)
+3. DO NOT return generic blog homepage URLs like "${source.url}" or "${source.url}/" - only return URLs with specific article paths
+4. Prioritize the most recently published articles. Sort results by publication date (newest first)
+5. Each article must have a unique URL path beyond the base blog URL
 
 Return a JSON array with articles sorted by date (most recent first):
-- title: Complete article title (not generic)
-- url: Full URL to the specific article page (must include article path like /blog/article-name)
+- title: Complete article title (not generic, not "Blog" or "Home")
+- url: DIRECT URL to the specific article page on ${domain} (must include article path, NOT a redirect URL)
 - description: Article excerpt if available
 - datePublished: Publication date (YYYY-MM-DD format) or null
 
-Only include articles from ${domain}. Return only valid JSON array, no other text.`;
+ONLY include articles from ${domain}. DO NOT include redirect URLs or generic URLs. Return only valid JSON array, no other text.`;
       
       let articles = [];
       let lastEvent = null;
@@ -242,6 +245,9 @@ Only include articles from ${domain}. Return only valid JSON array, no other tex
                   text = text.replace(/```\n?/g, '').trim();
                 }
                 
+                // Clean up control characters that can break JSON parsing
+                text = text.replace(/[\x00-\x1F\x7F]/g, '');
+                
                 // Try to find JSON array in the text
                 const jsonMatch = text.match(/\[[\s\S]*\]/);
                 if (jsonMatch) {
@@ -254,6 +260,9 @@ Only include articles from ${domain}. Return only valid JSON array, no other tex
                 }
               } catch (e) {
                 // Not JSON, continue
+                if (e.message.includes('JSON')) {
+                  console.log(`⚠️ [ADK] JSON parse error in part ${i}: ${e.message}`);
+                }
               }
             }
           }
@@ -278,8 +287,11 @@ Only include articles from ${domain}. Return only valid JSON array, no other tex
       if (articles.length === 0 && fullResponse) {
         
         try {
+          // Clean up control characters that can break JSON parsing
+          let cleanedResponse = fullResponse.replace(/[\x00-\x1F\x7F]/g, '');
+          
           // Look for JSON anywhere in the full response
-          const jsonMatch = fullResponse.match(/\[[\s\S]*?\]/);
+          const jsonMatch = cleanedResponse.match(/\[[\s\S]*?\]/);
           if (jsonMatch) {
             const parsed = JSON.parse(jsonMatch[0]);
             if (Array.isArray(parsed) && parsed.length > 0) {
@@ -300,6 +312,7 @@ Only include articles from ${domain}. Return only valid JSON array, no other tex
       
       // Filter articles to only include those from the same domain
       // Also filter out generic URLs (homepage, base blog URL without article path)
+      // AND filter out Google redirect URLs and invalid URLs
       const sourceDomain = new URL(source.url).hostname.replace(/^www\./, '').toLowerCase();
       const sourceUrlObj = new URL(source.url);
       const basePath = sourceUrlObj.pathname.endsWith('/') ? sourceUrlObj.pathname.slice(0, -1) : sourceUrlObj.pathname;
@@ -309,6 +322,20 @@ Only include articles from ${domain}. Return only valid JSON array, no other tex
         try {
           const articleUrl = article.url || article.link;
           if (!articleUrl) return false;
+          
+          // Filter out Google redirect URLs (grounding API redirects)
+          if (articleUrl.includes('vertexaisearch.cloud.google.com') || 
+              articleUrl.includes('grounding-api-redirect') ||
+              articleUrl.includes('google.com/grounding')) {
+            console.log(`⚠️ [ADK] Filtering out Google redirect URL: ${articleUrl.substring(0, 80)}...`);
+            return false;
+          }
+          
+          // Filter out null URLs or placeholder URLs
+          if (articleUrl === 'null' || articleUrl === null || articleUrl.trim() === '') {
+            return false;
+          }
+          
           const articleUrlObj = new URL(articleUrl);
           const articleDomain = articleUrlObj.hostname.replace(/^www\./, '').toLowerCase();
           
@@ -321,16 +348,21 @@ Only include articles from ${domain}. Return only valid JSON array, no other tex
           const articlePath = articleUrlObj.pathname;
           // If URL is just the base blog URL or homepage, skip it
           if (articlePath === '/' || articlePath === basePath || articlePath === basePath + '/') {
+            console.log(`⚠️ [ADK] Filtering out generic URL (homepage/base): ${articleUrl}`);
             return false;
           }
           
           // Must have some path beyond the base (indicates a specific article)
-          if (articlePath.length <= basePath.length + 1) {
+          // Allow at least 3 characters beyond base path (e.g., "/a" is too short, "/article" is good)
+          if (articlePath.length <= basePath.length + 3) {
+            console.log(`⚠️ [ADK] Filtering out URL with insufficient path: ${articleUrl}`);
             return false;
           }
           
           return true;
         } catch (e) {
+          // Invalid URL format
+          console.log(`⚠️ [ADK] Filtering out invalid URL: ${article.url || article.link} - ${e.message}`);
           return false;
         }
       });
