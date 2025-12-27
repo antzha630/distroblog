@@ -365,15 +365,50 @@ class FeedMonitor {
               // Use ADK scraper for AI-powered extraction
               articles = await this.adkScraper.scrapeArticles(source);
               const scrapeDuration = Date.now() - scrapeStartTime;
+              
+              // Check if ADK returned valid results (not empty, not wrong domain)
+              if (articles.length === 0) {
+                console.log(`⚠️ [CHECK NOW] [${source.name}] ADK returned 0 articles, falling back to traditional scraper...`);
+                throw new Error('ADK returned empty results');
+              }
+              
+              // Verify articles are from correct domain
+              const sourceDomain = new URL(source.url).hostname.replace(/^www\./, '').toLowerCase();
+              const validArticles = articles.filter(article => {
+                try {
+                  const articleDomain = new URL(article.link || article.url).hostname.replace(/^www\./, '').toLowerCase();
+                  return articleDomain === sourceDomain;
+                } catch (e) {
+                  return false;
+                }
+              });
+              
+              if (validArticles.length === 0 && articles.length > 0) {
+                console.log(`⚠️ [CHECK NOW] [${source.name}] ADK returned articles from wrong domain, falling back to traditional scraper...`);
+                throw new Error('ADK returned articles from wrong domain');
+              }
+              
               console.log(`✅ [CHECK NOW] [${source.name}] ADK extracted ${articles.length} articles in ${scrapeDuration}ms`);
             } catch (scrapeError) {
-              console.error(`❌ [CHECK NOW] [${source.name}] Error during ADK scraping: ${scrapeError.message}`);
-              console.error(`❌ [CHECK NOW] [${source.name}] Stack: ${scrapeError.stack}`);
+              // Check if it's a rate limit error
+              const isRateLimit = scrapeError.message && (
+                scrapeError.message.includes('429') || 
+                scrapeError.message.includes('quota') ||
+                scrapeError.message.includes('Rate limit')
+              );
+              
+              if (isRateLimit) {
+                console.error(`⚠️ [CHECK NOW] [${source.name}] ADK rate limit exceeded: ${scrapeError.message}`);
+              } else {
+                console.error(`❌ [CHECK NOW] [${source.name}] Error during ADK scraping: ${scrapeError.message}`);
+              }
+              
               // Fallback to traditional scraping if ADK fails
               console.log(`🔄 [CHECK NOW] [${source.name}] Falling back to traditional scraping...`);
               try {
                 articles = await this.webScraper.scrapeArticles(source);
                 await this.webScraper.close();
+                console.log(`✅ [CHECK NOW] [${source.name}] Traditional scraper found ${articles.length} articles`);
               } catch (fallbackError) {
                 console.error(`❌ [CHECK NOW] [${source.name}] Fallback scraping also failed: ${fallbackError.message}`);
                 articles = [];

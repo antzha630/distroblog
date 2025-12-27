@@ -17,6 +17,10 @@ class ADKScraper {
     this.agent = null;
     this.runner = null;
     this.initialized = false;
+    // Rate limiting: gemini-2.0-flash-exp has 10 RPM limit
+    // We'll throttle to max 1 request per 7 seconds (8.5 RPM) to stay safe
+    this.lastRequestTime = 0;
+    this.minRequestInterval = 7000; // 7 seconds between requests (8.5 RPM, safely under 10 RPM limit)
   }
 
   async initialize() {
@@ -34,9 +38,9 @@ class ADKScraper {
       const adk = await import('@google/adk');
       
       // Create Gemini LLM with API key
-      // Try Gemini 2.0 first (has Google Search built-in), fallback to 1.5 if not available
+      // Try Gemini 2.5 Flash Image first (higher quota), then 2.0, then 1.5
       let llm;
-      let modelName = 'gemini-2.0-flash-exp'; // Use Gemini 2.0 for Google Search support
+      let modelName = 'gemini-2.5-flash-image'; // Try 2.5 first (higher quota limits)
       
       try {
         llm = new adk.Gemini({
@@ -45,14 +49,25 @@ class ADKScraper {
         });
         console.log(`✅ [ADK] Using model: ${modelName}`);
       } catch (e) {
-        // Fallback to Gemini 1.5 if 2.0 not available
-        console.log(`⚠️ [ADK] Gemini 2.0 not available (${e.message}), trying 1.5...`);
-        modelName = 'gemini-1.5-flash-latest';
-        llm = new adk.Gemini({
-          model: modelName,
-          apiKey: apiKey
-        });
-        console.log(`✅ [ADK] Using fallback model: ${modelName}`);
+        // Fallback to Gemini 2.0 if 2.5 not available
+        console.log(`⚠️ [ADK] Gemini 2.5 not available (${e.message}), trying 2.0...`);
+        modelName = 'gemini-2.0-flash-exp';
+        try {
+          llm = new adk.Gemini({
+            model: modelName,
+            apiKey: apiKey
+          });
+          console.log(`✅ [ADK] Using model: ${modelName}`);
+        } catch (e2) {
+          // Fallback to Gemini 1.5 if 2.0 not available
+          console.log(`⚠️ [ADK] Gemini 2.0 not available (${e2.message}), trying 1.5...`);
+          modelName = 'gemini-1.5-flash-latest';
+          llm = new adk.Gemini({
+            model: modelName,
+            apiKey: apiKey
+          });
+          console.log(`✅ [ADK] Using fallback model: ${modelName}`);
+        }
       }
 
       // Create LlmAgent with Google Search tool
@@ -145,6 +160,17 @@ Do not include explanatory text. Return only the JSON array.`,
         throw new Error('ADK agent not initialized. Check GOOGLE_API_KEY environment variable.');
       }
 
+      // Rate limiting: Ensure we don't exceed 10 RPM limit
+      // Wait if necessary to maintain at least 7 seconds between requests
+      const now = Date.now();
+      const timeSinceLastRequest = now - this.lastRequestTime;
+      if (timeSinceLastRequest < this.minRequestInterval) {
+        const waitTime = this.minRequestInterval - timeSinceLastRequest;
+        console.log(`⏳ [ADK] Rate limiting: waiting ${waitTime}ms to stay under 10 RPM limit...`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      }
+      this.lastRequestTime = Date.now();
+
       // Create a session for this request
       const session = await this.runner.sessionService.createSession({
         appName: 'distroblog',
@@ -155,22 +181,29 @@ Do not include explanatory text. Return only the JSON array.`,
       // Ask the agent to find articles from the website using Google Search
       // Improved prompt to get specific article URLs and most recent articles
       const domain = new URL(source.url).hostname;
+      const baseDomain = domain.replace(/^www\./, ''); // Remove www. for matching
       const searchQuery = `Use Google Search to find the 5 MOST RECENT blog posts or articles from ${source.url}.
 
-CRITICAL REQUIREMENTS:
-1. Extract ACTUAL article URLs from search results - NOT Google redirect URLs (avoid any URLs containing "vertexaisearch.cloud.google.com" or "grounding-api-redirect")
-2. Each article URL must be a DIRECT link to the article page on ${domain} (e.g., https://${domain}/blog/article-slug or https://${domain}/article-title)
-3. DO NOT return generic blog homepage URLs like "${source.url}" or "${source.url}/" - only return URLs with specific article paths
-4. Prioritize the most recently published articles. Sort results by publication date (newest first)
-5. Each article must have a unique URL path beyond the base blog URL
+CRITICAL REQUIREMENTS - READ CAREFULLY:
+1. DOMAIN MATCHING: ONLY return articles from ${baseDomain} domain. Check every URL - it MUST contain "${baseDomain}" in the hostname. Reject any URLs from other domains (like tim.blog, medium.com, etc.)
+2. Extract ACTUAL article URLs from search results - NOT Google redirect URLs (avoid any URLs containing "vertexaisearch.cloud.google.com" or "grounding-api-redirect")
+3. Each article URL must be a DIRECT link to the article page on ${baseDomain} (e.g., https://${baseDomain}/blog/article-slug or https://${baseDomain}/article-title)
+4. DO NOT return generic blog homepage URLs like "${source.url}" or "${source.url}/" - only return URLs with specific article paths (must have /blog/article-name or /article-name format)
+5. Prioritize the most recently published articles. Sort results by publication date (newest first)
+6. Each article must have a unique URL path beyond the base blog URL (at least 10 characters in the path after the domain)
+
+VERIFY BEFORE RETURNING:
+- Every URL must contain "${baseDomain}" in the hostname
+- Every URL must have a specific article path (not just /blog or /)
+- No redirect URLs from Google
 
 Return a JSON array with articles sorted by date (most recent first):
 - title: Complete article title (not generic, not "Blog" or "Home")
-- url: DIRECT URL to the specific article page on ${domain} (must include article path, NOT a redirect URL)
+- url: DIRECT URL to the specific article page on ${baseDomain} (must include article path, NOT a redirect URL, MUST be from ${baseDomain} domain)
 - description: Article excerpt if available
 - datePublished: Publication date (YYYY-MM-DD format) or null
 
-ONLY include articles from ${domain}. DO NOT include redirect URLs or generic URLs. Return only valid JSON array, no other text.`;
+ONLY include articles from ${baseDomain}. DO NOT include redirect URLs, generic URLs, or articles from other domains. Return only valid JSON array, no other text.`;
       
       let articles = [];
       let lastEvent = null;
@@ -202,7 +235,9 @@ ONLY include articles from ${domain}. DO NOT include redirect URLs or generic UR
         if (event.errorCode || event.errorMessage) {
           console.error(`❌ [ADK] API Error - Code: ${event.errorCode}, Message: ${event.errorMessage}`);
           if (event.errorCode === '429') {
-            console.error(`⚠️ [ADK] Rate limit/quota exceeded. You may need to wait or enable billing.`);
+            console.error(`⚠️ [ADK] Rate limit/quota exceeded. Error suggests using gemini-2.5-flash-image model.`);
+            // Throw error to trigger fallback
+            throw new Error(`Rate limit exceeded (429): ${event.errorMessage}`);
           }
         }
         
@@ -442,11 +477,22 @@ ONLY include articles from ${domain}. DO NOT include redirect URLs or generic UR
         });
       }
       
+      // If no valid articles found, throw error to trigger fallback to traditional scraper
+      if (lightweightArticles.length === 0) {
+        throw new Error(`ADK agent found 0 valid articles from ${source.url} (may need fallback to traditional scraper)`);
+      }
+      
       return lightweightArticles;
     } catch (error) {
-      console.error(`❌ [ADK] Error finding articles from ${source.url}:`, error.message);
-      // If ADK fails, return empty array (fallback to traditional scraper will happen in feedMonitor)
-      return [];
+      // Check if it's a rate limit error - log it but still throw to trigger fallback
+      if (error.message && error.message.includes('429') || error.message.includes('quota')) {
+        console.error(`❌ [ADK] Rate limit/quota exceeded for ${source.url}: ${error.message}`);
+        console.log(`🔄 [ADK] Will fallback to traditional scraper for ${source.name}`);
+      } else {
+        console.error(`❌ [ADK] Error finding articles from ${source.url}:`, error.message);
+      }
+      // Throw error to trigger fallback to traditional scraper in feedMonitor
+      throw error;
     }
   }
 
