@@ -355,12 +355,49 @@ class FeedMonitor {
           const monitoringType = source.monitoring_type || 'RSS';
           let newArticles = [];
           
-          if (monitoringType === 'SCRAPING') {
-            // Flow: Try ADK first, fallback to traditional scraper if ADK fails
+          // Flow: RSS → ADK → SCRAPING (fallback only if ADK returns 0 articles)
+          // Step 1: Check if RSS feed exists first (even for sources marked as SCRAPING)
+          let hasRSSFeed = false;
+          if (monitoringType === 'RSS') {
+            // Source is explicitly marked as RSS - use RSS feed
+            hasRSSFeed = true;
+          } else {
+            // For SCRAPING sources, check if RSS feed exists
+            try {
+              const feedUrl = await this.feedDiscovery.discoverFeedUrl(source.url);
+              if (feedUrl) {
+                const testResult = await this.feedDiscovery.testFeed(feedUrl);
+                if (testResult.success) {
+                  hasRSSFeed = true;
+                  console.log(`📡 [CHECK NOW] [${source.name}] RSS feed found: ${feedUrl}`);
+                  // Update source URL to use the discovered RSS feed
+                  source.url = feedUrl;
+                }
+              }
+            } catch (rssCheckError) {
+              // RSS check failed, continue to ADK
+              console.log(`📡 [CHECK NOW] [${source.name}] No RSS feed found, will try ADK`);
+            }
+          }
+          
+          if (hasRSSFeed) {
+            // RSS/JSON Feed: process ALL new articles from the feed
+            console.log(`📡 [CHECK NOW] [${source.name}] Checking RSS/JSON feed: ${source.url}`);
+            const rssStartTime = Date.now();
+            
+            // Process recent articles from RSS feed (limit to 50 for speed)
+            // Pass allowManual flag to optimize RSS processing for manual checks
+            newArticles = await this.checkFeedLimited(source, 50, isManual);
+            const rssDuration = Date.now() - rssStartTime;
+            console.log(`✅ [CHECK NOW] [${source.name}] RSS check completed in ${rssDuration}ms, found ${newArticles.length} new articles`);
+            
+            totalNewArticlesProcessed += newArticles.length;
+          } else {
+            // No RSS feed found - try ADK, then scraping fallback if ADK returns 0
             const scrapeStartTime = Date.now();
             let articles = [];
             
-            console.log(`🤖 [CHECK NOW] [${source.name}] Trying ADK first from: ${source.url}`);
+            console.log(`🤖 [CHECK NOW] [${source.name}] No RSS feed, trying ADK from: ${source.url}`);
             
             try {
               articles = await this.adkScraper.scrapeArticles(source);
@@ -401,10 +438,10 @@ class FeedMonitor {
               articles = [];
             }
             
-            // Fallback to traditional scraper if ADK failed
+            // Fallback to traditional scraper ONLY if ADK returned 0 articles
             // webScraper handles Playwright first, then static scraping as fallback (same as original implementation)
             if (articles.length === 0) {
-              console.log(`🔄 [CHECK NOW] [${source.name}] Falling back to traditional scraper (Playwright/static)...`);
+              console.log(`🔄 [CHECK NOW] [${source.name}] ADK returned 0 articles, falling back to traditional scraper (Playwright/static)...`);
               try {
                 articles = await this.webScraper.scrapeArticles(source);
                 const fallbackDuration = Date.now() - scrapeStartTime;
@@ -768,20 +805,6 @@ class FeedMonitor {
               console.warn(`⚠️  [CHECK NOW] [${source.name}] Could not update last_checked timestamp: ${updateError.message}`);
               // Don't fail the entire process if timestamp update fails
             }
-          } else {
-            // RSS/JSON Feed: process ALL new articles from the feed
-            console.log(`📡 [CHECK NOW] [${source.name}] Checking RSS/JSON feed: ${source.url}`);
-            const rssStartTime = Date.now();
-            
-            // Process recent articles from RSS feed (limit to 50 for speed)
-            // Pass allowManual flag to optimize RSS processing for manual checks
-            newArticles = await this.checkFeedLimited(source, 50, isManual);
-            const rssDuration = Date.now() - rssStartTime;
-            console.log(`✅ [CHECK NOW] [${source.name}] RSS check completed in ${rssDuration}ms, found ${newArticles.length} new articles`);
-            
-            totalNewArticlesProcessed += newArticles.length;
-            
-            // Removed delay to speed up RSS processing
           }
           
           results.push({
