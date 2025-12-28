@@ -434,6 +434,47 @@ ONLY include articles from ${baseDomain}. DO NOT include redirect URLs, generic 
         return 0; // Both have no date, keep original order
       });
 
+      // Normalize URLs - try to shorten overly long slugs
+      // Some sites use shorter canonical URLs (e.g., /parallel-computing) 
+      // but Google Search returns full slugs (e.g., /parallel-computing-a-complete-guide-to-models-hardware-and-cloud-services)
+      const normalizeUrl = (url) => {
+        try {
+          const urlObj = new URL(url);
+          const pathParts = urlObj.pathname.split('/').filter(p => p);
+          
+          // If the last path segment is very long (>40 chars), try to shorten it
+          if (pathParts.length > 0) {
+            const lastSegment = pathParts[pathParts.length - 1];
+            if (lastSegment.length > 40) {
+              // Try to extract a shorter slug - take first 1-2 meaningful words
+              // Common pattern: "parallel-computing-a-complete-guide..." -> "parallel-computing"
+              const words = lastSegment.split('-');
+              if (words.length > 3) {
+                // Take first 1-2 words as potential shorter slug (most sites use 1-2 word slugs)
+                // Try 1 word first, then 2 words if 1 is too short
+                const oneWord = words[0];
+                const twoWords = words.slice(0, 2).join('-');
+                
+                // Use 2 words if first word is very short (< 5 chars), otherwise use 1 word
+                const shorterSlug = oneWord.length < 5 ? twoWords : oneWord;
+                const shorterPath = urlObj.pathname.replace(lastSegment, shorterSlug);
+                const shorterUrl = `${urlObj.protocol}//${urlObj.host}${shorterPath}`;
+                
+                // Log the normalization for debugging
+                if (shorterUrl !== url) {
+                  console.log(`🔗 [ADK] Normalized URL: ${lastSegment.substring(0, 50)}... -> ${shorterSlug}`);
+                }
+                
+                return shorterUrl;
+              }
+            }
+          }
+          return url;
+        } catch (e) {
+          return url; // Return original if parsing fails
+        }
+      };
+
       // Return lightweight articles (limit to 5 most recent articles)
       // This ensures we get the most recent articles from each source
       const lightweightArticles = filteredArticles.slice(0, 5).map(article => {
@@ -448,6 +489,9 @@ ONLY include articles from ${baseDomain}. DO NOT include redirect URLs, generic 
             articleUrl = `${baseUrlObj.protocol}//${baseUrlObj.host}${basePath}${articleUrl}`;
           }
         }
+
+        // Normalize URL to try shorter variants for overly long slugs
+        articleUrl = normalizeUrl(articleUrl);
 
         return {
           title: article.title || 'Untitled',
