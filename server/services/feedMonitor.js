@@ -356,13 +356,20 @@ class FeedMonitor {
           let newArticles = [];
           
           // Flow: RSS → ADK → SCRAPING (fallback only if ADK returns 0 articles)
-          // Step 1: Check if RSS feed exists first (even for sources marked as SCRAPING)
+          // Monitoring types:
+          // - 'RSS': Use RSS feed directly (skip ADK/scraping)
+          // - 'ADK': Skip RSS check, go directly to ADK, then scraping fallback if ADK returns 0
+          // - 'SCRAPING': Check RSS first, then ADK, then scraping fallback
           let hasRSSFeed = false;
           if (monitoringType === 'RSS') {
             // Source is explicitly marked as RSS - use RSS feed
             hasRSSFeed = true;
+          } else if (monitoringType === 'ADK') {
+            // ADK monitoring type: skip RSS check, go directly to ADK
+            hasRSSFeed = false;
+            console.log(`🤖 [CHECK NOW] [${source.name}] ADK monitoring type - skipping RSS check, using ADK directly`);
           } else {
-            // For SCRAPING sources, check if RSS feed exists
+            // For SCRAPING sources, check if RSS feed exists first
             try {
               const feedUrl = await this.feedDiscovery.discoverFeedUrl(source.url);
               if (feedUrl) {
@@ -393,11 +400,14 @@ class FeedMonitor {
             
             totalNewArticlesProcessed += newArticles.length;
           } else {
-            // No RSS feed found - try ADK, then scraping fallback if ADK returns 0
+            // No RSS feed found (or ADK monitoring type) - try ADK, then scraping fallback if ADK returns 0
             const scrapeStartTime = Date.now();
             let articles = [];
             
-            console.log(`🤖 [CHECK NOW] [${source.name}] No RSS feed, trying ADK from: ${source.url}`);
+            const adkMessage = monitoringType === 'ADK' 
+              ? `Using ADK monitoring type from: ${source.url}`
+              : `No RSS feed, trying ADK from: ${source.url}`;
+            console.log(`🤖 [CHECK NOW] [${source.name}] ${adkMessage}`);
             
             try {
               articles = await this.adkScraper.scrapeArticles(source);
@@ -816,8 +826,8 @@ class FeedMonitor {
           });
           
           // MEMORY OPTIMIZATION: Small delay between sources to allow GC
-          // Especially important after scraping sources that use Playwright
-          if (monitoringType === 'SCRAPING' && i < activeSources.length - 1) {
+          // Especially important after scraping sources that use Playwright or ADK
+          if ((monitoringType === 'SCRAPING' || monitoringType === 'ADK') && i < activeSources.length - 1) {
             await new Promise(resolve => setTimeout(resolve, 500));
           }
           
