@@ -1,4 +1,5 @@
 // ADK (Agent Development Kit) implementation using Google Search
+const axios = require('axios');
 // This uses an agent with Google Search tool instead of scraping HTML
 // Based on: https://google.github.io/adk-docs/
 
@@ -437,50 +438,42 @@ ONLY include articles from ${baseDomain}. DO NOT include redirect URLs, generic 
         return 0; // Both have no date, keep original order
       });
 
-      // Normalize URLs - try to shorten overly long slugs
-      // Some sites use shorter canonical URLs (e.g., /parallel-computing) 
-      // but Google Search returns full slugs (e.g., /parallel-computing-a-complete-guide-to-models-hardware-and-cloud-services)
-      const normalizeUrl = (url) => {
+      // Helper to resolve redirects and get canonical URL
+      // ADK returns URLs from Google Search which may differ from canonical URLs
+      // This follows redirects to get the final URL
+      const resolveCanonicalUrl = async (url) => {
         try {
-          const urlObj = new URL(url);
-          const pathParts = urlObj.pathname.split('/').filter(p => p);
+          // Make HEAD request to follow redirects (faster than GET)
+          // Axios automatically follows redirects, final URL is in response.request.res.responseUrl
+          const response = await axios.head(url, {
+            timeout: 5000,
+            maxRedirects: 5,
+            validateStatus: (status) => status >= 200 && status < 400
+          });
           
-          // If the last path segment is very long (>40 chars), try to shorten it
-          if (pathParts.length > 0) {
-            const lastSegment = pathParts[pathParts.length - 1];
-            if (lastSegment.length > 40) {
-              // Try to extract a shorter slug - take first 1-2 meaningful words
-              // Common pattern: "parallel-computing-a-complete-guide..." -> "parallel-computing"
-              const words = lastSegment.split('-');
-              if (words.length > 3) {
-                // Take first 1-2 words as potential shorter slug (most sites use 1-2 word slugs)
-                // Try 1 word first, then 2 words if 1 is too short
-                const oneWord = words[0];
-                const twoWords = words.slice(0, 2).join('-');
-                
-                // Use 2 words if first word is very short (< 5 chars), otherwise use 1 word
-                const shorterSlug = oneWord.length < 5 ? twoWords : oneWord;
-                const shorterPath = urlObj.pathname.replace(lastSegment, shorterSlug);
-                const shorterUrl = `${urlObj.protocol}//${urlObj.host}${shorterPath}`;
-                
-                // Log the normalization for debugging
-                if (shorterUrl !== url) {
-                  console.log(`🔗 [ADK] Normalized URL: ${lastSegment.substring(0, 50)}... -> ${shorterSlug}`);
-                }
-                
-                return shorterUrl;
-              }
-            }
+          // Get final URL after redirects
+          // Axios stores the final URL after redirects in different places depending on version
+          const finalUrl = response.request?.res?.responseUrl || 
+                          response.request?.responseURL || 
+                          response.request?.res?.response?.headers?.location ||
+                          url;
+          
+          // Only return different URL if we actually got a redirect
+          if (finalUrl && finalUrl !== url && finalUrl.startsWith('http')) {
+            return finalUrl;
           }
           return url;
         } catch (e) {
-          return url; // Return original if parsing fails
+          // If redirect resolution fails (404, timeout, etc.), return original URL
+          // The original URL might still work even if HEAD request fails
+          return url;
         }
       };
 
       // Return lightweight articles (limit to 3 most recent articles)
       // This ensures we get the most recent articles from each source
-      const lightweightArticles = filteredArticles.slice(0, 3).map(article => {
+      // Resolve redirects to get canonical URLs (ADK may return long slugs that redirect to shorter ones)
+      const lightweightArticlesPromises = filteredArticles.slice(0, 3).map(async (article) => {
         let articleUrl = article.url || article.link;
         if (articleUrl && !articleUrl.startsWith('http')) {
           if (articleUrl.startsWith('/')) {
@@ -493,13 +486,16 @@ ONLY include articles from ${baseDomain}. DO NOT include redirect URLs, generic 
           }
         }
 
-        // Normalize URL to try shorter variants for overly long slugs
-        articleUrl = normalizeUrl(articleUrl);
+        // Resolve redirects to get canonical URL (e.g., long slug -> short canonical URL)
+        const canonicalUrl = await resolveCanonicalUrl(articleUrl);
+        if (canonicalUrl !== articleUrl) {
+          console.log(`🔗 [ADK] Resolved redirect: ${articleUrl.substring(articleUrl.lastIndexOf('/') + 1).substring(0, 50)}... -> ${canonicalUrl.substring(canonicalUrl.lastIndexOf('/') + 1)}`);
+        }
 
         return {
           title: article.title || 'Untitled',
-          link: articleUrl,
-          url: articleUrl,
+          link: canonicalUrl,
+          url: canonicalUrl,
           description: article.description || '',
           content: article.description || '',
           datePublished: article.datePublished || null,
@@ -507,6 +503,9 @@ ONLY include articles from ${baseDomain}. DO NOT include redirect URLs, generic 
           category: source.category || 'General'
         };
       });
+
+      // Wait for all redirect resolutions
+      const lightweightArticles = await Promise.all(lightweightArticlesPromises);
 
       console.log(`✅ [ADK] [${source.url}] Agent found ${lightweightArticles.length} articles`);
       if (lightweightArticles.length > 0) {
