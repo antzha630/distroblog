@@ -67,7 +67,7 @@ class ADKScraper {
         name: 'article_finder',
         model: llm, // Pass the LLM object directly (not model name string)
         description: 'Agent to find recent blog posts and articles from a website URL using Google Search.',
-        instruction: `You are an article finder agent. Use Google Search to find the 3-5 MOST RECENT blog posts or articles from a given website URL.
+        instruction: `You are an article finder agent. Use Google Search to find the 3 MOST RECENT blog posts or articles from a given website URL.
 
 CRITICAL REQUIREMENTS:
 1. RECENCY: Get the most recent articles from the source, regardless of publication date. Some blogs publish infrequently (monthly or less), so older articles are fine as long as they're the most recent from that source.
@@ -170,10 +170,10 @@ Do not include explanatory text. Return only the JSON array.`,
       // Improved prompt to get specific article URLs and most recent articles
       const domain = new URL(source.url).hostname;
       const baseDomain = domain.replace(/^www\./, ''); // Remove www. for matching
-      const searchQuery = `Use Google Search to find the 5 MOST RECENT blog posts or articles from ${source.url}.
+      const searchQuery = `Use Google Search to find the 3 MOST RECENT blog posts or articles from ${source.url}.
 
 CRITICAL REQUIREMENTS - READ CAREFULLY:
-1. RECENCY PRIORITY: Return the 3-5 MOST RECENT articles from ${baseDomain}, sorted by publication date (newest first). It's okay if articles are from months ago - just get the most recent ones available from this source. Some blogs publish infrequently (monthly or less), so older articles are acceptable as long as they're the most recent from this source.
+1. RECENCY PRIORITY: Return exactly 3 MOST RECENT articles from ${baseDomain}, sorted by publication date (newest first). It's okay if articles are from months ago - just get the 3 most recent ones available from this source. Some blogs publish infrequently (monthly or less), so older articles are acceptable as long as they're the most recent from this source.
 2. DOMAIN MATCHING: ONLY return articles from ${baseDomain} domain. Check every URL - it MUST contain "${baseDomain}" in the hostname. Reject any URLs from other domains (like tim.blog, medium.com, etc.)
 3. Extract ACTUAL article URLs from search results - NOT Google redirect URLs (avoid any URLs containing "vertexaisearch.cloud.google.com" or "grounding-api-redirect")
 4. Each article URL must be a DIRECT link to the article page on ${baseDomain} (e.g., https://${baseDomain}/blog/article-slug or https://${baseDomain}/article-title)
@@ -478,9 +478,9 @@ ONLY include articles from ${baseDomain}. DO NOT include redirect URLs, generic 
         }
       };
 
-      // Return lightweight articles (limit to 5 most recent articles)
+      // Return lightweight articles (limit to 3 most recent articles)
       // This ensures we get the most recent articles from each source
-      const lightweightArticles = filteredArticles.slice(0, 5).map(article => {
+      const lightweightArticles = filteredArticles.slice(0, 3).map(article => {
         let articleUrl = article.url || article.link;
         if (articleUrl && !articleUrl.startsWith('http')) {
           if (articleUrl.startsWith('/')) {
