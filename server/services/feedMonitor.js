@@ -369,21 +369,23 @@ class FeedMonitor {
             hasRSSFeed = false;
             console.log(`🤖 [CHECK NOW] [${source.name}] ADK monitoring type - skipping RSS check, using ADK directly`);
           } else {
-            // For SCRAPING sources, check if RSS feed exists first (with timeout to avoid hanging)
+            // For SCRAPING sources, check if RSS feed exists first (with aggressive timeout to avoid hanging)
+            // Use shorter timeout (5 seconds) since RSS discovery can be slow and we want to move to ADK quickly
             try {
-              // Add timeout to RSS discovery to prevent hanging (max 10 seconds)
+              // Add aggressive timeout to RSS discovery to prevent hanging (max 5 seconds)
+              // If RSS discovery is slow, we'll skip it and go straight to ADK (which was working before)
               const rssDiscoveryPromise = this.feedDiscovery.discoverFeedUrl(source.url);
               const timeoutPromise = new Promise((_, reject) => 
-                setTimeout(() => reject(new Error('RSS discovery timeout')), 10000)
+                setTimeout(() => reject(new Error('RSS discovery timeout')), 5000)
               );
               
               const feedUrl = await Promise.race([rssDiscoveryPromise, timeoutPromise]);
               
               if (feedUrl) {
-                // Test feed with timeout too (max 5 seconds)
+                // Test feed with shorter timeout too (max 3 seconds)
                 const testFeedPromise = this.feedDiscovery.testFeed(feedUrl);
                 const testTimeoutPromise = new Promise((_, reject) => 
-                  setTimeout(() => reject(new Error('Feed test timeout')), 5000)
+                  setTimeout(() => reject(new Error('Feed test timeout')), 3000)
                 );
                 
                 const testResult = await Promise.race([testFeedPromise, testTimeoutPromise]);
@@ -393,14 +395,17 @@ class FeedMonitor {
                   console.log(`📡 [CHECK NOW] [${source.name}] RSS feed found: ${feedUrl}`);
                   // Update source URL to use the discovered RSS feed
                   source.url = feedUrl;
+                } else {
+                  console.log(`📡 [CHECK NOW] [${source.name}] RSS feed found but test failed/timed out, will try ADK`);
                 }
               }
             } catch (rssCheckError) {
-              // RSS check failed or timed out, continue to ADK
+              // RSS check failed or timed out, continue to ADK immediately
+              // This is expected for many sources - ADK was working before, so we'll use it
               if (rssCheckError.message && rssCheckError.message.includes('timeout')) {
-                console.log(`⏱️  [CHECK NOW] [${source.name}] RSS discovery timed out, will try ADK`);
+                console.log(`⏱️  [CHECK NOW] [${source.name}] RSS discovery timed out (5s), moving to ADK`);
               } else {
-                console.log(`📡 [CHECK NOW] [${source.name}] No RSS feed found, will try ADK`);
+                console.log(`📡 [CHECK NOW] [${source.name}] No RSS feed found, moving to ADK`);
               }
             }
           }
