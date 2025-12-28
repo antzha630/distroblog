@@ -287,6 +287,86 @@ Instructions:
     return `Read more about: ${title}`;
   }
 
+  /**
+   * Generate a concise one-liner hook/summary for dashboard display
+   * This helps users quickly understand if they're interested in the article
+   */
+  async generateArticleHook(title, content, sourceName) {
+    if (!this.openai) {
+      // Fallback to simple truncation if OpenAI is not available
+      return this.fallbackHook(title, content, sourceName);
+    }
+
+    try {
+      const prompt = `Create a concise, engaging one-liner hook for this article that helps readers quickly decide if they're interested:
+
+Title: ${title}
+Content: ${content ? content.substring(0, 800) : 'No content available'}
+Source: ${sourceName}
+
+Requirements:
+- ONE sentence (max 25 words)
+- Capture the main news value or key insight
+- Engaging and informative
+- Help readers instantly understand what the article is about
+- Avoid repeating the title exactly
+- Focus on the "why should I care?" factor
+
+Examples of good hooks:
+- "New AI model achieves 50% cost reduction while maintaining performance"
+- "Major partnership announced that could reshape the industry"
+- "Breaking: Company launches revolutionary feature after 2 years of development"`;
+
+      const response = await this.openai.chat.completions.create({
+        model: 'gpt-3.5-turbo',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a professional news editor creating concise, engaging hooks for news articles. Your hooks help readers quickly understand the value and decide if they want to read more. Be precise, engaging, and informative in exactly one sentence.'
+          },
+          {
+            role: 'user',
+            content: prompt
+          }
+        ],
+        max_tokens: 80,
+        temperature: 0.4 // Slightly higher for creativity, but still factual
+      });
+
+      const hook = response.choices[0]?.message?.content?.trim();
+      return hook || this.fallbackHook(title, content, sourceName);
+
+    } catch (error) {
+      console.error('Error generating article hook:', error.message);
+      return this.fallbackHook(title, content, sourceName);
+    }
+  }
+
+  fallbackHook(title, content, sourceName) {
+    if (!content || content.length < 50) {
+      return `${sourceName} published: ${title}`;
+    }
+
+    // Extract first meaningful sentence as hook
+    const sentences = content.split(/[.!?]+/).filter(s => {
+      const trimmed = s.trim();
+      return trimmed.length > 15 && trimmed.length < 150;
+    });
+    
+    if (sentences.length > 0) {
+      const hook = sentences[0].trim();
+      // Ensure it's not too long (max 25 words)
+      const words = hook.split(/\s+/);
+      if (words.length <= 25) {
+        return hook + '.';
+      } else {
+        return words.slice(0, 25).join(' ') + '...';
+      }
+    }
+    
+    return `${sourceName} published: ${title}`;
+  }
+
   // Method to test LLM connectivity
   async testConnection() {
     if (!this.openai) {

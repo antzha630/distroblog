@@ -356,13 +356,11 @@ class FeedMonitor {
           let newArticles = [];
           
           if (monitoringType === 'SCRAPING') {
-            // TESTING MODE: Use ADK only (no traditional scraper fallback)
-            // This allows us to assess ADK consistency and reliability
-            // Flow: RSS feed first, then ADK if no RSS feed
+            // Flow: Try ADK first, fallback to traditional scraper if ADK fails
             const scrapeStartTime = Date.now();
             let articles = [];
             
-            console.log(`🤖 [CHECK NOW] [${source.name}] Using ADK (testing mode - no fallback) from: ${source.url}`);
+            console.log(`🤖 [CHECK NOW] [${source.name}] Trying ADK first from: ${source.url}`);
             
             try {
               articles = await this.adkScraper.scrapeArticles(source);
@@ -371,7 +369,7 @@ class FeedMonitor {
               
               // Check if ADK returned valid results (not empty, not wrong domain)
               if (articles.length === 0) {
-                console.log(`⚠️ [CHECK NOW] [${source.name}] ADK returned 0 articles (no fallback - testing consistency)`);
+                console.log(`⚠️ [CHECK NOW] [${source.name}] ADK returned 0 articles, falling back to traditional scraper`);
               } else {
                 // Verify articles are from correct domain
                 const validArticles = articles.filter(article => {
@@ -384,7 +382,7 @@ class FeedMonitor {
                 });
                 
                 if (validArticles.length === 0 && articles.length > 0) {
-                  console.log(`⚠️ [CHECK NOW] [${source.name}] ADK returned ${articles.length} articles from wrong domain (no fallback - testing consistency)`);
+                  console.log(`⚠️ [CHECK NOW] [${source.name}] ADK returned ${articles.length} articles from wrong domain, falling back to traditional scraper`);
                   articles = []; // Clear invalid articles
                 } else if (validArticles.length < articles.length) {
                   console.log(`⚠️ [CHECK NOW] [${source.name}] ADK returned ${articles.length} articles, but only ${validArticles.length} are from correct domain`);
@@ -399,9 +397,25 @@ class FeedMonitor {
                 console.log(`❌ [CHECK NOW] [${source.name}] ADK failed (0 valid articles) in ${scrapeDuration}ms`);
               }
             } catch (scrapeError) {
-              // Log error but don't fallback - we want to see ADK failure rate
-              console.error(`❌ [CHECK NOW] [${source.name}] ADK error (no fallback - testing): ${scrapeError.message}`);
+              console.error(`❌ [CHECK NOW] [${source.name}] ADK error: ${scrapeError.message}`);
               articles = [];
+            }
+            
+            // Fallback to traditional scraper if ADK failed
+            if (articles.length === 0) {
+              console.log(`🔄 [CHECK NOW] [${source.name}] Falling back to traditional scraper (Playwright/static)...`);
+              try {
+                articles = await this.webScraper.scrapeArticles(source);
+                const fallbackDuration = Date.now() - scrapeStartTime;
+                if (articles.length > 0) {
+                  console.log(`✅ [CHECK NOW] [${source.name}] Traditional scraper extracted ${articles.length} articles in ${fallbackDuration}ms`);
+                } else {
+                  console.log(`❌ [CHECK NOW] [${source.name}] Traditional scraper also returned 0 articles`);
+                }
+              } catch (fallbackError) {
+                console.error(`❌ [CHECK NOW] [${source.name}] Traditional scraper also failed: ${fallbackError.message}`);
+                articles = [];
+              }
             }
             
             // ADK doesn't need browser cleanup (no Playwright)
@@ -650,6 +664,23 @@ class FeedMonitor {
                     title: improvedTitle
                   };
                   
+                  // Generate concise hook for dashboard (helps users quickly understand if they're interested)
+                  // This is done asynchronously after article is added to avoid blocking
+                  let articleHook = null;
+                  try {
+                    const llmService = require('./llmService');
+                    const hookContent = articleContent || articleDescription || preview || '';
+                    if (hookContent.length > 50) {
+                      // Generate hook asynchronously - don't block article addition
+                      // We'll update it after the article is added
+                      articleHook = await llmService.generateArticleHook(improvedTitle, hookContent, source.name);
+                      console.log(`🎣 [CHECK NOW] [${source.name}] Generated hook: "${articleHook.substring(0, 60)}..."`);
+                    }
+                  } catch (hookError) {
+                    // If hook generation fails, continue without it (non-blocking)
+                    console.log(`⚠️  [CHECK NOW] [${source.name}] Hook generation failed: ${hookError.message} (continuing without hook)`);
+                  }
+                  
                   // Format date using improved date
                   let finalPubDate = null;
                   if (improvedDate && !isNaN(improvedDate.getTime())) {
@@ -665,7 +696,9 @@ class FeedMonitor {
                     pubDate: finalPubDate, // Use optimized date from article page
                     sourceName: source.name || 'Unknown Source',
                     category: source.category || 'General',
-                    status: 'new'
+                    status: 'new',
+                    publisherDescription: articleDescription || article.description || article.contentSnippet || null,
+                    articleHook: articleHook // Concise one-liner hook for dashboard
                   };
                   
                   // Final validation: Skip articles with generic/error titles before adding to database
@@ -989,6 +1022,23 @@ class FeedMonitor {
             publisherDescription = publisherDescription.substring(0, 300);
           }
 
+          // Generate concise hook for dashboard (helps users quickly understand if they're interested)
+          let articleHook = null;
+          try {
+            const llmService = require('./llmService');
+            const hookContent = enhancedContent.content || item.content || item.description || item.contentSnippet || '';
+            if (hookContent.length > 50) {
+              articleHook = await llmService.generateArticleHook(
+                enhancedContent.title || item.title || 'Untitled',
+                hookContent,
+                source.name
+              );
+            }
+          } catch (hookError) {
+            // If hook generation fails, continue without it (non-blocking)
+            console.log(`⚠️  [CHECK NOW] [${source.name}] Hook generation failed: ${hookError.message} (continuing without hook)`);
+          }
+
           const article = {
             sourceId: source.id,
             title: enhancedContent.title || item.title || 'Untitled',
@@ -1001,6 +1051,7 @@ class FeedMonitor {
             category: source.category || 'General',
             author: author,
             publisherDescription: publisherDescription,
+            articleHook: articleHook, // Concise one-liner hook for dashboard
             sessionId: sessionId
           };
 
@@ -1130,6 +1181,23 @@ class FeedMonitor {
             publisherDescription = publisherDescription.substring(0, 300);
           }
 
+          // Generate concise hook for dashboard (helps users quickly understand if they're interested)
+          let articleHook = null;
+          try {
+            const llmService = require('./llmService');
+            const hookContent = enhancedContent.content || item.content || item.description || item.contentSnippet || '';
+            if (hookContent.length > 50) {
+              articleHook = await llmService.generateArticleHook(
+                enhancedContent.title || item.title || 'Untitled',
+                hookContent,
+                source.name
+              );
+            }
+          } catch (hookError) {
+            // If hook generation fails, continue without it (non-blocking)
+            console.log(`⚠️  [CHECK NOW] [${source.name}] Hook generation failed: ${hookError.message} (continuing without hook)`);
+          }
+
           // Add to database with session ID
           const articleId = await database.addArticle({
             title: enhancedContent.title || 'Untitled',
@@ -1142,6 +1210,7 @@ class FeedMonitor {
             category: source.category,
             author: author,
             publisherDescription: publisherDescription,
+            articleHook: articleHook, // Concise one-liner hook for dashboard
             sessionId: sessionId
           });
           
