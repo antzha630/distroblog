@@ -123,9 +123,6 @@ Do not include explanatory text. Return only the JSON array.`,
       console.log('✅ ADK agent initialized successfully with Google Search tool');
     } catch (error) {
       console.error('❌ Error initializing ADK agent:', error.message);
-      if (error.stack) {
-        console.error('Stack:', error.stack);
-      }
       if (error.message.includes('Cannot find module')) {
         console.error('   Make sure @google/adk is installed: npm install @google/adk');
       }

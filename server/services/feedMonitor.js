@@ -1682,8 +1682,14 @@ class FeedMonitor {
       const parsed = parseDate(bodyText);
       return parsed;
     } catch (err) {
-      // Log softly and return null
-      console.log(`⚠️  extractDateStatic failed for ${url}: ${err.message}`);
+      // Log softly and return null - only show essential error info
+      const errorMsg = err.response?.status 
+        ? `HTTP ${err.response.status}` 
+        : err.message || 'Unknown error';
+      // Only log if it's not a 404 (common for old/deleted articles)
+      if (err.response?.status !== 404) {
+        console.log(`⚠️  extractDateStatic failed for ${url}: ${errorMsg}`);
+      }
       return null;
     }
   }
