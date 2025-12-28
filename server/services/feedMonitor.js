@@ -765,7 +765,6 @@ class FeedMonitor {
           }
         } catch (error) {
           console.error(`❌ [CHECK NOW] [${source.name}] Error checking ${source.monitoring_type || 'RSS'} source:`, error.message);
-          console.error(`❌ [CHECK NOW] [${source.name}] Stack trace:`, error.stack);
           
           // Ensure browser is closed even if error occurred
           try {
@@ -817,7 +816,7 @@ class FeedMonitor {
       
       return results;
     } catch (error) {
-      console.error('Error checking all feeds:', error);
+      console.error('Error checking all feeds:', error.message || error);
       throw error;
     }
   }
@@ -1046,7 +1045,7 @@ class FeedMonitor {
       
       return newArticles;
     } catch (error) {
-      console.error(`Error checking feed for ${source.name}:`, error);
+      console.error(`Error checking feed for ${source.name}:`, error.message || error);
       throw error;
     }
   }
@@ -1159,7 +1158,7 @@ class FeedMonitor {
       
       return newArticles;
     } catch (error) {
-      console.error(`Error checking feed ${source.name}:`, error);
+      console.error(`Error checking feed ${source.name}:`, error.message || error);
       throw error;
     }
   }
@@ -1194,7 +1193,7 @@ class FeedMonitor {
         title: title
       };
     } catch (error) {
-      console.error('Error enhancing article content:', error);
+      console.error('Error enhancing article content:', error.message || error);
       const { title, content } = this.extractTitleAndContent(item);
       const cleanedContent = this.cleanContent(content);
       // Fallback to author's note style
@@ -2551,7 +2550,7 @@ class FeedMonitor {
           description: ''
         };
       }
-      console.error('Error extracting article metadata:', error);
+      console.error('Error extracting article metadata:', error.message || error);
       throw error;
     }
   }
@@ -2714,14 +2713,14 @@ class FeedMonitor {
     
     // Check feeds immediately
     this.checkAllFeeds().catch(error => {
-      console.error('Error in initial feed check:', error);
+      console.error('Error in initial feed check:', error.message || error);
     });
     
     // Then check every 30 minutes
     this.monitoringInterval = setInterval(() => {
       if (this.isMonitoring) {
         this.checkAllFeeds().catch(error => {
-          console.error('Error in scheduled feed check:', error);
+          console.error('Error in scheduled feed check:', error.message || error);
         });
       }
     }, 30 * 60 * 1000); // 30 minutes
