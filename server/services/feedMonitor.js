@@ -459,6 +459,7 @@ class FeedMonitor {
               }
               
               // Clean up browser if traditional scraper was used (Playwright creates browser instances)
+              // Playwright browsers need extra time to fully release memory
               try {
                 if (this.webScraper && typeof this.webScraper.close === 'function') {
                   await this.webScraper.close();
@@ -466,9 +467,25 @@ class FeedMonitor {
               } catch (closeError) {
                 // Ignore cleanup errors
               }
+              
+              // CRITICAL: Extra delay after Playwright usage to allow browser process to fully close
+              // Playwright browsers can take 2-3 seconds to fully release memory
+              // Without this delay, memory accumulates when processing multiple sources
+              console.log(`⏳ [CHECK NOW] [${source.name}] Waiting for Playwright browser cleanup (2s delay)...`);
+              await new Promise(resolve => setTimeout(resolve, 2000));
+              
+              // Force garbage collection after Playwright cleanup
+              try {
+                if (global.gc) {
+                  global.gc();
+                  console.log(`🧹 [CHECK NOW] [${source.name}] Forced garbage collection after Playwright cleanup`);
+                }
+              } catch (gcError) {
+                // Ignore cleanup errors
+              }
             }
             
-            // Memory cleanup
+            // Memory cleanup (for ADK-only sources too)
             try {
               if (global.gc) {
                 global.gc();
@@ -477,8 +494,9 @@ class FeedMonitor {
               // Ignore cleanup errors
             }
             
-            // Small delay for stability
-            await new Promise(resolve => setTimeout(resolve, 500));
+            // Small delay for stability (reduced for ADK-only, longer already added for Playwright)
+            const delayMs = articles.length > 0 && articles[0].link ? 500 : 1000;
+            await new Promise(resolve => setTimeout(resolve, delayMs));
             
             console.log(`📰 [CHECK NOW] [${source.name}] Checking ${articles.length} articles for new ones...`);
             
