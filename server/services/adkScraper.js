@@ -67,21 +67,21 @@ class ADKScraper {
         name: 'article_finder',
         model: llm, // Pass the LLM object directly (not model name string)
         description: 'Agent to find recent blog posts and articles from a website URL using Google Search.',
-        instruction: `You are an article finder agent. Use Google Search to find the 5 MOST RECENT blog posts or articles from a given website URL.
+        instruction: `You are an article finder agent. Use Google Search to find the 3-5 MOST RECENT blog posts or articles from a given website URL.
 
 CRITICAL REQUIREMENTS:
-1. RECENCY FIRST: Prioritize articles from the current year (${new Date().getFullYear()}). Only include articles from previous years if absolutely necessary to reach 5 articles, but prefer fewer recent articles over old ones.
+1. RECENCY: Get the most recent articles from the source, regardless of publication date. Some blogs publish infrequently (monthly or less), so older articles are fine as long as they're the most recent from that source.
 2. Use Google Search to perform a live search - do not rely on training data
 3. Extract FULL article URLs (not just the blog homepage). Each article must have a unique URL path like "/article-slug" or "/blog/post-title"
 4. Only include articles from the exact domain specified
 5. Ignore generic pages like homepages, "About" pages, or navigation pages
-6. Extract publication dates when available - dates are CRITICAL for sorting by recency
+6. DATE ACCURACY: Extract publication dates from search results - dates are CRITICAL. Look for dates in search snippets, article previews, or metadata. Try hard to find dates.
 
 For each article found, provide:
 - title: The complete article headline/title (not generic titles like "Blog" or "Home")
 - url: The FULL URL to the specific article page (must include the article path, not just the domain)
 - description: Brief description or excerpt (if available)
-- datePublished: Publication date in ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:mm:ssZ). Try hard to extract dates from search results. Use null only if absolutely no date information is available.
+- datePublished: Publication date in ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:mm:ssZ). Extract from search results when available. Prioritize articles with dates. Use null only if absolutely no date information exists.
 
 Return ONLY a valid JSON array with this exact structure, sorted by date (most recent first):
 [
@@ -170,32 +170,30 @@ Do not include explanatory text. Return only the JSON array.`,
       // Improved prompt to get specific article URLs and most recent articles
       const domain = new URL(source.url).hostname;
       const baseDomain = domain.replace(/^www\./, ''); // Remove www. for matching
-      const currentYear = new Date().getFullYear();
-      const currentMonth = new Date().getMonth() + 1; // 1-12
       const searchQuery = `Use Google Search to find the 5 MOST RECENT blog posts or articles from ${source.url}.
 
 CRITICAL REQUIREMENTS - READ CAREFULLY:
-1. RECENCY PRIORITY: ONLY return articles published in ${currentYear} (year ${currentYear}). Reject any articles from previous years (${currentYear - 1} or earlier). If you cannot find 5 articles from ${currentYear}, return fewer articles rather than including old ones.
+1. RECENCY PRIORITY: Return the 3-5 MOST RECENT articles from ${baseDomain}, sorted by publication date (newest first). It's okay if articles are from months ago - just get the most recent ones available from this source. Some blogs publish infrequently (monthly or less), so older articles are acceptable as long as they're the most recent from this source.
 2. DOMAIN MATCHING: ONLY return articles from ${baseDomain} domain. Check every URL - it MUST contain "${baseDomain}" in the hostname. Reject any URLs from other domains (like tim.blog, medium.com, etc.)
 3. Extract ACTUAL article URLs from search results - NOT Google redirect URLs (avoid any URLs containing "vertexaisearch.cloud.google.com" or "grounding-api-redirect")
 4. Each article URL must be a DIRECT link to the article page on ${baseDomain} (e.g., https://${baseDomain}/blog/article-slug or https://${baseDomain}/article-title)
 5. DO NOT return generic blog homepage URLs like "${source.url}" or "${source.url}/" - only return URLs with specific article paths (must have /blog/article-name or /article-name format)
-6. Prioritize the most recently published articles from ${currentYear}. Sort results by publication date (newest first)
+6. DATE ACCURACY: Extract publication dates from search results. Dates are CRITICAL - try hard to find dates in search snippets, article previews, or metadata. Use YYYY-MM-DD format. Only use null if absolutely no date information is available.
 7. Each article must have a unique URL path beyond the base blog URL (at least 10 characters in the path after the domain)
 
 VERIFY BEFORE RETURNING:
-- Every article must be from ${currentYear} (year ${currentYear})
 - Every URL must contain "${baseDomain}" in the hostname
 - Every URL must have a specific article path (not just /blog or /)
 - No redirect URLs from Google
+- Articles are sorted by date (newest first) - this is the most recent from this source
 
 Return a JSON array with articles sorted by date (most recent first):
 - title: Complete article title (not generic, not "Blog" or "Home")
 - url: DIRECT URL to the specific article page on ${baseDomain} (must include article path, NOT a redirect URL, MUST be from ${baseDomain} domain)
 - description: Article excerpt if available
-- datePublished: Publication date (YYYY-MM-DD format) - REQUIRED, extract from search results or article metadata. If date is not available, use null but prioritize articles with dates.
+- datePublished: Publication date (YYYY-MM-DD format) - EXTRACT from search results when available. Prioritize articles with dates. Use null only if no date information exists.
 
-ONLY include articles from ${baseDomain} published in ${currentYear}. DO NOT include redirect URLs, generic URLs, articles from other domains, or articles from previous years. Return only valid JSON array, no other text.`;
+ONLY include articles from ${baseDomain}. DO NOT include redirect URLs, generic URLs, or articles from other domains. Return only valid JSON array, no other text.`;
       
       let articles = [];
       let lastEvent = null;
