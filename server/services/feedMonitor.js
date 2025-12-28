@@ -357,57 +357,27 @@ class FeedMonitor {
           
           // Flow: RSS → ADK → SCRAPING (fallback only if ADK returns 0 articles)
           // Monitoring types:
-          // - 'RSS': Use RSS feed directly (skip ADK/scraping)
+          // - 'RSS': Use RSS feed directly (url field already contains RSS feed URL from initial setup)
           // - 'ADK': Skip RSS check, go directly to ADK, then scraping fallback if ADK returns 0
-          // - 'SCRAPING': Check RSS first, then ADK, then scraping fallback
+          // - 'SCRAPING': Skip RSS discovery (already checked during setup), go directly to ADK, then scraping fallback
+          // Note: RSS discovery happens during source setup. If RSS was found, source would be marked as 'RSS' type.
+          // For 'Check Now', we don't need to rediscover RSS - just use what was determined during setup.
           let hasRSSFeed = false;
           if (monitoringType === 'RSS') {
-            // Source is explicitly marked as RSS - use RSS feed
+            // Source is explicitly marked as RSS - url field already contains the RSS feed URL
+            // No need to discover - just use it directly
             hasRSSFeed = true;
+            console.log(`📡 [CHECK NOW] [${source.name}] Using RSS feed: ${source.url}`);
           } else if (monitoringType === 'ADK') {
             // ADK monitoring type: skip RSS check, go directly to ADK
             hasRSSFeed = false;
-            console.log(`🤖 [CHECK NOW] [${source.name}] ADK monitoring type - skipping RSS check, using ADK directly`);
+            console.log(`🤖 [CHECK NOW] [${source.name}] ADK monitoring type - using ADK directly`);
           } else {
-            // For SCRAPING sources, check if RSS feed exists first (with aggressive timeout to avoid hanging)
-            // Use shorter timeout (5 seconds) since RSS discovery can be slow and we want to move to ADK quickly
-            try {
-              // Add aggressive timeout to RSS discovery to prevent hanging (max 5 seconds)
-              // If RSS discovery is slow, we'll skip it and go straight to ADK (which was working before)
-              const rssDiscoveryPromise = this.feedDiscovery.discoverFeedUrl(source.url);
-              const timeoutPromise = new Promise((_, reject) => 
-                setTimeout(() => reject(new Error('RSS discovery timeout')), 5000)
-              );
-              
-              const feedUrl = await Promise.race([rssDiscoveryPromise, timeoutPromise]);
-              
-              if (feedUrl) {
-                // Test feed with shorter timeout too (max 3 seconds)
-                const testFeedPromise = this.feedDiscovery.testFeed(feedUrl);
-                const testTimeoutPromise = new Promise((_, reject) => 
-                  setTimeout(() => reject(new Error('Feed test timeout')), 3000)
-                );
-                
-                const testResult = await Promise.race([testFeedPromise, testTimeoutPromise]);
-                
-                if (testResult && testResult.success) {
-                  hasRSSFeed = true;
-                  console.log(`📡 [CHECK NOW] [${source.name}] RSS feed found: ${feedUrl}`);
-                  // Update source URL to use the discovered RSS feed
-                  source.url = feedUrl;
-                } else {
-                  console.log(`📡 [CHECK NOW] [${source.name}] RSS feed found but test failed/timed out, will try ADK`);
-                }
-              }
-            } catch (rssCheckError) {
-              // RSS check failed or timed out, continue to ADK immediately
-              // This is expected for many sources - ADK was working before, so we'll use it
-              if (rssCheckError.message && rssCheckError.message.includes('timeout')) {
-                console.log(`⏱️  [CHECK NOW] [${source.name}] RSS discovery timed out (5s), moving to ADK`);
-              } else {
-                console.log(`📡 [CHECK NOW] [${source.name}] No RSS feed found, moving to ADK`);
-              }
-            }
+            // For SCRAPING sources: RSS discovery already happened during setup
+            // If RSS was found, source would be 'RSS' type. Since it's 'SCRAPING', no RSS was found.
+            // Skip RSS discovery and go straight to ADK (which was working before)
+            hasRSSFeed = false;
+            console.log(`🤖 [CHECK NOW] [${source.name}] SCRAPING type - RSS already checked during setup, using ADK`);
           }
           
           if (hasRSSFeed) {
