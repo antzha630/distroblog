@@ -294,11 +294,11 @@ class FeedMonitor {
       const MEMORY_LIMIT_MB = 450; // Stop if we exceed 450MB RSS to stay under 512MB limit
       
       // Skip list for problematic sources that cause memory issues
-      // (Currently empty - Hyper Cycle removed as ADK approach uses less memory)
+      // Hyper Cycle: ADK fails (returns 0 articles), falls back to Playwright, which causes memory crash
       const SKIP_SOURCES = [
-        // 'hypercycle.ai',
-        // 'www.hypercycle.ai',
-        // 'Hyper Cycle'  // Removed - ADK approach uses less memory
+        'hypercycle.ai',
+        'www.hypercycle.ai',
+        'Hyper Cycle'
       ];
       
       for (let i = 0; i < activeSources.length; i++) {
