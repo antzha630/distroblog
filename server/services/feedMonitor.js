@@ -476,10 +476,11 @@ class FeedMonitor {
               }
               
               // CRITICAL: Extra delay after Playwright usage to allow browser process to fully close
-              // Playwright browsers can take 2-3 seconds to fully release memory
+              // Playwright browsers can take 3-5 seconds to fully release memory
               // Without this delay, memory accumulates when processing multiple sources
-              console.log(`⏳ [CHECK NOW] [${source.name}] Waiting for Playwright browser cleanup (2s delay)...`);
-              await new Promise(resolve => setTimeout(resolve, 2000));
+              // This matches the original implementation that was working before ADK
+              console.log(`⏳ [CHECK NOW] [${source.name}] Waiting for Playwright browser cleanup (3s delay)...`);
+              await new Promise(resolve => setTimeout(resolve, 3000));
               
               // Force garbage collection after Playwright cleanup
               try {
@@ -490,6 +491,9 @@ class FeedMonitor {
               } catch (gcError) {
                 // Ignore cleanup errors
               }
+              
+              // Mark that Playwright was used so we can add extra delay between sources
+              source._playwrightUsed = true;
             }
             
             // Memory cleanup (for ADK-only sources too)
@@ -845,8 +849,13 @@ class FeedMonitor {
           
           // MEMORY OPTIMIZATION: Small delay between sources to allow GC
           // Especially important after scraping sources that use Playwright or ADK
+          // If Playwright was used, add extra delay to ensure browser cleanup completes
           if ((monitoringType === 'SCRAPING' || monitoringType === 'ADK') && i < activeSources.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 500));
+            const delayMs = source._playwrightUsed ? 2000 : 500; // Extra delay if Playwright was used
+            if (source._playwrightUsed) {
+              console.log(`⏳ [CHECK NOW] Extra delay (2s) before next source due to Playwright usage`);
+            }
+            await new Promise(resolve => setTimeout(resolve, delayMs));
           }
           
           // Log memory usage if available (for monitoring) - use RSS for total memory
