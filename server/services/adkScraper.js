@@ -73,14 +73,15 @@ class ADKScraper {
 CRITICAL REQUIREMENTS:
 1. RECENCY: Get the most recent articles from the source, regardless of publication date. Some blogs publish infrequently (monthly or less), so older articles are fine as long as they're the most recent from that source.
 2. Use Google Search to perform a live search - do not rely on training data
-3. Extract FULL article URLs (not just the blog homepage). Each article must have a unique URL path like "/article-slug" or "/blog/post-title"
-4. Only include articles from the exact domain specified
-5. Ignore generic pages like homepages, "About" pages, or navigation pages
-6. DATE ACCURACY: Extract publication dates from search results - dates are CRITICAL. Look for dates in search snippets, article previews, or metadata. Try hard to find dates.
+3. CANONICAL URLs: Extract the CANONICAL/SHORT article URLs (not long slugs). Many sites use short URLs like "/incentive-dynamic-engine" instead of long slugs like "/io-net-launches-the-first-adaptive-economic-engine-for-decentralized-compute". Prefer shorter, cleaner URLs when available in search results.
+4. Extract FULL article URLs (not just the blog homepage). Each article must have a unique URL path like "/article-slug" or "/blog/post-title"
+5. Only include articles from the exact domain specified
+6. Ignore generic pages like homepages, "About" pages, or navigation pages
+7. DATE ACCURACY: Extract publication dates from search results - dates are CRITICAL. Look for dates in search snippets, article previews, or metadata. Search results often show dates like "2 days ago", "Dec 11, 2025", etc. - convert these to ISO 8601 format (YYYY-MM-DD). Try hard to find dates.
 
 For each article found, provide:
 - title: The complete article headline/title (not generic titles like "Blog" or "Home")
-- url: The FULL URL to the specific article page (must include the article path, not just the domain)
+- url: The CANONICAL/SHORT URL to the specific article page (prefer shorter URLs over long slugs when both are available)
 - description: Brief description or excerpt (if available)
 - datePublished: Publication date in ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:mm:ssZ). Extract from search results when available. Prioritize articles with dates. Use null only if absolutely no date information exists.
 
@@ -88,7 +89,7 @@ Return ONLY a valid JSON array with this exact structure, sorted by date (most r
 [
   {
     "title": "Complete Article Title",
-    "url": "https://domain.com/blog/specific-article-slug",
+    "url": "https://domain.com/blog/canonical-article-slug",
     "description": "Article description or excerpt",
     "datePublished": "2025-12-17T10:00:00Z" or null
   }
@@ -176,21 +177,23 @@ Do not include explanatory text. Return only the JSON array.`,
 CRITICAL REQUIREMENTS - READ CAREFULLY:
 1. RECENCY PRIORITY: Return exactly 3 MOST RECENT articles from ${baseDomain}, sorted by publication date (newest first). It's okay if articles are from months ago - just get the 3 most recent ones available from this source. Some blogs publish infrequently (monthly or less), so older articles are acceptable as long as they're the most recent from this source.
 2. DOMAIN MATCHING: ONLY return articles from ${baseDomain} domain. Check every URL - it MUST contain "${baseDomain}" in the hostname. Reject any URLs from other domains (like tim.blog, medium.com, etc.)
-3. Extract ACTUAL article URLs from search results - NOT Google redirect URLs (avoid any URLs containing "vertexaisearch.cloud.google.com" or "grounding-api-redirect")
-4. Each article URL must be a DIRECT link to the article page on ${baseDomain} (e.g., https://${baseDomain}/blog/article-slug or https://${baseDomain}/article-title)
-5. DO NOT return generic blog homepage URLs like "${source.url}" or "${source.url}/" - only return URLs with specific article paths (must have /blog/article-name or /article-name format)
-6. DATE ACCURACY: Extract publication dates from search results. Dates are CRITICAL - try hard to find dates in search snippets, article previews, or metadata. Use YYYY-MM-DD format. Only use null if absolutely no date information is available.
-7. Each article must have a unique URL path beyond the base blog URL (at least 10 characters in the path after the domain)
+3. CANONICAL URLs: Prefer SHORT/CANONICAL URLs over long slugs. Many sites use short URLs like "/incentive-dynamic-engine" instead of long slugs like "/io-net-launches-the-first-adaptive-economic-engine-for-decentralized-compute". When search results show both, prefer the shorter canonical URL.
+4. Extract ACTUAL article URLs from search results - NOT Google redirect URLs (avoid any URLs containing "vertexaisearch.cloud.google.com" or "grounding-api-redirect")
+5. Each article URL must be a DIRECT link to the article page on ${baseDomain} (e.g., https://${baseDomain}/blog/article-slug or https://${baseDomain}/article-title)
+6. DO NOT return generic blog homepage URLs like "${source.url}" or "${source.url}/" - only return URLs with specific article paths (must have /blog/article-name or /article-name format)
+7. DATE ACCURACY: Extract publication dates from search results. Dates are CRITICAL - try hard to find dates in search snippets, article previews, or metadata. Search results often show dates like "2 days ago", "Dec 11, 2025", etc. - convert these to YYYY-MM-DD format. Only use null if absolutely no date information is available.
+8. Each article must have a unique URL path beyond the base blog URL (at least 10 characters in the path after the domain)
 
 VERIFY BEFORE RETURNING:
 - Every URL must contain "${baseDomain}" in the hostname
 - Every URL must have a specific article path (not just /blog or /)
+- Prefer shorter canonical URLs over long slugs when both are available
 - No redirect URLs from Google
 - Articles are sorted by date (newest first) - this is the most recent from this source
 
 Return a JSON array with articles sorted by date (most recent first):
 - title: Complete article title (not generic, not "Blog" or "Home")
-- url: DIRECT URL to the specific article page on ${baseDomain} (must include article path, NOT a redirect URL, MUST be from ${baseDomain} domain)
+- url: CANONICAL/SHORT URL to the specific article page on ${baseDomain} (prefer shorter URLs over long slugs, must include article path, NOT a redirect URL, MUST be from ${baseDomain} domain)
 - description: Article excerpt if available
 - datePublished: Publication date (YYYY-MM-DD format) - EXTRACT from search results when available. Prioritize articles with dates. Use null only if no date information exists.
 
@@ -443,15 +446,15 @@ ONLY include articles from ${baseDomain}. DO NOT include redirect URLs, generic 
       // This follows redirects to get the final URL
       const resolveCanonicalUrl = async (url) => {
         try {
-          // Use GET request (more reliable than HEAD for redirect tracking)
-          // Some sites don't handle HEAD requests well or don't redirect properly
+          // Use GET request with redirect following
+          // Track the redirect chain to get the final canonical URL
           const response = await axios.get(url, {
-            timeout: 8000,
+            timeout: 10000,
             maxRedirects: 5,
             validateStatus: (status) => status >= 200 && status < 400,
             // Limit response size - we only need headers for redirect detection
-            maxContentLength: 5000, // 5KB should be enough to detect redirects
-            maxBodyLength: 5000,
+            maxContentLength: 10000, // 10KB should be enough
+            maxBodyLength: 10000,
           });
           
           // Get final URL after redirects - try multiple methods (axios version differences)
@@ -465,20 +468,26 @@ ONLY include articles from ${baseDomain}. DO NOT include redirect URLs, generic 
           else if (response.request?.responseURL) {
             finalUrl = response.request.responseURL;
           }
-          // Method 3: Check response URL from config (might be updated after redirects)
+          // Method 3: Check if response has a Location header (shouldn't happen if redirects followed)
+          else if (response.headers?.location) {
+            const location = response.headers.location;
+            finalUrl = location.startsWith('http') ? location : new URL(location, url).toString();
+          }
+          // Method 4: Check response URL from config (might be updated after redirects)
           else if (response.config?.url && response.config.url !== url && response.config.url.startsWith('http')) {
             finalUrl = response.config.url;
           }
           
           // Only return different URL if we actually got a redirect and it's valid
           if (finalUrl && finalUrl !== url && finalUrl.startsWith('http')) {
+            console.log(`🔗 [ADK] Redirect resolved: ${url.substring(url.lastIndexOf('/') + 1).substring(0, 40)}... -> ${finalUrl.substring(finalUrl.lastIndexOf('/') + 1)}`);
             return finalUrl;
           }
           return url;
         } catch (e) {
           // If redirect resolution fails (404, timeout, etc.), return original URL
           // The original URL might still work even if GET request fails
-          // Don't log errors to avoid spam - this is expected for some URLs
+          // Silently fail - this is expected for some URLs
           return url;
         }
       };
