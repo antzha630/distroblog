@@ -402,6 +402,7 @@ class FeedMonitor {
             }
             
             // Fallback to traditional scraper if ADK failed
+            // webScraper handles Playwright first, then static scraping as fallback (same as original implementation)
             if (articles.length === 0) {
               console.log(`🔄 [CHECK NOW] [${source.name}] Falling back to traditional scraper (Playwright/static)...`);
               try {
@@ -416,19 +417,27 @@ class FeedMonitor {
                 console.error(`❌ [CHECK NOW] [${source.name}] Traditional scraper also failed: ${fallbackError.message}`);
                 articles = [];
               }
+              
+              // Clean up browser if traditional scraper was used (Playwright creates browser instances)
+              try {
+                if (this.webScraper && typeof this.webScraper.close === 'function') {
+                  await this.webScraper.close();
+                }
+              } catch (closeError) {
+                // Ignore cleanup errors
+              }
             }
             
-            // ADK doesn't need browser cleanup (no Playwright)
-            // Note: In testing mode, we're using ADK only (no traditional scraper)
+            // Memory cleanup
             try {
               if (global.gc) {
                 global.gc();
               }
-            } catch (closeError) {
+            } catch (gcError) {
               // Ignore cleanup errors
             }
             
-            // Small delay for stability (reduced since ADK is lighter than Playwright)
+            // Small delay for stability
             await new Promise(resolve => setTimeout(resolve, 500));
             
             console.log(`📰 [CHECK NOW] [${source.name}] Checking ${articles.length} articles for new ones...`);
