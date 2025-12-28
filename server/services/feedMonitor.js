@@ -444,9 +444,15 @@ class FeedMonitor {
             // Fallback to traditional scraper ONLY if ADK returned 0 articles
             // webScraper handles Playwright first, then static scraping as fallback (same as original implementation)
             if (articles.length === 0) {
-              console.log(`🔄 [CHECK NOW] [${source.name}] ADK returned 0 articles, falling back to traditional scraper (Playwright/static)...`);
-              try {
-                articles = await this.webScraper.scrapeArticles(source);
+              // Check memory before using Playwright (which is memory-intensive)
+              const currentMemMB = getMemoryMB();
+              if (currentMemMB > MEMORY_LIMIT_MB) {
+                console.warn(`⚠️  [CHECK NOW] [${source.name}] Memory too high (${currentMemMB}MB), skipping Playwright fallback to prevent crash`);
+                articles = []; // Skip scraping if memory is too high
+              } else {
+                console.log(`🔄 [CHECK NOW] [${source.name}] ADK returned 0 articles, falling back to traditional scraper (Playwright/static)...`);
+                try {
+                  articles = await this.webScraper.scrapeArticles(source);
                 const fallbackDuration = Date.now() - scrapeStartTime;
                 if (articles.length > 0) {
                   console.log(`✅ [CHECK NOW] [${source.name}] Traditional scraper extracted ${articles.length} articles in ${fallbackDuration}ms`);
@@ -457,6 +463,7 @@ class FeedMonitor {
                 console.error(`❌ [CHECK NOW] [${source.name}] Traditional scraper also failed: ${fallbackError.message}`);
                 articles = [];
               }
+            }
               
               // Clean up browser if traditional scraper was used (Playwright creates browser instances)
               // Playwright browsers need extra time to fully release memory
