@@ -443,29 +443,42 @@ ONLY include articles from ${baseDomain}. DO NOT include redirect URLs, generic 
       // This follows redirects to get the final URL
       const resolveCanonicalUrl = async (url) => {
         try {
-          // Make HEAD request to follow redirects (faster than GET)
-          // Axios automatically follows redirects, final URL is in response.request.res.responseUrl
-          const response = await axios.head(url, {
-            timeout: 5000,
+          // Use GET request (more reliable than HEAD for redirect tracking)
+          // Some sites don't handle HEAD requests well or don't redirect properly
+          const response = await axios.get(url, {
+            timeout: 8000,
             maxRedirects: 5,
-            validateStatus: (status) => status >= 200 && status < 400
+            validateStatus: (status) => status >= 200 && status < 400,
+            // Limit response size - we only need headers for redirect detection
+            maxContentLength: 5000, // 5KB should be enough to detect redirects
+            maxBodyLength: 5000,
           });
           
-          // Get final URL after redirects
-          // Axios stores the final URL after redirects in different places depending on version
-          const finalUrl = response.request?.res?.responseUrl || 
-                          response.request?.responseURL || 
-                          response.request?.res?.response?.headers?.location ||
-                          url;
+          // Get final URL after redirects - try multiple methods (axios version differences)
+          let finalUrl = url;
           
-          // Only return different URL if we actually got a redirect
+          // Method 1: response.request.res.responseUrl (most common in Node.js axios)
+          if (response.request?.res?.responseUrl) {
+            finalUrl = response.request.res.responseUrl;
+          }
+          // Method 2: response.request.responseURL (alternative property)
+          else if (response.request?.responseURL) {
+            finalUrl = response.request.responseURL;
+          }
+          // Method 3: Check response URL from config (might be updated after redirects)
+          else if (response.config?.url && response.config.url !== url && response.config.url.startsWith('http')) {
+            finalUrl = response.config.url;
+          }
+          
+          // Only return different URL if we actually got a redirect and it's valid
           if (finalUrl && finalUrl !== url && finalUrl.startsWith('http')) {
             return finalUrl;
           }
           return url;
         } catch (e) {
           // If redirect resolution fails (404, timeout, etc.), return original URL
-          // The original URL might still work even if HEAD request fails
+          // The original URL might still work even if GET request fails
+          // Don't log errors to avoid spam - this is expected for some URLs
           return url;
         }
       };
