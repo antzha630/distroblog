@@ -1265,7 +1265,7 @@ app.get('/api/articles/recent/:days', async (req, res) => {
 // Get all articles (for verification/debugging)
 app.get('/api/articles/all', async (req, res) => {
   try {
-    const limit = parseInt(req.query.limit) || 50;
+    const limit = parseInt(req.query.limit) || 200;
     const monitoringType = req.query.type; // 'SCRAPING' or 'RSS'
     
     const articles = monitoringType 
