@@ -183,21 +183,33 @@ CRITICAL REQUIREMENTS - READ CAREFULLY:
 6. DO NOT return generic blog homepage URLs like "${source.url}" or "${source.url}/" - only return URLs with specific article paths (must have /blog/article-name or /article-name format)
 7. DATE ACCURACY: Extract publication dates from search results. Dates are CRITICAL - try hard to find dates in search snippets, article previews, or metadata. Search results often show dates like "2 days ago", "Dec 11, 2025", etc. - convert these to YYYY-MM-DD format. Only use null if absolutely no date information is available.
 8. Each article must have a unique URL path beyond the base blog URL (at least 10 characters in the path after the domain)
+9. TITLE REQUIREMENT: Every article MUST have a non-null, non-empty title. Do NOT return articles with null or empty titles.
+
+EXAMPLES OF WHAT TO RETURN:
+✅ GOOD: {"title": "How to Build AI Agents", "url": "https://${baseDomain}/blog/how-to-build-ai-agents", "datePublished": "2025-12-15"}
+✅ GOOD: {"title": "New Feature Launch", "url": "https://${baseDomain}/blog/new-feature-launch", "datePublished": "2025-12-10"}
+
+EXAMPLES OF WHAT NOT TO RETURN:
+❌ BAD: {"title": "Blog", "url": "https://${baseDomain}/blog", ...} - This is the homepage, not an article
+❌ BAD: {"title": null, "url": "https://${baseDomain}/article", ...} - Missing title
+❌ BAD: {"title": "Article", "url": "https://vertexaisearch.cloud.google.com/...", ...} - Google redirect URL
+❌ BAD: {"title": "Article", "url": "https://other-domain.com/article", ...} - Wrong domain
 
 VERIFY BEFORE RETURNING:
 - Every URL must contain "${baseDomain}" in the hostname
 - Every URL must have a specific article path (not just /blog or /)
+- Every title must be non-null and non-empty
 - Prefer shorter canonical URLs over long slugs when both are available
 - No redirect URLs from Google
 - Articles are sorted by date (newest first) - this is the most recent from this source
 
 Return a JSON array with articles sorted by date (most recent first):
-- title: Complete article title (not generic, not "Blog" or "Home")
+- title: Complete article title (REQUIRED - must be non-null, non-empty, not generic, not "Blog" or "Home")
 - url: CANONICAL/SHORT URL to the specific article page on ${baseDomain} (prefer shorter URLs over long slugs, must include article path, NOT a redirect URL, MUST be from ${baseDomain} domain)
 - description: Article excerpt if available
 - datePublished: Publication date (YYYY-MM-DD format) - EXTRACT from search results when available. Prioritize articles with dates. Use null only if no date information exists.
 
-ONLY include articles from ${baseDomain}. DO NOT include redirect URLs, generic URLs, or articles from other domains. Return only valid JSON array, no other text.`;
+ONLY include articles from ${baseDomain}. DO NOT include redirect URLs, generic URLs, articles with null/empty titles, or articles from other domains. Return only valid JSON array, no other text.`;
       
       let articles = [];
       let lastEvent = null;
@@ -318,26 +330,31 @@ ONLY include articles from ${baseDomain}. DO NOT include redirect URLs, generic 
 
       // If no articles found in structured format, try to extract from full response
       if (articles.length === 0 && fullResponse) {
-        
-        try {
-          // Clean up control characters that can break JSON parsing
-          let cleanedResponse = fullResponse.replace(/[\x00-\x1F\x7F]/g, '');
-          
-          // Look for JSON anywhere in the full response
-          const jsonMatch = cleanedResponse.match(/\[[\s\S]*?\]/);
-          if (jsonMatch) {
-            const parsed = JSON.parse(jsonMatch[0]);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              articles = parsed;
-              console.log(`✅ [ADK] Found ${articles.length} articles in full response JSON`);
+        // Check if response is just empty markdown code blocks (e.g., just "```")
+        const trimmedResponse = fullResponse.trim();
+        if (trimmedResponse === '```' || trimmedResponse === '```json' || trimmedResponse.length < 10) {
+          console.log(`⚠️ [ADK] Response is empty or minimal (${trimmedResponse.length} chars). Agent may not have completed the request.`);
+        } else {
+          try {
+            // Clean up control characters that can break JSON parsing
+            let cleanedResponse = fullResponse.replace(/[\x00-\x1F\x7F]/g, '');
+            
+            // Look for JSON anywhere in the full response
+            const jsonMatch = cleanedResponse.match(/\[[\s\S]*?\]/);
+            if (jsonMatch) {
+              const parsed = JSON.parse(jsonMatch[0]);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                articles = parsed;
+                console.log(`✅ [ADK] Found ${articles.length} articles in full response JSON`);
+              } else {
+                console.log(`⚠️ [ADK] Found JSON array but it's empty`);
+              }
             } else {
-              console.log(`⚠️ [ADK] Found JSON array but it's empty`);
+              console.log(`⚠️ [ADK] No JSON array found in response. Response might be text-only.`);
             }
-          } else {
-            console.log(`⚠️ [ADK] No JSON array found in response. Response might be text-only.`);
+          } catch (e) {
+            console.log(`⚠️ [ADK] Could not parse JSON from agent response: ${e.message}`);
           }
-        } catch (e) {
-          console.log(`⚠️ [ADK] Could not parse JSON from agent response: ${e.message}`);
         }
       } else if (articles.length > 0) {
         console.log(`✅ [ADK] Successfully extracted ${articles.length} articles from agent response`);
@@ -350,11 +367,24 @@ ONLY include articles from ${baseDomain}. DO NOT include redirect URLs, generic 
       const sourceUrlObj = new URL(source.url);
       const basePath = sourceUrlObj.pathname.endsWith('/') ? sourceUrlObj.pathname.slice(0, -1) : sourceUrlObj.pathname;
       
+      // First, filter out articles with null/empty titles
+      articles = articles.filter(article => {
+        const title = article.title;
+        if (!title || title === null || title === 'null' || title.trim() === '') {
+          console.log(`⚠️ [ADK] Filtering out article with null/empty title: ${article.url || article.link || 'unknown'}`);
+          return false;
+        }
+        return true;
+      });
+      
       const articlesBeforeFilter = articles.length;
       const filteredArticles = articles.filter(article => {
         try {
           const articleUrl = article.url || article.link;
-          if (!articleUrl) return false;
+          if (!articleUrl) {
+            console.log(`⚠️ [ADK] Filtering out article with missing URL (title: ${article.title || 'unknown'})`);
+            return false;
+          }
           
           // Filter out Google redirect URLs (grounding API redirects)
           if (articleUrl.includes('vertexaisearch.cloud.google.com') || 
@@ -366,6 +396,7 @@ ONLY include articles from ${baseDomain}. DO NOT include redirect URLs, generic 
           
           // Filter out null URLs or placeholder URLs
           if (articleUrl === 'null' || articleUrl === null || articleUrl.trim() === '') {
+            console.log(`⚠️ [ADK] Filtering out null/empty URL (title: ${article.title || 'unknown'})`);
             return false;
           }
           
@@ -385,17 +416,24 @@ ONLY include articles from ${baseDomain}. DO NOT include redirect URLs, generic 
             return false;
           }
           
-          // Must have some path beyond the base (indicates a specific article)
-          // Allow at least 3 characters beyond base path (e.g., "/a" is too short, "/article" is good)
-          if (articlePath.length <= basePath.length + 3) {
-            console.log(`⚠️ [ADK] Filtering out URL with insufficient path: ${articleUrl}`);
+          // Must have at least 10 characters in the path after the domain (as per prompt requirement)
+          // Calculate path length after removing the base path
+          const pathAfterBase = articlePath.startsWith(basePath) 
+            ? articlePath.substring(basePath.length) 
+            : articlePath;
+          const pathAfterDomain = articlePath; // Full pathname after domain
+          
+          // Check: path after domain should be at least 10 characters (excluding leading slash)
+          // This ensures we have a meaningful article path like "/blog/article-name" or "/article-slug"
+          if (pathAfterDomain.length < 11) { // At least "/" + 10 chars = 11 total
+            console.log(`⚠️ [ADK] Filtering out URL with insufficient path length (${pathAfterDomain.length} chars, need at least 11): ${articleUrl}`);
             return false;
           }
           
           return true;
         } catch (e) {
           // Invalid URL format
-          console.log(`⚠️ [ADK] Filtering out invalid URL: ${article.url || article.link} - ${e.message}`);
+          console.log(`⚠️ [ADK] Filtering out invalid URL: ${article.url || article.link || 'unknown'} - ${e.message}`);
           return false;
         }
       });
