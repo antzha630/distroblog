@@ -71,19 +71,21 @@ class ADKScraper {
         instruction: `You are an article finder agent. Use Google Search to find the 3 MOST RECENT blog posts or articles from a given website URL.
 
 CRITICAL REQUIREMENTS:
-1. RECENCY: Get the most recent articles from the source, regardless of publication date. Some blogs publish infrequently (monthly or less), so older articles are fine as long as they're the most recent from that source.
+1. RECENCY: Get the 3 most recent articles from the source, regardless of publication date. Some blogs publish infrequently (monthly or less), so older articles are fine as long as they're the most recent from that source.
 2. Use Google Search to perform a live search - do not rely on training data
-3. CANONICAL URLs: Extract the CANONICAL/SHORT article URLs (not long slugs). Many sites use short URLs like "/incentive-dynamic-engine" instead of long slugs like "/io-net-launches-the-first-adaptive-economic-engine-for-decentralized-compute". Prefer shorter, cleaner URLs when available in search results.
-4. Extract FULL article URLs (not just the blog homepage). Each article must have a unique URL path like "/article-slug" or "/blog/post-title"
-5. Only include articles from the exact domain specified
+3. CANONICAL URLs: Extract the CANONICAL/SHORT article URLs (not long slugs). Prefer shorter, cleaner URLs when available in search results.
+4. Extract FULL article URLs (not just the blog homepage). Each article must have a unique URL path like "/article-slug" or "/blog/post-title" - NEVER return generic URLs like "/blog" or "/"
+5. Only include articles from the exact domain specified in the user's request
 6. Ignore generic pages like homepages, "About" pages, or navigation pages
-7. DATE ACCURACY: Extract publication dates from search results - dates are CRITICAL. Look for dates in search snippets, article previews, or metadata. Search results often show dates like "2 days ago", "Dec 11, 2025", etc. - convert these to ISO 8601 format (YYYY-MM-DD). Try hard to find dates.
+7. DATE ACCURACY: Extract publication dates from search results - dates are CRITICAL. Look for dates in search snippets, article previews, or metadata. Convert relative dates like "2 days ago" to YYYY-MM-DD format.
+8. TITLE REQUIREMENT: Every article MUST have a non-null, non-empty title. Do NOT return articles with null or empty titles.
+9. NO REDIRECT URLs: Do NOT return Google redirect URLs (vertexaisearch.cloud.google.com) - only return direct article URLs.
 
 For each article found, provide:
-- title: The complete article headline/title (not generic titles like "Blog" or "Home")
-- url: The CANONICAL/SHORT URL to the specific article page (prefer shorter URLs over long slugs when both are available)
+- title: The complete article headline/title (REQUIRED - must be non-null, non-empty, not generic like "Blog" or "Home")
+- url: The CANONICAL/SHORT URL to the specific article page (must include article path, NOT a redirect URL, MUST be from the specified domain)
 - description: Brief description or excerpt (if available)
-- datePublished: Publication date in ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:mm:ssZ). Extract from search results when available. Prioritize articles with dates. Use null only if absolutely no date information exists.
+- datePublished: Publication date in YYYY-MM-DD format. Extract from search results when available. Use null only if absolutely no date information exists.
 
 Return ONLY a valid JSON array with this exact structure, sorted by date (most recent first):
 [
@@ -91,7 +93,7 @@ Return ONLY a valid JSON array with this exact structure, sorted by date (most r
     "title": "Complete Article Title",
     "url": "https://domain.com/blog/canonical-article-slug",
     "description": "Article description or excerpt",
-    "datePublished": "2025-12-17T10:00:00Z" or null
+    "datePublished": "2025-12-17" or null
   }
 ]
 
@@ -416,17 +418,25 @@ ONLY include articles from ${baseDomain}. DO NOT include redirect URLs, generic 
             return false;
           }
           
-          // Must have at least 10 characters in the path after the domain (as per prompt requirement)
-          // Calculate path length after removing the base path
+          // Must have a meaningful article path (not just "/" or base path)
+          // The prompt says "at least 10 characters in the path after the domain"
+          // But we need to be flexible: some valid URLs might be shorter (e.g., "/blog/a" = 7 chars)
+          // So we check that there's actual content beyond the base path
           const pathAfterBase = articlePath.startsWith(basePath) 
             ? articlePath.substring(basePath.length) 
             : articlePath;
-          const pathAfterDomain = articlePath; // Full pathname after domain
           
-          // Check: path after domain should be at least 10 characters (excluding leading slash)
-          // This ensures we have a meaningful article path like "/blog/article-name" or "/article-slug"
-          if (pathAfterDomain.length < 11) { // At least "/" + 10 chars = 11 total
-            console.log(`⚠️ [ADK] Filtering out URL with insufficient path length (${pathAfterDomain.length} chars, need at least 11): ${articleUrl}`);
+          // If path after base is too short (less than 3 chars like "/a"), it's likely not a real article
+          // But if basePath is "/blog" and articlePath is "/blog/article", pathAfterBase would be "/article" (8 chars) - good
+          // If basePath is "/" and articlePath is "/a", pathAfterBase would be "/a" (2 chars) - too short
+          if (pathAfterBase.length < 3) {
+            console.log(`⚠️ [ADK] Filtering out URL with insufficient path after base (${pathAfterBase.length} chars): ${articleUrl}`);
+            return false;
+          }
+          
+          // Also ensure the full pathname is meaningful (at least 5 chars total, e.g., "/blog" = 5)
+          if (articlePath.length < 5) {
+            console.log(`⚠️ [ADK] Filtering out URL with insufficient total path length (${articlePath.length} chars): ${articleUrl}`);
             return false;
           }
           
