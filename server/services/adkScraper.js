@@ -68,24 +68,24 @@ class ADKScraper {
         name: 'article_finder',
         model: llm, // Pass the LLM object directly (not model name string)
         description: 'Agent to find recent blog posts and articles from a website URL using Google Search.',
-        instruction: `You are an article finder agent. Use Google Search to find the 3 MOST RECENT blog posts or articles from a given website URL.
+        instruction: `You are an assistant to a professional journalist who is looking for the latest blog posts and articles from specific projects and companies on the news beat. Your job is to help find the most recent content from these sources so the journalist can stay up-to-date with the latest news and updates.
+
+When given a website URL, use Google Search to find the 3 MOST RECENT blog posts or articles from that specific website. Focus on finding actual article content - not homepages, about pages, or navigation pages.
 
 CRITICAL REQUIREMENTS:
-1. RECENCY: Get the 3 most recent articles from the source, regardless of publication date. Some blogs publish infrequently (monthly or less), so older articles are fine as long as they're the most recent from that source.
+1. RECENCY: Get the most recent articles from the source, regardless of publication date. Some blogs publish infrequently (monthly or less), so older articles are fine as long as they're the most recent from that source.
 2. Use Google Search to perform a live search - do not rely on training data
-3. CANONICAL URLs: Extract the CANONICAL/SHORT article URLs (not long slugs). Prefer shorter, cleaner URLs when available in search results.
-4. Extract FULL article URLs (not just the blog homepage). Each article must have a unique URL path like "/article-slug" or "/blog/post-title" - NEVER return generic URLs like "/blog" or "/"
-5. Only include articles from the exact domain specified in the user's request
+3. CANONICAL URLs: Extract the CANONICAL/SHORT article URLs (not long slugs). Many sites use short URLs like "/incentive-dynamic-engine" instead of long slugs like "/io-net-launches-the-first-adaptive-economic-engine-for-decentralized-compute". Prefer shorter, cleaner URLs when available in search results.
+4. Extract FULL article URLs (not just the blog homepage). Each article must have a unique URL path like "/article-slug" or "/blog/post-title"
+5. Only include articles from the exact domain specified
 6. Ignore generic pages like homepages, "About" pages, or navigation pages
-7. DATE ACCURACY: Extract publication dates from search results - dates are CRITICAL. Look for dates in search snippets, article previews, or metadata. Convert relative dates like "2 days ago" to YYYY-MM-DD format.
-8. TITLE REQUIREMENT: Every article MUST have a non-null, non-empty title. Do NOT return articles with null or empty titles.
-9. NO REDIRECT URLs: Do NOT return Google redirect URLs (vertexaisearch.cloud.google.com) - only return direct article URLs.
+7. DATE ACCURACY: Extract publication dates from search results - dates are CRITICAL. Look for dates in search snippets, article previews, or metadata. Search results often show dates like "2 days ago", "Dec 11, 2025", etc. - convert these to ISO 8601 format (YYYY-MM-DD). Try hard to find dates.
 
 For each article found, provide:
-- title: The complete article headline/title (REQUIRED - must be non-null, non-empty, not generic like "Blog" or "Home")
-- url: The CANONICAL/SHORT URL to the specific article page (must include article path, NOT a redirect URL, MUST be from the specified domain)
+- title: The complete article headline/title (not generic titles like "Blog" or "Home")
+- url: The CANONICAL/SHORT URL to the specific article page (prefer shorter URLs over long slugs when both are available)
 - description: Brief description or excerpt (if available)
-- datePublished: Publication date in YYYY-MM-DD format. Extract from search results when available. Use null only if absolutely no date information exists.
+- datePublished: Publication date in ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:mm:ssZ). Extract from search results when available. Prioritize articles with dates. Use null only if absolutely no date information exists.
 
 Return ONLY a valid JSON array with this exact structure, sorted by date (most recent first):
 [
@@ -93,7 +93,7 @@ Return ONLY a valid JSON array with this exact structure, sorted by date (most r
     "title": "Complete Article Title",
     "url": "https://domain.com/blog/canonical-article-slug",
     "description": "Article description or excerpt",
-    "datePublished": "2025-12-17" or null
+    "datePublished": "2025-12-17T10:00:00Z" or null
   }
 ]
 
@@ -174,36 +174,74 @@ Do not include explanatory text. Return only the JSON array.`,
       // Improved prompt to get specific article URLs and most recent articles
       const domain = new URL(source.url).hostname;
       const baseDomain = domain.replace(/^www\./, ''); // Remove www. for matching
-      const searchQuery = `Use Google Search to find the 3 MOST RECENT blog posts or articles from ${source.url}.
+      const searchQuery = `You are an assistant to a professional journalist who is looking for the latest blog posts from projects on the news beat. Please search the following URL to find the latest blog posts: ${source.url}
+
+Use Google Search to find the 3 MOST RECENT blog posts or articles from ${source.url}. Focus on finding actual article content that would be useful for a journalist covering this beat.
 
 CRITICAL REQUIREMENTS - READ CAREFULLY:
 1. RECENCY PRIORITY: Return exactly 3 MOST RECENT articles from ${baseDomain}, sorted by publication date (newest first). It's okay if articles are from months ago - just get the 3 most recent ones available from this source. Some blogs publish infrequently (monthly or less), so older articles are acceptable as long as they're the most recent from this source.
-2. DOMAIN MATCHING: ONLY return articles from ${baseDomain} domain. Check every URL - it MUST contain "${baseDomain}" in the hostname. Reject any URLs from other domains (like tim.blog, medium.com, etc.)
-3. CANONICAL URLs: Prefer SHORT/CANONICAL URLs over long slugs. Many sites use short URLs like "/incentive-dynamic-engine" instead of long slugs like "/io-net-launches-the-first-adaptive-economic-engine-for-decentralized-compute". When search results show both, prefer the shorter canonical URL.
-4. Extract ACTUAL article URLs from search results - NOT Google redirect URLs (avoid any URLs containing "vertexaisearch.cloud.google.com" or "grounding-api-redirect")
-5. Each article URL must be a DIRECT link to the article page on ${baseDomain} (e.g., https://${baseDomain}/blog/article-slug or https://${baseDomain}/article-title)
-6. DO NOT return generic blog homepage URLs like "${source.url}" or "${source.url}/" - only return URLs with specific article paths (must have /blog/article-name or /article-name format)
-7. DATE ACCURACY: Extract publication dates from search results. Dates are CRITICAL - try hard to find dates in search snippets, article previews, or metadata. Search results often show dates like "2 days ago", "Dec 11, 2025", etc. - convert these to YYYY-MM-DD format. Only use null if absolutely no date information is available.
-8. Each article must have a unique URL path beyond the base blog URL (at least 10 characters in the path after the domain)
-9. TITLE REQUIREMENT: Every article MUST have a non-null, non-empty title. Do NOT return articles with null or empty titles.
+
+2. DOMAIN MATCHING: ONLY return articles from ${baseDomain} domain. Check every URL - it MUST contain "${baseDomain}" in the hostname. Reject any URLs from other domains (like tim.blog, medium.com, etc.). If search results show articles from other domains, ignore them completely.
+
+3. CANONICAL URLs: Prefer SHORT/CANONICAL URLs over long slugs. Many sites use short URLs like "/incentive-dynamic-engine" instead of long slugs like "/io-net-launches-the-first-adaptive-economic-engine-for-decentralized-compute". When search results show both, prefer the shorter canonical URL. The URL path should be meaningful but concise.
+
+4. Extract ACTUAL article URLs from search results - NOT Google redirect URLs. NEVER use URLs containing:
+   - "vertexaisearch.cloud.google.com"
+   - "grounding-api-redirect"
+   - "google.com/grounding"
+   - Any other Google redirect service
+   Extract the FINAL destination URL from search results, not the redirect link.
+
+5. Each article URL must be a DIRECT link to the article page on ${baseDomain}. Examples:
+   - ✅ GOOD: https://${baseDomain}/blog/article-slug
+   - ✅ GOOD: https://${baseDomain}/article-title
+   - ✅ GOOD: https://${baseDomain}/blog/2025/12/article-name
+   - ❌ BAD: https://${baseDomain}/blog (homepage)
+   - ❌ BAD: https://${baseDomain}/ (homepage)
+   - ❌ BAD: https://${baseDomain}/about (not an article - this is an About page)
+   - ❌ BAD: https://${baseDomain}/contact (not an article - this is a Contact page)
+   - ❌ BAD: https://${baseDomain}/privacy (not an article - this is a Privacy page)
+   NEVER return URLs to non-article pages like /about, /contact, /privacy, /terms, /team, /careers, etc. Only return URLs to actual blog posts or articles.
+
+6. DO NOT return generic blog homepage URLs like "${source.url}" or "${source.url}/" - only return URLs with specific article paths. The URL must have a meaningful path segment after the domain (at least 10 characters in the path).
+
+7. DATE ACCURACY: Extract publication dates from search results. Dates are CRITICAL - try hard to find dates in:
+   - Search result snippets (e.g., "2 days ago", "Dec 11, 2025")
+   - Article previews in search results
+   - Metadata shown in search results
+   Convert relative dates like "2 days ago" to absolute dates. Format: YYYY-MM-DD (e.g., "2025-12-15"). Only use null if absolutely no date information is available in the search results.
+
+8. TITLE REQUIREMENT: Every article MUST have a non-null, non-empty, meaningful title. Do NOT return:
+   - null or empty titles
+   - Generic titles like "Blog", "Home", "Article", "Untitled"
+   - Titles that are just the domain name
+   Extract the actual article headline from search results.
+
+9. URL PATH VALIDATION: Each article must have a unique URL path beyond the base blog URL. The path (after the domain) must be at least 11 characters long (including the leading "/"). This ensures we have a specific article, not a generic page.
 
 EXAMPLES OF WHAT TO RETURN:
-✅ GOOD: {"title": "How to Build AI Agents", "url": "https://${baseDomain}/blog/how-to-build-ai-agents", "datePublished": "2025-12-15"}
-✅ GOOD: {"title": "New Feature Launch", "url": "https://${baseDomain}/blog/new-feature-launch", "datePublished": "2025-12-10"}
+✅ GOOD: {"title": "How to Build AI Agents in 2025", "url": "https://${baseDomain}/blog/how-to-build-ai-agents", "datePublished": "2025-12-15", "description": "A guide to building AI agents..."}
+✅ GOOD: {"title": "New Feature Launch: Agent Marketplace", "url": "https://${baseDomain}/blog/new-feature-launch", "datePublished": "2025-12-10", "description": "We're excited to announce..."}
+✅ GOOD: {"title": "Q4 2025 Product Updates", "url": "https://${baseDomain}/updates/q4-2025", "datePublished": "2025-11-20", "description": "Here's what's new..."}
 
 EXAMPLES OF WHAT NOT TO RETURN:
 ❌ BAD: {"title": "Blog", "url": "https://${baseDomain}/blog", ...} - This is the homepage, not an article
 ❌ BAD: {"title": null, "url": "https://${baseDomain}/article", ...} - Missing title
 ❌ BAD: {"title": "Article", "url": "https://vertexaisearch.cloud.google.com/...", ...} - Google redirect URL
 ❌ BAD: {"title": "Article", "url": "https://other-domain.com/article", ...} - Wrong domain
+❌ BAD: {"title": "Home", "url": "https://${baseDomain}/", ...} - Homepage, not an article
+❌ BAD: {"title": "About Us", "url": "https://${baseDomain}/about", ...} - Not an article page (this is an About page)
+❌ BAD: {"title": "Contact", "url": "https://${baseDomain}/contact", ...} - Not an article page
+❌ BAD: {"title": "Privacy Policy", "url": "https://${baseDomain}/privacy", ...} - Not an article page
 
 VERIFY BEFORE RETURNING:
-- Every URL must contain "${baseDomain}" in the hostname
+- Every URL must contain "${baseDomain}" in the hostname (exact match, case-insensitive)
 - Every URL must have a specific article path (not just /blog or /)
-- Every title must be non-null and non-empty
+- Every title must be non-null, non-empty, and meaningful (not generic)
 - Prefer shorter canonical URLs over long slugs when both are available
-- No redirect URLs from Google
+- No redirect URLs from Google or any other service
 - Articles are sorted by date (newest first) - this is the most recent from this source
+- Each URL path must be at least 11 characters long (including leading "/")
 
 Return a JSON array with articles sorted by date (most recent first):
 - title: Complete article title (REQUIRED - must be non-null, non-empty, not generic, not "Blog" or "Home")
@@ -335,7 +373,8 @@ ONLY include articles from ${baseDomain}. DO NOT include redirect URLs, generic 
         // Check if response is just empty markdown code blocks (e.g., just "```")
         const trimmedResponse = fullResponse.trim();
         if (trimmedResponse === '```' || trimmedResponse === '```json' || trimmedResponse.length < 10) {
-          console.log(`⚠️ [ADK] Response is empty or minimal (${trimmedResponse.length} chars). Agent may not have completed the request.`);
+          console.log(`⚠️ [ADK] [ISSUE] Response is empty or minimal (${trimmedResponse.length} chars). Agent may not have completed the request.`);
+          console.log(`⚠️ [ADK] [ISSUE] This could indicate: 1) Agent didn't use Google Search tool, 2) Search returned no results, 3) Agent response was truncated`);
         } else {
           try {
             // Clean up control characters that can break JSON parsing
@@ -349,17 +388,21 @@ ONLY include articles from ${baseDomain}. DO NOT include redirect URLs, generic 
                 articles = parsed;
                 console.log(`✅ [ADK] Found ${articles.length} articles in full response JSON`);
               } else {
-                console.log(`⚠️ [ADK] Found JSON array but it's empty`);
+                console.log(`⚠️ [ADK] [ISSUE] Found JSON array but it's empty. Agent may not have found any articles.`);
               }
             } else {
-              console.log(`⚠️ [ADK] No JSON array found in response. Response might be text-only.`);
+              console.log(`⚠️ [ADK] [ISSUE] No JSON array found in response. Response might be text-only or agent didn't follow format.`);
+              console.log(`⚠️ [ADK] [ISSUE] Full response preview: ${fullResponse.substring(0, 500)}...`);
             }
           } catch (e) {
-            console.log(`⚠️ [ADK] Could not parse JSON from agent response: ${e.message}`);
+            console.log(`⚠️ [ADK] [ISSUE] Could not parse JSON from agent response: ${e.message}`);
+            console.log(`⚠️ [ADK] [ISSUE] Response preview: ${fullResponse.substring(0, 500)}...`);
           }
         }
       } else if (articles.length > 0) {
         console.log(`✅ [ADK] Successfully extracted ${articles.length} articles from agent response`);
+      } else if (articles.length === 0 && !fullResponse) {
+        console.log(`⚠️ [ADK] [ISSUE] No articles found and no response text. Agent may have failed silently or not executed.`);
       }
       
       // Filter articles to only include those from the same domain
@@ -379,12 +422,31 @@ ONLY include articles from ${baseDomain}. DO NOT include redirect URLs, generic 
         return true;
       });
       
+      // Track ADK accuracy metrics
+      const accuracyMetrics = {
+        totalReturned: articles.length,
+        filteredOut: {
+          missingUrl: 0,
+          nullTitle: 0,
+          googleRedirect: 0,
+          nullUrl: 0,
+          wrongDomain: 0,
+          genericUrl: 0,
+          shortPath: 0,
+          invalidUrl: 0
+        },
+        validArticles: 0,
+        articlesWithDates: 0,
+        articlesWithoutDates: 0
+      };
+
       const articlesBeforeFilter = articles.length;
       const filteredArticles = articles.filter(article => {
         try {
           const articleUrl = article.url || article.link;
           if (!articleUrl) {
-            console.log(`⚠️ [ADK] Filtering out article with missing URL (title: ${article.title || 'unknown'})`);
+            accuracyMetrics.filteredOut.missingUrl++;
+            console.log(`⚠️ [ADK] [ACCURACY] Filtering out article with missing URL (title: ${article.title || 'unknown'})`);
             return false;
           }
           
@@ -392,13 +454,15 @@ ONLY include articles from ${baseDomain}. DO NOT include redirect URLs, generic 
           if (articleUrl.includes('vertexaisearch.cloud.google.com') || 
               articleUrl.includes('grounding-api-redirect') ||
               articleUrl.includes('google.com/grounding')) {
-            console.log(`⚠️ [ADK] Filtering out Google redirect URL: ${articleUrl.substring(0, 80)}...`);
+            accuracyMetrics.filteredOut.googleRedirect++;
+            console.log(`⚠️ [ADK] [ACCURACY] Filtering out Google redirect URL: ${articleUrl.substring(0, 80)}...`);
             return false;
           }
           
           // Filter out null URLs or placeholder URLs
           if (articleUrl === 'null' || articleUrl === null || articleUrl.trim() === '') {
-            console.log(`⚠️ [ADK] Filtering out null/empty URL (title: ${article.title || 'unknown'})`);
+            accuracyMetrics.filteredOut.nullUrl++;
+            console.log(`⚠️ [ADK] [ACCURACY] Filtering out null/empty URL (title: ${article.title || 'unknown'})`);
             return false;
           }
           
@@ -407,6 +471,8 @@ ONLY include articles from ${baseDomain}. DO NOT include redirect URLs, generic 
           
           // Must match domain
           if (articleDomain !== sourceDomain) {
+            accuracyMetrics.filteredOut.wrongDomain++;
+            console.log(`⚠️ [ADK] [ACCURACY] Filtering out wrong domain: ${articleDomain} (expected: ${sourceDomain}) - Title: "${article.title?.substring(0, 50) || 'unknown'}" - URL: ${articleUrl.substring(0, 80)}...`);
             return false;
           }
           
@@ -414,41 +480,77 @@ ONLY include articles from ${baseDomain}. DO NOT include redirect URLs, generic 
           const articlePath = articleUrlObj.pathname;
           // If URL is just the base blog URL or homepage, skip it
           if (articlePath === '/' || articlePath === basePath || articlePath === basePath + '/') {
-            console.log(`⚠️ [ADK] Filtering out generic URL (homepage/base): ${articleUrl}`);
+            accuracyMetrics.filteredOut.genericUrl++;
+            console.log(`⚠️ [ADK] [ACCURACY] Filtering out generic URL (homepage/base): ${articleUrl}`);
             return false;
           }
           
-          // Must have a meaningful article path (not just "/" or base path)
-          // The prompt says "at least 10 characters in the path after the domain"
-          // But we need to be flexible: some valid URLs might be shorter (e.g., "/blog/a" = 7 chars)
-          // So we check that there's actual content beyond the base path
+          // Filter out common non-article pages (about, contact, privacy, terms, etc.)
+          const nonArticlePaths = ['/about', '/contact', '/privacy', '/terms', '/terms-of-service', 
+                                   '/privacy-policy', '/legal', '/careers', '/jobs', '/team', 
+                                   '/faq', '/help', '/support', '/docs', '/documentation'];
+          const normalizedPath = articlePath.toLowerCase().replace(/\/$/, ''); // Remove trailing slash
+          if (nonArticlePaths.includes(normalizedPath) || 
+              normalizedPath.startsWith('/about/') ||
+              normalizedPath.startsWith('/contact/') ||
+              normalizedPath.startsWith('/privacy') ||
+              normalizedPath.startsWith('/terms')) {
+            accuracyMetrics.filteredOut.genericUrl++;
+            console.log(`⚠️ [ADK] [ACCURACY] Filtering out non-article page (${normalizedPath}): ${articleUrl}`);
+            return false;
+          }
+          
+          // Must have at least 10 characters in the path after the domain (as per prompt requirement)
+          // Calculate path length after removing the base path
           const pathAfterBase = articlePath.startsWith(basePath) 
             ? articlePath.substring(basePath.length) 
             : articlePath;
+          const pathAfterDomain = articlePath; // Full pathname after domain
           
-          // If path after base is too short (less than 3 chars like "/a"), it's likely not a real article
-          // But if basePath is "/blog" and articlePath is "/blog/article", pathAfterBase would be "/article" (8 chars) - good
-          // If basePath is "/" and articlePath is "/a", pathAfterBase would be "/a" (2 chars) - too short
-          if (pathAfterBase.length < 3) {
-            console.log(`⚠️ [ADK] Filtering out URL with insufficient path after base (${pathAfterBase.length} chars): ${articleUrl}`);
+          // Check: path after domain should be at least 10 characters (excluding leading slash)
+          // This ensures we have a meaningful article path like "/blog/article-name" or "/article-slug"
+          if (pathAfterDomain.length < 11) { // At least "/" + 10 chars = 11 total
+            accuracyMetrics.filteredOut.shortPath++;
+            console.log(`⚠️ [ADK] [ACCURACY] Filtering out URL with insufficient path length (${pathAfterDomain.length} chars, need at least 11): ${articleUrl}`);
             return false;
           }
           
-          // Also ensure the full pathname is meaningful (at least 5 chars total, e.g., "/blog" = 5)
-          if (articlePath.length < 5) {
-            console.log(`⚠️ [ADK] Filtering out URL with insufficient total path length (${articlePath.length} chars): ${articleUrl}`);
-            return false;
+          // Article passed all filters
+          accuracyMetrics.validArticles++;
+          if (article.datePublished) {
+            accuracyMetrics.articlesWithDates++;
+          } else {
+            accuracyMetrics.articlesWithoutDates++;
           }
-          
           return true;
         } catch (e) {
           // Invalid URL format
-          console.log(`⚠️ [ADK] Filtering out invalid URL: ${article.url || article.link || 'unknown'} - ${e.message}`);
+          accuracyMetrics.filteredOut.invalidUrl++;
+          console.log(`⚠️ [ADK] [ACCURACY] Filtering out invalid URL: ${article.url || article.link || 'unknown'} - ${e.message}`);
           return false;
         }
       });
 
       const articlesFiltered = articlesBeforeFilter - filteredArticles.length;
+      
+      // Log comprehensive ADK accuracy report
+      console.log(`\n📊 [ADK] [ACCURACY REPORT] for ${source.name} (${sourceDomain}):`);
+      console.log(`   Total articles returned by ADK: ${accuracyMetrics.totalReturned}`);
+      console.log(`   Valid articles after filtering: ${accuracyMetrics.validArticles}`);
+      console.log(`   Articles with dates: ${accuracyMetrics.articlesWithDates}`);
+      console.log(`   Articles without dates: ${accuracyMetrics.articlesWithoutDates}`);
+      console.log(`   Filtered out:`);
+      console.log(`     - Missing URL: ${accuracyMetrics.filteredOut.missingUrl}`);
+      console.log(`     - Null/empty URL: ${accuracyMetrics.filteredOut.nullUrl}`);
+      console.log(`     - Google redirect URLs: ${accuracyMetrics.filteredOut.googleRedirect}`);
+      console.log(`     - Wrong domain: ${accuracyMetrics.filteredOut.wrongDomain}`);
+      console.log(`     - Generic/homepage URLs: ${accuracyMetrics.filteredOut.genericUrl}`);
+      console.log(`     - Short path (< 11 chars): ${accuracyMetrics.filteredOut.shortPath}`);
+      console.log(`     - Invalid URL format: ${accuracyMetrics.filteredOut.invalidUrl}`);
+      const accuracyRate = accuracyMetrics.totalReturned > 0 
+        ? ((accuracyMetrics.validArticles / accuracyMetrics.totalReturned) * 100).toFixed(1)
+        : 0;
+      console.log(`   Accuracy rate: ${accuracyRate}% (${accuracyMetrics.validArticles}/${accuracyMetrics.totalReturned} valid)\n`);
       
       if (filteredArticles.length === 0) {
         if (articlesBeforeFilter > 0) {
@@ -583,6 +685,12 @@ ONLY include articles from ${baseDomain}. DO NOT include redirect URLs, generic 
           console.log(`   ${i + 1}. "${article.title.substring(0, 50)}..." (date: ${article.datePublished || 'none'})`);
         });
       }
+      
+      // Log final ADK summary
+      const dateCoverage = lightweightArticles.length > 0
+        ? ((lightweightArticles.filter(a => a.datePublished).length / lightweightArticles.length) * 100).toFixed(1)
+        : 0;
+      console.log(`📊 [ADK] [SUMMARY] ${source.name}: ${lightweightArticles.length} valid articles, ${dateCoverage}% have dates`);
       
       // If no valid articles found, throw error to trigger fallback to traditional scraper
       if (lightweightArticles.length === 0) {

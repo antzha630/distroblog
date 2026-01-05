@@ -23,7 +23,6 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
   const [showCategorySuggestions, setShowCategorySuggestions] = useState(false);
   const [editingCategory, setEditingCategory] = useState(null);
   const [newCategory, setNewCategory] = useState('');
-  const [isReScrapingAll, setIsReScrapingAll] = useState(false);
   const abortControllerRef = useRef(null);
 
   useEffect(() => {
@@ -288,57 +287,6 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
     }
   };
 
-  const handleReScrapeAll = async () => {
-    const scrapingSources = sources.filter(s => s.monitoring_type === 'SCRAPING' && s.is_active);
-    const allScrapingSources = sources.filter(s => s.monitoring_type === 'SCRAPING');
-    
-    if (allScrapingSources.length === 0) {
-      alert('No scraping sources found to re-scrape.');
-      return;
-    }
-    
-    if (scrapingSources.length === 0) {
-      if (!window.confirm(`All scraping sources are paused. Re-scrape all ${allScrapingSources.length} scraping sources anyway?\n\nThis will update existing articles with improved titles and dates. This may take several minutes.`)) {
-        return;
-      }
-    } else {
-      if (!window.confirm(`Re-scrape all ${scrapingSources.length} active scraping sources?\n\nThis will update existing articles with improved titles and dates. This may take several minutes.`)) {
-        return;
-      }
-    }
-    
-    setIsReScrapingAll(true);
-    
-    try {
-      const response = await axios.post('/api/sources/re-scrape-all');
-      
-      const results = response.data.results || [];
-      const successCount = results.filter(r => r.success).length;
-      const totalUpdated = response.data.total_articles_updated || 0;
-      const totalDeleted = response.data.total_articles_deleted || 0;
-      
-      let message = `Bulk re-scrape complete!\n\n`;
-      message += `Sources processed: ${response.data.sources_processed}\n`;
-      message += `Successful: ${successCount}\n`;
-      message += `Articles updated: ${totalUpdated}\n`;
-      message += `Bad articles deleted: ${totalDeleted}\n\n`;
-      
-      if (results.some(r => !r.success)) {
-        message += `Some sources had errors. Check console for details.`;
-      }
-      
-      alert(message);
-      
-      // Refresh sources list
-      await fetchSources();
-    } catch (error) {
-      console.error('Error re-scraping all sources:', error);
-      alert('Failed to re-scrape sources: ' + (error.response?.data?.error || error.message));
-    } finally {
-      setIsReScrapingAll(false);
-    }
-  };
-
   const handleRemoveSource = async (sourceId, sourceName) => {
     setIsRemoving(true);
     
@@ -498,62 +446,6 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
           </button>
           )}
         </div>
-
-        {/* Re-scrape All button - visible above sources list */}
-        {!showAddForm && (() => {
-          const scrapingSources = sources.filter(s => s.monitoring_type === 'SCRAPING' && s.is_active);
-          console.log('Scraping sources count:', scrapingSources.length, 'Total sources:', sources.length);
-          console.log('Sources:', sources.map(s => ({ name: s.name, type: s.monitoring_type, active: s.is_active })));
-          
-          // Always show button if there are any scraping sources (even if paused)
-          const allScrapingSources = sources.filter(s => s.monitoring_type === 'SCRAPING');
-          if (allScrapingSources.length === 0) return null;
-          
-          return (
-            <div style={{
-              display: 'flex',
-              justifyContent: 'center',
-              marginBottom: '20px',
-              padding: '12px',
-              background: '#f8f9fa',
-              borderRadius: '4px',
-              border: '1px solid #e9ecef'
-            }}>
-              <button
-                onClick={handleReScrapeAll}
-                disabled={isReScrapingAll}
-                style={{
-                  background: isReScrapingAll ? '#6c757d' : '#17a2b8',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: isReScrapingAll ? 'not-allowed' : 'pointer',
-                  padding: '12px 24px',
-                  fontSize: '1rem',
-                  fontWeight: '600',
-                  boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
-                  transition: 'all 0.2s'
-                }}
-                onMouseEnter={(e) => {
-                  if (!isReScrapingAll) {
-                    e.target.style.background = '#138496';
-                    e.target.style.transform = 'translateY(-1px)';
-                    e.target.style.boxShadow = '0 4px 6px rgba(0,0,0,0.2)';
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (!isReScrapingAll) {
-                    e.target.style.background = '#17a2b8';
-                    e.target.style.transform = 'translateY(0)';
-                    e.target.style.boxShadow = '0 2px 4px rgba(0,0,0,0.15)';
-                  }
-                }}
-              >
-                {isReScrapingAll ? '⏳ Re-scraping All...' : '🔄 Re-scrape All Sources'}
-              </button>
-            </div>
-          );
-        })()}
 
         {showAddForm && (
           <div style={{ 

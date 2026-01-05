@@ -432,7 +432,7 @@ class FeedMonitor {
               
               const scrapeDuration = Date.now() - scrapeStartTime;
               if (articles.length > 0) {
-                console.log(`✅ [CHECK NOW] [${source.name}] ADK extracted ${articles.length} articles in ${scrapeDuration}ms`);
+              console.log(`✅ [CHECK NOW] [${source.name}] ADK extracted ${articles.length} articles in ${scrapeDuration}ms`);
               } else {
                 console.log(`❌ [CHECK NOW] [${source.name}] ADK failed (0 valid articles) in ${scrapeDuration}ms`);
               }
@@ -451,8 +451,8 @@ class FeedMonitor {
                 articles = []; // Skip scraping if memory is too high
               } else {
                 console.log(`🔄 [CHECK NOW] [${source.name}] ADK returned 0 articles, falling back to traditional scraper (Playwright/static)...`);
-                try {
-                  articles = await this.webScraper.scrapeArticles(source);
+              try {
+                articles = await this.webScraper.scrapeArticles(source);
                 const fallbackDuration = Date.now() - scrapeStartTime;
                 if (articles.length > 0) {
                   console.log(`✅ [CHECK NOW] [${source.name}] Traditional scraper extracted ${articles.length} articles in ${fallbackDuration}ms`);
@@ -464,12 +464,12 @@ class FeedMonitor {
                 articles = [];
               }
             }
-              
+            
               // Clean up browser if traditional scraper was used (Playwright creates browser instances)
               // Playwright browsers need extra time to fully release memory
-              try {
+            try {
                 if (this.webScraper && typeof this.webScraper.close === 'function') {
-                  await this.webScraper.close();
+              await this.webScraper.close();
                 }
               } catch (closeError) {
                 // Ignore cleanup errors
@@ -484,14 +484,14 @@ class FeedMonitor {
               
               // Force garbage collection after Playwright cleanup
               try {
-                if (global.gc) {
-                  global.gc();
+              if (global.gc) {
+                global.gc();
                   console.log(`🧹 [CHECK NOW] [${source.name}] Forced garbage collection after Playwright cleanup`);
-                }
-              } catch (gcError) {
-                // Ignore cleanup errors
               }
-              
+              } catch (gcError) {
+              // Ignore cleanup errors
+            }
+            
               // Mark that Playwright was used so we can add extra delay between sources
               source._playwrightUsed = true;
             }
@@ -638,68 +638,68 @@ class FeedMonitor {
                     if (shouldSkipMetadata) {
                       console.log(`⏩ [CHECK NOW] [${source.name}] Skipping metadata fetch for invalid URL`);
                     } else {
-                      try {
-                        console.log(`🔍 [CHECK NOW] [${source.name}] Fetching optimized metadata (title/date) for: ${article.link.substring(0, 60)}...`);
-                        const metadataStartTime = Date.now();
-                        
-                        // Use extractArticleMetadata - same optimized logic as re-scrape
-                        const metadata = await this.extractArticleMetadata(article.link);
-                        const metadataDuration = Date.now() - metadataStartTime;
-                        console.log(`✅ [CHECK NOW] [${source.name}] Optimized metadata fetched in ${metadataDuration}ms`);
-                        
-                        // Skip post-metadata delay to speed up
-                        
-                        // Use article page title if available and better (same logic as re-scrape)
-                        if (metadata.title && metadata.title.trim().length > 10) {
-                          const newTitle = metadata.title.trim();
-                          const newTitleLower = newTitle.toLowerCase();
-                          const isGeneric = newTitleLower.includes('blog') ||
-                                           newTitleLower.includes('all posts') ||
-                                           newTitleLower.includes('latest by topic') ||
-                                           newTitleLower.includes('mothership') ||
-                                           newTitleLower.includes('backbone of ai infrastructure') ||
+                    try {
+                      console.log(`🔍 [CHECK NOW] [${source.name}] Fetching optimized metadata (title/date) for: ${article.link.substring(0, 60)}...`);
+                      const metadataStartTime = Date.now();
+                      
+                      // Use extractArticleMetadata - same optimized logic as re-scrape
+                      const metadata = await this.extractArticleMetadata(article.link);
+                      const metadataDuration = Date.now() - metadataStartTime;
+                      console.log(`✅ [CHECK NOW] [${source.name}] Optimized metadata fetched in ${metadataDuration}ms`);
+                      
+                      // Skip post-metadata delay to speed up
+                      
+                      // Use article page title if available and better (same logic as re-scrape)
+                    if (metadata.title && metadata.title.trim().length > 10) {
+                      const newTitle = metadata.title.trim();
+                      const newTitleLower = newTitle.toLowerCase();
+                      const isGeneric = newTitleLower.includes('blog') ||
+                                       newTitleLower.includes('all posts') ||
+                                       newTitleLower.includes('latest by topic') ||
+                                       newTitleLower.includes('mothership') ||
+                                       newTitleLower.includes('backbone of ai infrastructure') ||
                                            newTitleLower.includes('page not found') ||
                                            newTitleLower.includes('500') ||
                                            newTitleLower.includes('internal server error') ||
                                            newTitleLower.includes('just a moment') ||
-                                           (newTitle.length < 25 && (
-                                             newTitleLower === 'blockchain web3' ||
-                                             newTitleLower === 'cybersecurity' ||
-                                             newTitleLower === 'company updates' ||
-                                             newTitleLower === 'io intelligence' ||
-                                             newTitleLower === 'ai infrastructure compute' ||
-                                             newTitleLower === 'ai startup corner' ||
-                                             newTitleLower === 'developer resources' ||
-                                             (newTitleLower.includes('swarm community call') && newTitleLower.includes('recap'))
-                                           ));
-                          
-                          if (!isGeneric) {
-                              improvedTitle = newTitle;
-                              console.log(`📝 [CHECK NOW] [${source.name}] Using optimized title: "${improvedTitle.substring(0, 60)}..."`);
-                          } else {
+                                       (newTitle.length < 25 && (
+                                         newTitleLower === 'blockchain web3' ||
+                                         newTitleLower === 'cybersecurity' ||
+                                         newTitleLower === 'company updates' ||
+                                         newTitleLower === 'io intelligence' ||
+                                         newTitleLower === 'ai infrastructure compute' ||
+                                         newTitleLower === 'ai startup corner' ||
+                                         newTitleLower === 'developer resources' ||
+                                         (newTitleLower.includes('swarm community call') && newTitleLower.includes('recap'))
+                                       ));
+                      
+                      if (!isGeneric) {
+                          improvedTitle = newTitle;
+                          console.log(`📝 [CHECK NOW] [${source.name}] Using optimized title: "${improvedTitle.substring(0, 60)}..."`);
+                      } else {
                               console.log(`⚠️  [CHECK NOW] [${source.name}] Article page title is generic/error, keeping original`);
-                          }
-                        } else {
-                            console.log(`⚠️  [CHECK NOW] [${source.name}] Article page title not found, keeping original`);
-                        }
-                        
-                        // Use article page date if available (same logic as re-scrape)
-                        if (metadata.pubDate) {
-                          try {
-                            const articlePageDate = new Date(metadata.pubDate);
-                            if (!isNaN(articlePageDate.getTime())) {
-                                improvedDate = articlePageDate;
+                      }
+                    } else {
+                        console.log(`⚠️  [CHECK NOW] [${source.name}] Article page title not found, keeping original`);
+                    }
+                    
+                      // Use article page date if available (same logic as re-scrape)
+                    if (metadata.pubDate) {
+                      try {
+                        const articlePageDate = new Date(metadata.pubDate);
+                        if (!isNaN(articlePageDate.getTime())) {
+                            improvedDate = articlePageDate;
                             console.log(`📅 [CHECK NOW] [${source.name}] Found optimized date: ${improvedDate.toISOString()}`);
                         }
                       } catch (e) {
                           console.log(`⚠️  [CHECK NOW] [${source.name}] Invalid date format: ${metadata.pubDate}`);
                       }
-                        } else {
-                            console.log(`⚠️  [CHECK NOW] [${source.name}] No date found on article page`);
-                        }
-                      } catch (err) {
-                        // If fetching fails, use what we have from listing page
-                        console.log(`❌ [CHECK NOW] [${source.name}] Could not fetch optimized metadata: ${err.message} (using listing page data)`);
+                    } else {
+                        console.log(`⚠️  [CHECK NOW] [${source.name}] No date found on article page`);
+                    }
+                  } catch (err) {
+                    // If fetching fails, use what we have from listing page
+                      console.log(`❌ [CHECK NOW] [${source.name}] Could not fetch optimized metadata: ${err.message} (using listing page data)`);
                       }
                     }
                   } else {
@@ -787,18 +787,18 @@ class FeedMonitor {
                   
                   if (articleObj.title && articleObj.title.trim() !== '' && articleObj.link) {
                     try {
-                      await database.addArticle(articleObj);
-                      newArticles.push({
-                        id: articleObj.sourceId,
-                        title: articleObj.title,
-                        link: articleObj.link,
-                        pubDate: articleObj.pubDate
-                      });
-                      
-                      // Log new article found with optimized data
-                      console.log(`✨ [CHECK NOW] [${source.name}] NEW ARTICLE ADDED (with optimized title/date): "${articleObj.title.substring(0, 60)}..." | Date: ${articleObj.pubDate || 'NO DATE'}`);
-                      
-                      // Removed per-article delay to speed up
+                    await database.addArticle(articleObj);
+                    newArticles.push({
+                      id: articleObj.sourceId,
+                      title: articleObj.title,
+                      link: articleObj.link,
+                      pubDate: articleObj.pubDate
+                    });
+                    
+                    // Log new article found with optimized data
+                    console.log(`✨ [CHECK NOW] [${source.name}] NEW ARTICLE ADDED (with optimized title/date): "${articleObj.title.substring(0, 60)}..." | Date: ${articleObj.pubDate || 'NO DATE'}`);
+                    
+                    // Removed per-article delay to speed up
                     } catch (addErr) {
                       // Handle duplicate key error gracefully (might happen due to race conditions or duplicate links)
                       if (addErr.code === '23505' || addErr.message?.includes('duplicate key')) {
@@ -1723,25 +1723,60 @@ class FeedMonitor {
         /\b(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2}),?\s+(\d{4})\b/i,
         // 12 November 2025
         /\b(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})\b/i,
-        // YYYY-MM-DD
+        // YYYY-MM-DD or YYYY/MM/DD
         /\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b/,
         // MM/DD/YYYY or DD/MM/YYYY
         /\b(\d{1,2})[-/](\d{1,2})[-/](\d{4})\b/,
+        // DD-MMM-YY format (e.g., "06-Nov-25", "03-Nov-25")
+        /\b(\d{1,2})[-/](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[-/](\d{2,4})\b/i,
+        // ISO 8601 with time: 2025-12-15T10:00:00Z or 2025-12-15T10:00:00+00:00
+        /\b(\d{4})[-/](\d{2})[-/](\d{2})T\d{2}:\d{2}:\d{2}/,
       ];
       for (const pattern of patterns) {
         const match = text.match(pattern);
         if (match) {
-          const dt = new Date(match[0]);
-          if (!isNaN(dt.getTime())) {
-            return dt.toISOString();
+          try {
+            let dateStr = match[0];
+            
+            // Handle DD-MMM-YY format specifically (e.g., "06-Nov-25")
+            if (match[2] && /[A-Za-z]{3}/.test(match[2])) {
+              const day = match[1];
+              const month = match[2];
+              const year = match[3].length === 2 ? `20${match[3]}` : match[3];
+              dateStr = `${day}-${month}-${year}`;
+            }
+            
+            const dt = new Date(dateStr);
+            if (!isNaN(dt.getTime())) {
+              // Validate the date is reasonable (not in the distant future/past)
+              const now = new Date();
+              const yearDiff = dt.getFullYear() - now.getFullYear();
+              if (yearDiff >= -10 && yearDiff <= 5) {
+                return dt.toISOString();
+              }
+            }
+          } catch (e) {
+            // Continue to next pattern
           }
         }
       }
       // Fallback: Date.parse
-      const dt = new Date(text);
-      return isNaN(dt.getTime()) ? null : dt.toISOString();
+      try {
+        const dt = new Date(text);
+        if (!isNaN(dt.getTime())) {
+          const now = new Date();
+          const yearDiff = dt.getFullYear() - now.getFullYear();
+          if (yearDiff >= -10 && yearDiff <= 5) {
+            return dt.toISOString();
+          }
+        }
+      } catch (e) {
+        // Ignore
+      }
+      return null;
     };
 
+    const debugLog = [];
     try {
       const resp = await axios.get(url, {
         timeout: 8000,
@@ -1758,17 +1793,27 @@ class FeedMonitor {
         'meta[property="article:published_time"]',
         'meta[name="article:published_time"]',
         'meta[property="og:article:published_time"]',
+        'meta[property="article:published"]',
         'meta[name="publishdate"]',
         'meta[name="pubdate"]',
         'meta[name="date"]',
+        'meta[name="DC.date"]',
+        'meta[name="dcterms.date"]',
+        'meta[property="published_time"]',
         'time[datetime]',
+        'time[pubdate]',
         'time',
         '[datetime]',
         '[data-date]',
         '[data-published]',
+        '[data-pubdate]',
         '[class*="date"]',
         '[class*="published"]',
         '[class*="publish"]',
+        '[class*="pub-date"]',
+        '[class*="post-date"]',
+        '[id*="date"]',
+        '[id*="published"]',
       ];
 
       for (const sel of selectors) {
@@ -1779,33 +1824,54 @@ class FeedMonitor {
             el.attr('datetime') ||
             el.attr('date') ||
             el.attr('data-date') ||
+            el.attr('data-published') ||
+            el.attr('data-pubdate') ||
             el.text();
-          const parsed = parseDate(val);
-          if (parsed) return parsed;
+          if (val) {
+            const parsed = parseDate(val);
+            if (parsed) {
+              debugLog.push(`Found date via selector "${sel}": ${parsed}`);
+              return parsed;
+            }
+          }
         }
       }
 
-      // Try JSON-LD
+      // Try JSON-LD (more comprehensive)
       try {
         $('script[type="application/ld+json"]').each((_, script) => {
           if (!script || !script.children || script.children.length === 0) return;
           const jsonText = $(script).html();
           if (!jsonText) return;
-          const data = JSON.parse(jsonText);
-          const pick = (obj) => {
-            if (!obj) return null;
-            if (obj.datePublished) return parseDate(obj.datePublished);
-            if (obj.dateCreated) return parseDate(obj.dateCreated);
-            return null;
-          };
-          let cand = pick(data);
-          if (!cand && Array.isArray(data)) {
-            for (const item of data) {
-              cand = pick(item);
-              if (cand) break;
+          try {
+            const data = JSON.parse(jsonText);
+            const pick = (obj) => {
+              if (!obj) return null;
+              if (obj.datePublished) return parseDate(obj.datePublished);
+              if (obj.dateCreated) return parseDate(obj.dateCreated);
+              if (obj.dateModified) return parseDate(obj.dateModified);
+              if (obj.publishedDate) return parseDate(obj.publishedDate);
+              if (obj.publishDate) return parseDate(obj.publishDate);
+              if (obj.pubDate) return parseDate(obj.pubDate);
+              return null;
+            };
+            let cand = pick(data);
+            if (!cand && Array.isArray(data)) {
+              for (const item of data) {
+                cand = pick(item);
+                if (cand) break;
+              }
             }
+            if (cand) {
+              debugLog.push(`Found date via JSON-LD: ${cand}`);
+              throw new Error(`DATE_FOUND:${cand}`);
+            }
+          } catch (e) {
+            if (typeof e.message === 'string' && e.message.startsWith('DATE_FOUND:')) {
+              throw e; // Re-throw to return the date
+            }
+            // Continue if JSON parse error
           }
-          if (cand) throw new Error(`DATE_FOUND:${cand}`);
         });
       } catch (e) {
         if (typeof e.message === 'string' && e.message.startsWith('DATE_FOUND:')) {
@@ -1814,10 +1880,44 @@ class FeedMonitor {
         // else ignore JSON parse errors
       }
 
-      // As a last resort, scan body text
-      const bodyText = $('body').text().substring(0, 5000); // limit for perf
+      // Try to find date in article header or main content area
+      const articleSelectors = [
+        'article header',
+        '[class*="article-header"]',
+        '[class*="post-header"]',
+        '[class*="entry-header"]',
+        'main header',
+        '[role="article"] header',
+      ];
+      
+      for (const sel of articleSelectors) {
+        const header = $(sel).first();
+        if (header && header.length) {
+          const headerText = header.text();
+          const parsed = parseDate(headerText);
+          if (parsed) {
+            debugLog.push(`Found date in article header: ${parsed}`);
+            return parsed;
+          }
+        }
+      }
+
+      // As a last resort, scan body text (but prioritize article/main content)
+      const articleContent = $('article, [role="article"], main, [class*="article"], [class*="post-content"]').first();
+      const contentText = articleContent.length ? articleContent.text() : $('body').text();
+      const bodyText = contentText.substring(0, 5000); // limit for perf
       const parsed = parseDate(bodyText);
-      return parsed;
+      if (parsed) {
+        debugLog.push(`Found date in content text: ${parsed}`);
+        return parsed;
+      }
+      
+      // Log why date wasn't found (for debugging)
+      if (debugLog.length === 0) {
+        console.log(`⚠️  [ENRICH] No date found for ${url.substring(0, 80)}... - tried ${selectors.length} selectors, JSON-LD, and content text`);
+      }
+      
+      return null;
     } catch (err) {
       // Log softly and return null - only show essential error info
       const errorMsg = err.response?.status 
@@ -1825,7 +1925,7 @@ class FeedMonitor {
         : err.message || 'Unknown error';
       // Only log if it's not a 404 (common for old/deleted articles)
       if (err.response?.status !== 404) {
-        console.log(`⚠️  extractDateStatic failed for ${url}: ${errorMsg}`);
+        console.log(`⚠️  [ENRICH] extractDateStatic failed for ${url.substring(0, 80)}...: ${errorMsg}`);
       }
       return null;
     }

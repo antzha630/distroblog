@@ -932,26 +932,45 @@ app.post('/api/articles/send-telegram', async (req, res) => {
       console.error(`❌ [TELEGRAM] Error type: ${telegramError.name}`);
       console.error(`❌ [TELEGRAM] Error message: ${telegramError.message}`);
       
+      let errorMessage = 'Failed to send to Telegram';
+      
       if (telegramError.response) {
         console.error(`❌ [TELEGRAM] Response status: ${telegramError.response.status}`);
         console.error(`❌ [TELEGRAM] Response data:`, JSON.stringify(telegramError.response.data, null, 2));
+        
+        // Extract error description from Telegram API response
+        const errorData = telegramError.response.data;
+        if (errorData) {
+          if (errorData.description) {
+            errorMessage = errorData.description;
+          } else if (errorData.error_code) {
+            // Common Telegram API errors:
+            // 400: Bad Request (wrong chat_id, etc.)
+            // 401: Unauthorized (invalid bot token)
+            // 403: Forbidden (bot not admin, etc.)
+            // 404: Not Found (chat not found)
+            const errorCodes = {
+              400: 'Bad Request - Check your channel ID or message format',
+              401: 'Unauthorized - Check your bot token',
+              403: 'Forbidden - Bot may not have permission to post to channel',
+              404: 'Chat not found - Check your channel ID'
+            };
+            errorMessage = errorCodes[errorData.error_code] || errorData.description || `Telegram API error ${errorData.error_code}`;
+          }
+        }
       } else if (telegramError.request) {
         console.error(`❌ [TELEGRAM] No response received from Telegram API`);
         console.error(`❌ [TELEGRAM] Request config:`, {
-          url: telegramError.config?.url,
+          url: telegramError.config?.url?.replace(/\/bot[^/]+/, '/bot***'), // Hide token in logs
           method: telegramError.config?.method,
           timeout: telegramError.config?.timeout
         });
-      }
-      
-      let errorMessage = 'Failed to send to Telegram';
-      if (telegramError.response?.data?.description) {
-        errorMessage = telegramError.response.data.description;
-        console.error(`❌ [TELEGRAM] Error description: ${errorMessage}`);
+        errorMessage = 'No response from Telegram API - Check your internet connection or Telegram API status';
       } else if (telegramError.message) {
         errorMessage = telegramError.message;
       }
       
+      console.error(`❌ [TELEGRAM] Final error message: ${errorMessage}`);
       results.telegram.error = errorMessage;
     }
 
@@ -1032,14 +1051,17 @@ app.post('/api/articles/send-telegram', async (req, res) => {
       console.log(`⚠️  [TELEGRAM] External API succeeded, Telegram failed`);
       res.json({ 
         success: false, 
+        error: results.telegram.error || 'Failed to send to Telegram',
         message: 'Article sent to external API successfully, but failed to send to Telegram',
         telegram: results.telegram,
         externalApi: results.externalApi
       });
     } else {
       console.log(`❌ [TELEGRAM] Both services failed`);
+      const errorMsg = results.telegram.error || results.externalApi.error || 'Failed to send to both Telegram and external API';
       res.status(500).json({ 
         success: false, 
+        error: errorMsg,
         message: 'Failed to send to both Telegram and external API',
         telegram: results.telegram,
         externalApi: results.externalApi

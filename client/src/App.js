@@ -210,7 +210,7 @@ function App() {
                 className="nav-link"
                 onClick={() => setActiveTab('distro-scoopstream')}
               >
-                Dashboard
+                Scoopstream
               </button>
             )}
             {activeTab === 'distro-scoopstream' && (

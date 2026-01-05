@@ -195,21 +195,21 @@ class WebScraper {
       
       // MEMORY FIX: Always create new browser and close it (no reuse to prevent memory leaks)
       // This ensures browser is cleaned up after each scrape, preventing accumulation
-      try {
+        try {
         browser = await chromium.launch({
-          headless: true,
-          args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-        });
+            headless: true,
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+          });
         if (!browser) {
-          throw new Error('Browser launch returned null');
-        }
-      } catch (launchError) {
-        // Browser launch failed - likely missing system dependencies
-        if (launchError.message.includes('Executable doesn\'t exist') || 
-            launchError.message.includes('browserType.launch')) {
-          throw new Error('Playwright browsers not installed. Run "npx playwright install chromium" during build.');
-        }
-        throw launchError;
+            throw new Error('Browser launch returned null');
+          }
+        } catch (launchError) {
+          // Browser launch failed - likely missing system dependencies
+          if (launchError.message.includes('Executable doesn\'t exist') || 
+              launchError.message.includes('browserType.launch')) {
+            throw new Error('Playwright browsers not installed. Run "npx playwright install chromium" during build.');
+          }
+          throw launchError;
       }
       
       // Create new page

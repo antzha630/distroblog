@@ -264,7 +264,7 @@ function DistroScoutLanding({ onArticlesSelected, onCheckNow, isCheckingFeeds })
     <div className="distro-scoopstream-landing">
       {/* Header */}
       <div className="distro-scoopstream-header">
-        <h1>Distro Scoopstream</h1>
+        <h1>Scoopstream</h1>
         <div className="header-controls">
           <div className="mode-toggle" role="group" aria-label="Article time range">
             <button
