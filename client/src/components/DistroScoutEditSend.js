@@ -1,39 +1,37 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import config from '../config';
 
-function DistroScoutEditSend({ articles, onBack, onEditArticle, onRemoveArticle, onSendToDistro }) {
+function DistroScoutEditSend({ articles, onBack, onEditArticle, onRemoveArticle, onSendToDistro, onArticleStatusChange }) {
   const [isGenerating, setIsGenerating] = useState(false);
   const [telegramSending, setTelegramSending] = useState({});
-  const [sentArticles, setSentArticles] = useState([]);
-  const [loadingSent, setLoadingSent] = useState(true);
   const [localArticles, setLocalArticles] = useState([]);
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({ title: '', url: '', content: '' });
+  // Use a ref to track status changes so we can preserve them across prop updates
+  const statusMapRef = useRef(new Map());
 
   useEffect(() => {
-    fetchSentArticles();
-  }, []);
-
-  useEffect(() => {
-    setLocalArticles(articles || []);
-  }, [articles]);
-
-  const fetchSentArticles = async () => {
-    try {
-      setLoadingSent(true);
-      const response = await fetch(`${config.API_BASE_URL}/api/articles/sent`);
-      if (response.ok) {
-        const data = await response.json();
-        setSentArticles(data);
-      } else {
-        console.error('Failed to fetch sent articles');
-      }
-    } catch (error) {
-      console.error('Error fetching sent articles:', error);
-    } finally {
-      setLoadingSent(false);
+    // Merge articles with local state to preserve status changes
+    if (!articles || articles.length === 0) {
+      setLocalArticles([]);
+      statusMapRef.current.clear();
+      return;
     }
-  };
+    
+    // Merge new articles with preserved status from ref
+    const mergedArticles = articles.map(article => {
+      // Check if we have a preserved 'sent' status for this article
+      const preservedStatus = statusMapRef.current.get(article.id);
+      // Use preserved 'sent' status if it exists, otherwise use status from new articles or default to 'new'
+      const status = (preservedStatus === 'sent') ? 'sent' : (article.status || 'new');
+      return {
+        ...article,
+        status
+      };
+    });
+    
+    setLocalArticles(mergedArticles);
+  }, [articles]);
 
   const handleEditSummary = (article) => {
     setEditingId(article.id);
@@ -90,8 +88,8 @@ function DistroScoutEditSend({ articles, onBack, onEditArticle, onRemoveArticle,
     try {
       if (onSendToDistro) {
         await onSendToDistro(localArticles);
-        // Refresh sent articles after sending
-        await fetchSentArticles();
+        // Update local articles status to 'sent'
+        setLocalArticles(prev => prev.map(a => ({ ...a, status: 'sent' })));
       }
     } finally {
       setIsGenerating(false);
@@ -118,8 +116,20 @@ function DistroScoutEditSend({ articles, onBack, onEditArticle, onRemoveArticle,
       
       if (result.success) {
         alert('✅ Article sent to Telegram successfully!');
+        // Update status map ref to preserve 'sent' status across prop updates
+        statusMapRef.current.set(articleId, 'sent');
+        // Update local article status to 'sent'
+        setLocalArticles(prev => prev.map(a => 
+          a.id === articleId ? { ...a, status: 'sent' } : a
+        ));
+        // Notify parent component of status change
+        if (onArticleStatusChange) {
+          onArticleStatusChange(articleId, 'sent');
+        }
       } else {
-        alert(`❌ Failed to send to Telegram: ${result.error || 'Unknown error'}`);
+        // Check for top-level error or nested Telegram error
+        const errorMessage = result.error || result.telegram?.error || 'Unknown error';
+        alert(`❌ Failed to send to Telegram: ${errorMessage}`);
       }
     } catch (error) {
       console.error('Error sending to Telegram:', error);
@@ -231,67 +241,24 @@ function DistroScoutEditSend({ articles, onBack, onEditArticle, onRemoveArticle,
                 
                 <button 
                   onClick={() => handleSendToDistro()}
-                  className="send-btn"
-                  disabled={isGenerating || editingId === article.id}
+                  className={`send-btn ${article.status === 'sent' ? 'already-sent' : ''}`}
+                  disabled={isGenerating || editingId === article.id || article.status === 'sent'}
                 >
-                  {isGenerating ? 'Sending...' : 'Send to Distro'}
+                  {isGenerating ? 'Sending...' : article.status === 'sent' ? 'Already Sent to Distro' : 'Send to Distro'}
                 </button>
                 
                 <button 
                   onClick={() => handleSendToTelegram(article.id)}
-                  className="telegram-btn"
-                  disabled={telegramSending[article.id] || editingId === article.id}
+                  className={`telegram-btn ${article.status === 'sent' ? 'already-sent' : ''}`}
+                  disabled={telegramSending[article.id] || editingId === article.id || article.status === 'sent'}
                 >
-                  {telegramSending[article.id] ? 'Sending...' : 'Send to Telegram'}
+                  {telegramSending[article.id] ? 'Sending...' : article.status === 'sent' ? 'Already Sent to Telegram' : 'Send to Telegram'}
                 </button>
                 
                 <button 
                   onClick={() => handleRemove(article.id)}
                   className="remove-btn"
                   disabled={editingId === article.id}
-                >
-                  Remove
-                </button>
-              </div>
-            </div>
-          ))
-        )}
-      </div>
-
-      {/* Already Sent Articles */}
-      <div className="sent-articles-container">
-        <h2 className="section-title">Already Sent</h2>
-        {loadingSent ? (
-          <div className="loading">Loading sent articles...</div>
-        ) : sentArticles.length === 0 ? (
-          <div className="no-articles">
-            <p>No articles have been sent yet.</p>
-          </div>
-        ) : (
-          sentArticles.map(article => (
-            <div key={article.id} className="article-card sent-article">
-              <div className="article-content">
-                <div className="article-source">{article.source_name || article.source}</div>
-                
-                <h3 className="article-title">{article.title}</h3>
-                
-                <div className="article-date">{formatDate(article.pub_date || article.created_at)}</div>
-                
-                <div className="article-summary">
-                  {article.ai_summary || article.publisher_description || article.preview || article.content || 'No summary available'}
-                </div>
-                
-                {article.link && (
-                  <a href={article.link} target="_blank" rel="noopener noreferrer" className="article-link">
-                    {article.link}
-                  </a>
-                )}
-              </div>
-
-              <div className="article-actions">
-                <button 
-                  onClick={() => handleRemove(article.id)}
-                  className="remove-btn"
                 >
                   Remove
                 </button>

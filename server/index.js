@@ -824,10 +824,7 @@ app.post('/api/articles/send-telegram', async (req, res) => {
     // Format message for Telegram
     console.log(`📱 [TELEGRAM] Formatting message...`);
     // Use preview/description if available, otherwise use content (truncated)
-    const preview = article.ai_summary || article.publisher_description || article.preview || article.content?.substring(0, 300) || 'No preview available';
-    const truncatedPreview = preview.length > 500 ? preview.substring(0, 500) + '...' : preview;
-    
-    console.log(`📱 [TELEGRAM] Preview length: ${truncatedPreview.length} chars`);
+    const preview = article.ai_summary || article.publisher_description || article.preview || article.content || 'No preview available';
     
     // Escape HTML special characters for Telegram HTML parse mode
     const escapeHtml = (text) => {
@@ -843,14 +840,71 @@ app.post('/api/articles/send-telegram', async (req, res) => {
     // Format the message with title, preview, source, and link
     // Using HTML parse mode for better formatting control and simpler escaping
     const title = escapeHtml(article.title || 'Untitled Article');
-    const previewText = escapeHtml(truncatedPreview);
     const source = escapeHtml(article.source_name || 'Unknown');
     const link = escapeHtml(article.link);
     
-    const message = `📰 <b>${title}</b>\n\n${previewText}\n\n🔗 <a href="${link}">Read more</a>\n📊 Source: ${source}`;
+    // Calculate the exact overhead for the message structure:
+    // 📰 <b>title</b>\n\n + preview + \n\n🔗 <a href="link">Read more</a>\n📊 Source: source
+    // Base structure: 📰 <b> + title + </b>\n\n + preview + \n\n🔗 <a href=" + link + ">Read more</a>\n📊 Source: + source
+    const baseOverhead = `📰 <b></b>\n\n\n\n🔗 <a href="">Read more</a>\n📊 Source: `.length;
+    // Account for actual title, link, and source lengths (already escaped)
+    const variableOverhead = title.length + link.length + source.length;
+    const totalOverhead = baseOverhead + variableOverhead;
     
-    console.log(`📱 [TELEGRAM] Message formatted (${message.length} chars)`);
-    console.log(`📱 [TELEGRAM] Message preview: ${message.substring(0, 100)}...`);
+    // Telegram has a 4096 character limit, reserve some buffer (50 chars) for safety
+    const maxMessageLength = 4096;
+    const safetyBuffer = 50;
+    const maxPreviewLength = maxMessageLength - totalOverhead - safetyBuffer;
+    
+    // Escape preview
+    let previewText = escapeHtml(preview);
+    
+    // Build the full message first to check actual length
+    const buildMessage = (previewContent) => {
+      return `📰 <b>${title}</b>\n\n${previewContent}\n\n🔗 <a href="${link}">Read more</a>\n📊 Source: ${source}`;
+    };
+    
+    // Truncate preview if needed, ensuring the full message stays under limit
+    let finalMessage = buildMessage(previewText);
+    
+    if (finalMessage.length > maxMessageLength) {
+      // Calculate how much we need to trim from the preview
+      const excess = finalMessage.length - maxMessageLength + safetyBuffer;
+      const targetPreviewLength = Math.max(0, previewText.length - excess);
+      
+      // Truncate at a word boundary
+      let truncated = previewText.substring(0, targetPreviewLength);
+      
+      // Try to find a good break point (sentence end > word boundary > just truncate)
+      const lastPeriod = truncated.lastIndexOf('.');
+      const lastSpace = truncated.lastIndexOf(' ');
+      
+      // Prefer sentence end if it's within the last 20% of the truncated text
+      if (lastPeriod > truncated.length * 0.8 && lastPeriod > 0) {
+        truncated = truncated.substring(0, lastPeriod + 1);
+      } else if (lastSpace > truncated.length * 0.8 && lastSpace > 0) {
+        // Otherwise prefer word boundary
+        truncated = truncated.substring(0, lastSpace);
+      } else {
+        // Just trim whitespace
+        truncated = truncated.trim();
+      }
+      
+      // Rebuild message with truncated preview
+      previewText = truncated;
+      finalMessage = buildMessage(previewText);
+      
+      // Final safety check - if still too long, truncate more aggressively
+      if (finalMessage.length > maxMessageLength) {
+        const finalExcess = finalMessage.length - maxMessageLength + safetyBuffer;
+        previewText = previewText.substring(0, Math.max(0, previewText.length - finalExcess)).trim();
+        finalMessage = buildMessage(previewText);
+      }
+    }
+    
+    console.log(`📱 [TELEGRAM] Preview length: ${previewText.length} chars`);
+    console.log(`📱 [TELEGRAM] Message formatted (${finalMessage.length} chars, limit: ${maxMessageLength})`);
+    console.log(`📱 [TELEGRAM] Message preview: ${finalMessage.substring(0, 150)}...`);
 
     // Send to Telegram using Bot API
     const telegramApiUrl = `https://api.telegram.org/bot${config.telegram.botToken}/sendMessage`;
@@ -880,7 +934,7 @@ app.post('/api/articles/send-telegram', async (req, res) => {
     
     const payload = {
       chat_id: chatId,
-      text: message,
+      text: finalMessage,
       parse_mode: 'HTML', // Use HTML for simpler formatting
       disable_web_page_preview: false
     };
@@ -921,6 +975,8 @@ app.post('/api/articles/send-telegram', async (req, res) => {
         console.log(`✅ [TELEGRAM] Message ID: ${telegramResponse.data.result.message_id}`);
         results.telegram.success = true;
         results.telegram.messageId = telegramResponse.data.result.message_id;
+        // Mark article as sent when Telegram succeeds
+        await database.updateArticleStatus(article.id, 'sent');
       } else {
         console.error(`❌ [TELEGRAM] Telegram API returned ok=false`);
         console.error(`❌ [TELEGRAM] Error description: ${telegramResponse.data.description}`);

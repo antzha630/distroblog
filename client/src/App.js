@@ -86,6 +86,13 @@ function App() {
     setSelectedArticles(prev => prev.filter(article => article.id !== articleId));
   };
 
+  const handleArticleStatusChange = (articleId, status) => {
+    // Update the status of the article in selectedArticles
+    setSelectedArticles(prev => prev.map(article => 
+      article.id === articleId ? { ...article, status } : article
+    ));
+  };
+
   const handleSaveEditedArticle = () => {};
 
   const handleSendToDistro = async (articles) => {
@@ -240,6 +247,7 @@ function App() {
             onEditArticle={handleEditArticle}
             onRemoveArticle={handleRemoveArticle}
             onSendToDistro={handleSendToDistro}
+            onArticleStatusChange={handleArticleStatusChange}
           />
         )}
         {activeTab === 'sources' && (

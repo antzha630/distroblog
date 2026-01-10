@@ -18,6 +18,7 @@ class ADKScraper {
     this.agent = null;
     this.runner = null;
     this.initialized = false;
+    this.modelName = null;
     // Rate limiting: gemini-2.0-flash-exp has 10 RPM limit
     // We'll throttle to max 1 request per 7 seconds (8.5 RPM) to stay safe
     this.lastRequestTime = 0;
@@ -38,28 +39,38 @@ class ADKScraper {
       // Dynamic import since ADK is ES module and we're in CommonJS
       const adk = await import('@google/adk');
       
-      // Create Gemini LLM with API key
-      // NOTE: gemini-2.5-flash-image does NOT support Google Search tool, so we skip it
-      // Use gemini-2.0-flash-exp (supports Google Search) as primary, fallback to 1.5
-      let llm;
-      let modelName = 'gemini-2.0-flash-exp'; // Primary model (supports Google Search)
-      
-      try {
-        llm = new adk.Gemini({
-          model: modelName,
-          apiKey: apiKey
-        });
-        console.log(`✅ [ADK] Using model: ${modelName} (supports Google Search)`);
-      } catch (e) {
-        // Fallback to Gemini 1.5 if 2.0 not available
-        console.log(`⚠️ [ADK] Gemini 2.0 not available (${e.message}), trying 1.5...`);
-        modelName = 'gemini-1.5-flash-latest';
-        llm = new adk.Gemini({
-          model: modelName,
-          apiKey: apiKey
-        });
-        console.log(`✅ [ADK] Using fallback model: ${modelName}`);
+      // Pick the first available model that supports Google Search
+      const candidateModels = [
+        'gemini-2.0-flash-exp',         // preferred
+        'gemini-2.0-flash-live-001',    // live variant (from mcd reference)
+        'gemini-1.5-flash-latest',      // common alias
+        'gemini-1.5-flash',             // fallback
+        'gemini-1.5-flash-001',         // legacy fallback
+        'gemini-2.5-pro-preview-06-05'  // pro preview (used in reference)
+      ];
+
+      let llm = null;
+      let modelName = null;
+
+      for (const candidate of candidateModels) {
+        try {
+          llm = new adk.Gemini({
+            model: candidate,
+            apiKey: apiKey
+          });
+          modelName = candidate;
+          console.log(`✅ [ADK] Using model: ${candidate} (Google Search tool compatible)`);
+          break;
+        } catch (e) {
+          console.warn(`⚠️ [ADK] Model ${candidate} unavailable: ${e.message}`);
+          llm = null;
+        }
       }
+
+      if (!llm || !modelName) {
+        throw new Error('No Gemini model available for ADK with Google Search');
+      }
+      this.modelName = modelName;
 
       // Create LlmAgent with Google Search tool
       // The agent will use Google Search to find articles from websites
@@ -68,36 +79,17 @@ class ADKScraper {
         name: 'article_finder',
         model: llm, // Pass the LLM object directly (not model name string)
         description: 'Agent to find recent blog posts and articles from a website URL using Google Search.',
-        instruction: `You are an assistant to a professional journalist who is looking for the latest blog posts and articles from specific projects and companies on the news beat. Your job is to help find the most recent content from these sources so the journalist can stay up-to-date with the latest news and updates.
+        instruction: `You help a journalist by returning exactly 3 of the most recent blog posts or articles from a given site. Use the Google Search tool and return only a JSON array with objects: title, url, description, datePublished.
 
-When given a website URL, use Google Search to find the 3 MOST RECENT blog posts or articles from that specific website. Focus on finding actual article content - not homepages, about pages, or navigation pages.
-
-CRITICAL REQUIREMENTS:
-1. RECENCY: Get the most recent articles from the source, regardless of publication date. Some blogs publish infrequently (monthly or less), so older articles are fine as long as they're the most recent from that source.
-2. Use Google Search to perform a live search - do not rely on training data
-3. CANONICAL URLs: Extract the CANONICAL/SHORT article URLs (not long slugs). Many sites use short URLs like "/incentive-dynamic-engine" instead of long slugs like "/io-net-launches-the-first-adaptive-economic-engine-for-decentralized-compute". Prefer shorter, cleaner URLs when available in search results.
-4. Extract FULL article URLs (not just the blog homepage). Each article must have a unique URL path like "/article-slug" or "/blog/post-title"
-5. Only include articles from the exact domain specified
-6. Ignore generic pages like homepages, "About" pages, or navigation pages
-7. DATE ACCURACY: Extract publication dates from search results - dates are CRITICAL. Look for dates in search snippets, article previews, or metadata. Search results often show dates like "2 days ago", "Dec 11, 2025", etc. - convert these to ISO 8601 format (YYYY-MM-DD). Try hard to find dates.
-
-For each article found, provide:
-- title: The complete article headline/title (not generic titles like "Blog" or "Home")
-- url: The CANONICAL/SHORT URL to the specific article page (prefer shorter URLs over long slugs when both are available)
-- description: Brief description or excerpt (if available)
-- datePublished: Publication date in ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:mm:ssZ). Extract from search results when available. Prioritize articles with dates. Use null only if absolutely no date information exists.
-
-Return ONLY a valid JSON array with this exact structure, sorted by date (most recent first):
-[
-  {
-    "title": "Complete Article Title",
-    "url": "https://domain.com/blog/canonical-article-slug",
-    "description": "Article description or excerpt",
-    "datePublished": "2025-12-17T10:00:00Z" or null
-  }
-]
-
-Do not include explanatory text. Return only the JSON array.`,
+Rules (must follow all):
+- Hostname must match the target domain; reject other domains.
+- URL must point to an article page with a meaningful path (length >= 11 chars); reject home/about/contact/privacy/terms/team/careers/docs/login/signup/dashboard/app or other generic pages.
+- No Google redirect URLs (vertexaisearch / grounding / google.com/grounding).
+- Prefer canonical/short article URLs over long slugs when both appear.
+- Title must be non-null, non-empty, and not generic (not "Blog" or "Home").
+- datePublished: use ISO (YYYY-MM-DD or with time) when visible in search; null if truly unavailable.
+- Sort newest first.
+Return only the JSON array, nothing else.`,
         tools: [adk.GOOGLE_SEARCH] // Use Google Search tool (equivalent to Python's google_search)
       });
 
@@ -149,7 +141,7 @@ Do not include explanatory text. Return only the JSON array.`,
       }
 
       if (!this.agent || !this.runner) {
-        throw new Error('ADK agent not initialized. Check GOOGLE_API_KEY environment variable.');
+      throw new Error('ADK agent not initialized. Check GOOGLE_API_KEY environment variable.');
       }
 
       // Rate limiting: Ensure we don't exceed 10 RPM limit
@@ -174,82 +166,18 @@ Do not include explanatory text. Return only the JSON array.`,
       // Improved prompt to get specific article URLs and most recent articles
       const domain = new URL(source.url).hostname;
       const baseDomain = domain.replace(/^www\./, ''); // Remove www. for matching
-      const searchQuery = `You are an assistant to a professional journalist who is looking for the latest blog posts from projects on the news beat. Please search the following URL to find the latest blog posts: ${source.url}
+      const searchQuery = `Find exactly 3 of the most recent blog posts/articles from ${source.url}.
 
-Use Google Search to find the 3 MOST RECENT blog posts or articles from ${source.url}. Focus on finding actual article content that would be useful for a journalist covering this beat.
+Rules (apply strictly):
+- Domain must be ${baseDomain} (hostname contains ${baseDomain}); ignore other domains.
+- URL must be a direct article with a meaningful path (length >= 11 chars); do not return ${source.url}, ${source.url}/, /about, /contact, /privacy, /terms, /team, /careers, /docs, /login, /signup, /dashboard, /app, or any generic page.
+- No Google redirect URLs (vertexaisearch / grounding / google.com/grounding); use the final article URL.
+- Prefer canonical/short article URLs when both short and long appear.
+- Title must be non-null, non-empty, and not generic (not "Blog" or "Home").
+- datePublished in ISO (YYYY-MM-DD or with time) when visible in search results; null only if no date is visible.
+- Sort newest first.
 
-CRITICAL REQUIREMENTS - READ CAREFULLY:
-1. RECENCY PRIORITY: Return exactly 3 MOST RECENT articles from ${baseDomain}, sorted by publication date (newest first). It's okay if articles are from months ago - just get the 3 most recent ones available from this source. Some blogs publish infrequently (monthly or less), so older articles are acceptable as long as they're the most recent from this source.
-
-2. DOMAIN MATCHING: ONLY return articles from ${baseDomain} domain. Check every URL - it MUST contain "${baseDomain}" in the hostname. Reject any URLs from other domains (like tim.blog, medium.com, etc.). If search results show articles from other domains, ignore them completely.
-
-3. CANONICAL URLs: Prefer SHORT/CANONICAL URLs over long slugs. Many sites use short URLs like "/incentive-dynamic-engine" instead of long slugs like "/io-net-launches-the-first-adaptive-economic-engine-for-decentralized-compute". When search results show both, prefer the shorter canonical URL. The URL path should be meaningful but concise.
-
-4. Extract ACTUAL article URLs from search results - NOT Google redirect URLs. NEVER use URLs containing:
-   - "vertexaisearch.cloud.google.com"
-   - "grounding-api-redirect"
-   - "google.com/grounding"
-   - Any other Google redirect service
-   Extract the FINAL destination URL from search results, not the redirect link.
-
-5. Each article URL must be a DIRECT link to the article page on ${baseDomain}. Examples:
-   - ✅ GOOD: https://${baseDomain}/blog/article-slug
-   - ✅ GOOD: https://${baseDomain}/article-title
-   - ✅ GOOD: https://${baseDomain}/blog/2025/12/article-name
-   - ❌ BAD: https://${baseDomain}/blog (homepage)
-   - ❌ BAD: https://${baseDomain}/ (homepage)
-   - ❌ BAD: https://${baseDomain}/about (not an article - this is an About page)
-   - ❌ BAD: https://${baseDomain}/contact (not an article - this is a Contact page)
-   - ❌ BAD: https://${baseDomain}/privacy (not an article - this is a Privacy page)
-   NEVER return URLs to non-article pages like /about, /contact, /privacy, /terms, /team, /careers, etc. Only return URLs to actual blog posts or articles.
-
-6. DO NOT return generic blog homepage URLs like "${source.url}" or "${source.url}/" - only return URLs with specific article paths. The URL must have a meaningful path segment after the domain (at least 10 characters in the path).
-
-7. DATE ACCURACY: Extract publication dates from search results. Dates are CRITICAL - try hard to find dates in:
-   - Search result snippets (e.g., "2 days ago", "Dec 11, 2025")
-   - Article previews in search results
-   - Metadata shown in search results
-   Convert relative dates like "2 days ago" to absolute dates. Format: YYYY-MM-DD (e.g., "2025-12-15"). Only use null if absolutely no date information is available in the search results.
-
-8. TITLE REQUIREMENT: Every article MUST have a non-null, non-empty, meaningful title. Do NOT return:
-   - null or empty titles
-   - Generic titles like "Blog", "Home", "Article", "Untitled"
-   - Titles that are just the domain name
-   Extract the actual article headline from search results.
-
-9. URL PATH VALIDATION: Each article must have a unique URL path beyond the base blog URL. The path (after the domain) must be at least 11 characters long (including the leading "/"). This ensures we have a specific article, not a generic page.
-
-EXAMPLES OF WHAT TO RETURN:
-✅ GOOD: {"title": "How to Build AI Agents in 2025", "url": "https://${baseDomain}/blog/how-to-build-ai-agents", "datePublished": "2025-12-15", "description": "A guide to building AI agents..."}
-✅ GOOD: {"title": "New Feature Launch: Agent Marketplace", "url": "https://${baseDomain}/blog/new-feature-launch", "datePublished": "2025-12-10", "description": "We're excited to announce..."}
-✅ GOOD: {"title": "Q4 2025 Product Updates", "url": "https://${baseDomain}/updates/q4-2025", "datePublished": "2025-11-20", "description": "Here's what's new..."}
-
-EXAMPLES OF WHAT NOT TO RETURN:
-❌ BAD: {"title": "Blog", "url": "https://${baseDomain}/blog", ...} - This is the homepage, not an article
-❌ BAD: {"title": null, "url": "https://${baseDomain}/article", ...} - Missing title
-❌ BAD: {"title": "Article", "url": "https://vertexaisearch.cloud.google.com/...", ...} - Google redirect URL
-❌ BAD: {"title": "Article", "url": "https://other-domain.com/article", ...} - Wrong domain
-❌ BAD: {"title": "Home", "url": "https://${baseDomain}/", ...} - Homepage, not an article
-❌ BAD: {"title": "About Us", "url": "https://${baseDomain}/about", ...} - Not an article page (this is an About page)
-❌ BAD: {"title": "Contact", "url": "https://${baseDomain}/contact", ...} - Not an article page
-❌ BAD: {"title": "Privacy Policy", "url": "https://${baseDomain}/privacy", ...} - Not an article page
-
-VERIFY BEFORE RETURNING:
-- Every URL must contain "${baseDomain}" in the hostname (exact match, case-insensitive)
-- Every URL must have a specific article path (not just /blog or /)
-- Every title must be non-null, non-empty, and meaningful (not generic)
-- Prefer shorter canonical URLs over long slugs when both are available
-- No redirect URLs from Google or any other service
-- Articles are sorted by date (newest first) - this is the most recent from this source
-- Each URL path must be at least 11 characters long (including leading "/")
-
-Return a JSON array with articles sorted by date (most recent first):
-- title: Complete article title (REQUIRED - must be non-null, non-empty, not generic, not "Blog" or "Home")
-- url: CANONICAL/SHORT URL to the specific article page on ${baseDomain} (prefer shorter URLs over long slugs, must include article path, NOT a redirect URL, MUST be from ${baseDomain} domain)
-- description: Article excerpt if available
-- datePublished: Publication date (YYYY-MM-DD format) - EXTRACT from search results when available. Prioritize articles with dates. Use null only if no date information exists.
-
-ONLY include articles from ${baseDomain}. DO NOT include redirect URLs, generic URLs, articles with null/empty titles, or articles from other domains. Return only valid JSON array, no other text.`;
+Return only a JSON array of 3 objects with: title, url, description, datePublished. No extra text.`;
       
       let articles = [];
       let lastEvent = null;
@@ -700,12 +628,22 @@ ONLY include articles from ${baseDomain}. DO NOT include redirect URLs, generic 
       return lightweightArticles;
     } catch (error) {
       // Check if it's a rate limit error - log it but still throw to trigger fallback
-      if (error.message && error.message.includes('429') || error.message.includes('quota')) {
+      if ((error.message && error.message.includes('429')) || (error.message && error.message.includes('quota'))) {
         console.error(`❌ [ADK] Rate limit/quota exceeded for ${source.url}: ${error.message}`);
         console.log(`🔄 [ADK] Will fallback to traditional scraper for ${source.name}`);
       } else {
         console.error(`❌ [ADK] Error finding articles from ${source.url}:`, error.message);
       }
+
+      // If model became unavailable mid-run, allow re-init next time
+      if (error.message && error.message.toLowerCase().includes('model') && error.message.toLowerCase().includes('not found')) {
+        console.warn('⚠️ [ADK] Clearing initialization state so next run can retry model selection');
+        this.initialized = false;
+        this.agent = null;
+        this.runner = null;
+        this.modelName = null;
+      }
+
       // Throw error to trigger fallback to traditional scraper in feedMonitor
       throw error;
     }
