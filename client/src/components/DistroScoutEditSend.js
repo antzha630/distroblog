@@ -84,6 +84,11 @@ function DistroScoutEditSend({ articles, onBack, onEditArticle, onRemoveArticle,
   };
 
   const handleSendToDistro = async () => {
+    // Show confirmation dialog
+    if (!window.confirm('Are you sure you want to send to Distro?')) {
+      return; // User cancelled
+    }
+    
     setIsGenerating(true);
     try {
       if (onSendToDistro) {
