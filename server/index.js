@@ -858,6 +858,7 @@ app.post('/api/articles/send-telegram', async (req, res) => {
     
     // Escape preview
     let previewText = escapeHtml(preview);
+    const originalPreviewLength = previewText.length; // Store original length for logging
     
     // Build the full message first to check actual length
     const buildMessage = (previewContent) => {
@@ -867,39 +868,83 @@ app.post('/api/articles/send-telegram', async (req, res) => {
     // Truncate preview if needed, ensuring the full message stays under limit
     let finalMessage = buildMessage(previewText);
     
-    if (finalMessage.length > maxMessageLength) {
-      // Calculate how much we need to trim from the preview
-      const excess = finalMessage.length - maxMessageLength + safetyBuffer;
-      const targetPreviewLength = Math.max(0, previewText.length - excess);
+    // Helper function to find a good truncation point
+    const findTruncationPoint = (text, targetLength) => {
+      if (text.length <= targetLength) return text.length;
       
-      // Truncate at a word boundary
-      let truncated = previewText.substring(0, targetPreviewLength);
+      // Look backwards from targetLength to find the last sentence boundary (period + space)
+      // Search in the last 1000 characters before the target
+      const searchStart = Math.max(0, targetLength - 1000);
+      const searchText = text.substring(searchStart, Math.min(text.length, targetLength + 100));
       
-      // Try to find a good break point (sentence end > word boundary > just truncate)
-      const lastPeriod = truncated.lastIndexOf('.');
-      const lastSpace = truncated.lastIndexOf(' ');
-      
-      // Prefer sentence end if it's within the last 20% of the truncated text
-      if (lastPeriod > truncated.length * 0.8 && lastPeriod > 0) {
-        truncated = truncated.substring(0, lastPeriod + 1);
-      } else if (lastSpace > truncated.length * 0.8 && lastSpace > 0) {
-        // Otherwise prefer word boundary
-        truncated = truncated.substring(0, lastSpace);
-      } else {
-        // Just trim whitespace
-        truncated = truncated.trim();
+      // Try to find sentence end (period followed by space/newline)
+      // Look backwards from the end of the search area
+      let lastSentenceEnd = -1;
+      for (let i = searchText.length - 1; i >= 0; i--) {
+        if (searchText[i] === '.' && (i + 1 < searchText.length) && /\s/.test(searchText[i + 1])) {
+          lastSentenceEnd = searchStart + i + 1; // +1 to include the period
+          if (lastSentenceEnd <= targetLength) {
+            break;
+          }
+        }
       }
       
+      if (lastSentenceEnd > searchStart && lastSentenceEnd <= targetLength) {
+        return lastSentenceEnd;
+      }
+      
+      // Try to find word boundary (space) in the last 500 chars
+      const wordSearchStart = Math.max(0, targetLength - 500);
+      const wordSearchText = text.substring(wordSearchStart, Math.min(text.length, targetLength + 50));
+      const lastSpace = wordSearchText.lastIndexOf(' ');
+      
+      if (lastSpace > 0) {
+        const spacePos = wordSearchStart + lastSpace;
+        if (spacePos > wordSearchStart && spacePos <= targetLength) {
+          return spacePos;
+        }
+      }
+      
+      // Last resort: just truncate at target length
+      return targetLength;
+    };
+    
+    if (finalMessage.length > maxMessageLength) {
+      // Calculate how much we need to trim from the preview (accounting for ellipsis)
+      const excess = finalMessage.length - maxMessageLength + safetyBuffer;
+      const ellipsisLength = 3; // "..."
+      const targetPreviewLength = Math.max(100, previewText.length - excess - ellipsisLength);
+      
+      // Find a good truncation point
+      const truncationPoint = findTruncationPoint(previewText, targetPreviewLength);
+      previewText = previewText.substring(0, truncationPoint).trim();
+      previewText += '...';
+      
       // Rebuild message with truncated preview
-      previewText = truncated;
       finalMessage = buildMessage(previewText);
       
       // Final safety check - if still too long, truncate more aggressively
       if (finalMessage.length > maxMessageLength) {
         const finalExcess = finalMessage.length - maxMessageLength + safetyBuffer;
-        previewText = previewText.substring(0, Math.max(0, previewText.length - finalExcess)).trim();
+        // Remove ellipsis temporarily to recalculate
+        const textWithoutEllipsis = previewText.slice(0, -3);
+        const newTargetLength = Math.max(100, textWithoutEllipsis.length - finalExcess);
+        const finalTruncationPoint = findTruncationPoint(textWithoutEllipsis, newTargetLength);
+        previewText = textWithoutEllipsis.substring(0, finalTruncationPoint).trim();
+        previewText += '...';
         finalMessage = buildMessage(previewText);
+        
+        // Absolute final check - hard truncate if still too long (shouldn't happen, but be safe)
+        if (finalMessage.length > maxMessageLength) {
+          const hardExcess = finalMessage.length - maxMessageLength + 10;
+          const textBeforeEllipsis = previewText.slice(0, -3);
+          previewText = textBeforeEllipsis.substring(0, Math.max(50, textBeforeEllipsis.length - hardExcess)).trim();
+          previewText += '...';
+          finalMessage = buildMessage(previewText);
+        }
       }
+      
+      console.log(`⚠️ [TELEGRAM] WARNING: Message was truncated from ${originalPreviewLength} to ${previewText.length - 3} chars (ellipsis added). User should have been prevented from sending this!`);
     }
     
     console.log(`📱 [TELEGRAM] Preview length: ${previewText.length} chars`);

@@ -145,6 +145,48 @@ function DistroScoutEditSend({ articles, onBack, onEditArticle, onRemoveArticle,
   };
 
 
+  // Calculate the full Telegram message length (including formatting)
+  const calculateTelegramMessageLength = (article) => {
+    const TELEGRAM_MAX_LENGTH = 4096;
+    
+    // Escape HTML like the server does
+    const escapeHtml = (text) => {
+      if (!text) return '';
+      return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    };
+    
+    // Get the content that will be used (prioritize edited content if editing)
+    const content = editingId === article.id 
+      ? editForm.content 
+      : (article.ai_summary || article.publisher_description || article.preview || article.content || '');
+    
+    // Get title and link (use edited values if editing)
+    const title = editingId === article.id ? editForm.title : (article.title || 'Untitled Article');
+    const link = editingId === article.id ? editForm.url : (article.link || '');
+    const source = article.source_name || 'Unknown';
+    
+    // Escape all components
+    const escapedTitle = escapeHtml(title);
+    const escapedContent = escapeHtml(content);
+    const escapedLink = escapeHtml(link);
+    const escapedSource = escapeHtml(source);
+    
+    // Build the full message (same format as server)
+    const fullMessage = `📰 <b>${escapedTitle}</b>\n\n${escapedContent}\n\n🔗 <a href="${escapedLink}">Read more</a>\n📊 Source: ${escapedSource}`;
+    
+    return {
+      totalLength: fullMessage.length,
+      contentLength: escapedContent.length,
+      maxLength: TELEGRAM_MAX_LENGTH,
+      isOverLimit: fullMessage.length > TELEGRAM_MAX_LENGTH
+    };
+  };
+
   const formatDate = (dateString) => {
     if (!dateString) return 'Date unavailable';
     
@@ -199,13 +241,39 @@ function DistroScoutEditSend({ articles, onBack, onEditArticle, onRemoveArticle,
                 <div className="article-date">{formatDate(article.pub_date || article.created_at)}</div>
                 
                 {editingId === article.id ? (
-                  <textarea
-                    className="content-textarea"
-                    rows={8}
-                    value={editForm.content}
-                    onChange={(e) => setEditForm(prev => ({ ...prev, content: e.target.value }))}
-                    placeholder="Edit summary/content"
-                  />
+                  <>
+                    <textarea
+                      className="content-textarea"
+                      rows={8}
+                      value={editForm.content}
+                      onChange={(e) => setEditForm(prev => ({ ...prev, content: e.target.value }))}
+                      placeholder="Edit summary/content"
+                    />
+                    {(() => {
+                      const msgInfo = calculateTelegramMessageLength(article);
+                      const isOverLimit = msgInfo.isOverLimit;
+                      const isNearLimit = msgInfo.totalLength > msgInfo.maxLength * 0.9; // 90% of limit
+                      return (
+                        <div style={{
+                          fontSize: '0.85rem',
+                          marginTop: '4px',
+                          color: isOverLimit ? '#dc3545' : isNearLimit ? '#ff9800' : '#6c757d'
+                        }}>
+                          Telegram message length: {msgInfo.totalLength.toLocaleString()} / {msgInfo.maxLength.toLocaleString()} characters
+                          {isOverLimit && (
+                            <span style={{ marginLeft: '8px', fontWeight: 'bold' }}>
+                              ⚠️ Over limit! Message will be truncated.
+                            </span>
+                          )}
+                          {isNearLimit && !isOverLimit && (
+                            <span style={{ marginLeft: '8px' }}>
+                              ⚠️ Approaching limit
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </>
                 ) : (
                   <div className="article-summary">
                     {article.ai_summary || article.publisher_description || article.preview || article.content || 'No summary available'}
@@ -252,13 +320,21 @@ function DistroScoutEditSend({ articles, onBack, onEditArticle, onRemoveArticle,
                   {isGenerating ? 'Sending...' : article.status === 'sent' ? 'Already Sent to Distro' : 'Send to Distro'}
                 </button>
                 
-                <button 
-                  onClick={() => handleSendToTelegram(article.id)}
-                  className={`telegram-btn ${article.status === 'sent' ? 'already-sent' : ''}`}
-                  disabled={telegramSending[article.id] || editingId === article.id || article.status === 'sent'}
-                >
-                  {telegramSending[article.id] ? 'Sending...' : article.status === 'sent' ? 'Already Sent to Telegram' : 'Send to Telegram'}
-                </button>
+                {(() => {
+                  const msgInfo = calculateTelegramMessageLength(article);
+                  const isOverLimit = msgInfo.isOverLimit;
+                  const isDisabled = telegramSending[article.id] || editingId === article.id || article.status === 'sent' || isOverLimit;
+                  return (
+                    <button 
+                      onClick={() => handleSendToTelegram(article.id)}
+                      className={`telegram-btn ${article.status === 'sent' ? 'already-sent' : ''}`}
+                      disabled={isDisabled}
+                      title={isOverLimit ? `Message exceeds Telegram limit (${msgInfo.totalLength}/${msgInfo.maxLength} chars). Please shorten the content.` : undefined}
+                    >
+                      {telegramSending[article.id] ? 'Sending...' : article.status === 'sent' ? 'Already Sent to Telegram' : isOverLimit ? `Send to Telegram (${msgInfo.totalLength - msgInfo.maxLength} over)` : 'Send to Telegram'}
+                    </button>
+                  );
+                })()}
                 
                 <button 
                   onClick={() => handleRemove(article.id)}
