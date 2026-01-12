@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import config from '../config';
 
-function DistroScoutLanding({ onArticlesSelected, onCheckNow, isCheckingFeeds }) {
+function DistroScoutLanding({ onArticlesSelected, onCheckNow, onStopChecking, isCheckingFeeds }) {
   const [articles, setArticles] = useState([]);
   const [filteredArticles, setFilteredArticles] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -290,10 +290,19 @@ function DistroScoutLanding({ onArticlesSelected, onCheckNow, isCheckingFeeds })
           >
             {isRefreshing || isCheckingFeeds ? '⏳ Checking...' : '🔍 Check Now'}
           </button>
-            {lastChecked && (
-              <div style={{ fontSize: '0.75rem', color: '#6c757d', marginTop: '4px' }}>
-                Last checked {formatLastChecked(lastChecked)}
-              </div>
+            {(isRefreshing || isCheckingFeeds) && onStopChecking ? (
+              <button
+                onClick={onStopChecking}
+                className="stop-btn"
+              >
+                Stop
+              </button>
+            ) : (
+              lastChecked && (
+                <div style={{ fontSize: '0.75rem', color: '#6c757d', marginTop: '4px' }}>
+                  Last checked {formatLastChecked(lastChecked)}
+                </div>
+              )
             )}
           </div>
         </div>

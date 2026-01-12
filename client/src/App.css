@@ -115,6 +115,22 @@
   cursor: not-allowed;
 }
 
+.stop-btn {
+  background: #dc3545;
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 500;
+  transition: background-color 0.2s;
+}
+
+.stop-btn:hover {
+  background: #c82333;
+}
+
 /* Card Styles */
 .card {
   background: white;

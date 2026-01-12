@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import './App.css';
 import './DistroScoopstream.css';
 import SourceManager from './components/SourceManager';
@@ -14,6 +14,7 @@ function App() {
   const [distroScoutStep, setDistroScoutStep] = useState('landing'); // 'landing', 'edit-send'
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [isCheckingFeeds, setIsCheckingFeeds] = useState(false);
+  const checkTimeoutRef = useRef(null);
   // inline editing only; no modal state
 
   useEffect(() => {
@@ -190,9 +191,10 @@ function App() {
       if (response.ok) {
         console.log('Feed check triggered successfully');
         // Wait a moment for the feeds to process, then refresh sources
-        setTimeout(() => {
+        checkTimeoutRef.current = setTimeout(() => {
           setRefreshTrigger(prev => prev + 1);
           setIsCheckingFeeds(false);
+          checkTimeoutRef.current = null;
         }, 2000);
       } else {
         setIsCheckingFeeds(false);
@@ -201,6 +203,14 @@ function App() {
       console.error('Error triggering feed check:', error);
       setIsCheckingFeeds(false);
     }
+  };
+
+  const handleStopChecking = () => {
+    if (checkTimeoutRef.current) {
+      clearTimeout(checkTimeoutRef.current);
+      checkTimeoutRef.current = null;
+    }
+    setIsCheckingFeeds(false);
   };
 
   return (
@@ -237,6 +247,7 @@ function App() {
           <DistroScoutLanding 
             onArticlesSelected={handleDistroScoutArticlesSelected}
             onCheckNow={handleCheckNow}
+            onStopChecking={handleStopChecking}
             isCheckingFeeds={isCheckingFeeds}
           />
         )}
