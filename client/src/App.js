@@ -281,7 +281,6 @@ function MainApp() {
               </button>
             )}
           </nav>
-        </div>
           </div>
         </header>
       )}
