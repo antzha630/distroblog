@@ -9,9 +9,17 @@ import ADKWeb from './components/ADKWeb';
 import config from './config';
 
 function MainApp() {
-  const [activeTab, setActiveTab] = useState('distro-scoopstream');
   const location = useLocation();
   const navigate = useNavigate();
+  
+  // Determine active tab from URL path
+  const getActiveTabFromPath = (path) => {
+    if (path === '/agent-test') return 'adk-web';
+    if (path === '/sources') return 'sources';
+    return 'distro-scoopstream';
+  };
+  
+  const [activeTab, setActiveTab] = useState(() => getActiveTabFromPath(location.pathname));
   const [sources, setSources] = useState([]);
   const [selectedArticles, setSelectedArticles] = useState([]);
   const [workflowStep, setWorkflowStep] = useState('review'); // 'review', 'edit', 'send'
@@ -25,15 +33,12 @@ function MainApp() {
     fetchSources();
   }, []);
 
-  // Check URL path on load and navigate accordingly
+  // Sync active tab with URL path changes
   useEffect(() => {
     const path = location.pathname;
-    if (path === '/agent-test') {
-      setActiveTab('adk-web');
-    } else if (path === '/sources') {
-      setActiveTab('sources');
-    } else if (path === '/' || path === '/scoopstream') {
-      setActiveTab('distro-scoopstream');
+    const tab = getActiveTabFromPath(path);
+    if (tab !== activeTab) {
+      setActiveTab(tab);
     }
   }, [location.pathname]);
 
@@ -229,15 +234,19 @@ function MainApp() {
     setIsCheckingFeeds(false);
   };
 
+  // Don't show header/nav for agent-test - it has its own full-screen UI
+  const showHeaderNav = activeTab !== 'adk-web';
+
   return (
     <div className="App">
-      <header className="header">
-        <div className="header-content">
-          <div>
-            <h1>Distro Scoopstream</h1>
-            <p className="header-stats">news monitoring tool for journalists</p>
-          </div>
-          <nav className="header-nav">
+      {showHeaderNav && (
+        <header className="header">
+          <div className="header-content">
+            <div>
+              <h1>Distro Scoopstream</h1>
+              <p className="header-stats">news monitoring tool for journalists</p>
+            </div>
+            <nav className="header-nav">
             {activeTab !== 'distro-scoopstream' && (
               <button 
                 className="nav-link"
@@ -273,9 +282,11 @@ function MainApp() {
             )}
           </nav>
         </div>
-      </header>
+          </div>
+        </header>
+      )}
 
-      <main className="main-content">
+      <main className={activeTab === 'adk-web' ? 'main-content-fullscreen' : 'main-content'}>
         {activeTab === 'distro-scoopstream' && distroScoutStep === 'landing' && (
           <DistroScoutLanding 
             onArticlesSelected={handleDistroScoutArticlesSelected}

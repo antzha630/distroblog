@@ -10,6 +10,14 @@
   padding: 20px;
 }
 
+.main-content-fullscreen {
+  width: 100%;
+  height: 100vh;
+  margin: 0;
+  padding: 0;
+  max-width: none;
+}
+
 /* Header Styles */
 .header {
   background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
