@@ -5,6 +5,23 @@ const axios = require('axios');
 const config = require('./config');
 require('dotenv').config();
 
+// Handle unhandled promise rejections to prevent crashes
+process.on('unhandledRejection', (reason, promise) => {
+  // Database connection timeout errors are expected and handled by the pool
+  if (reason && (reason.code === 'ETIMEDOUT' || reason.code === 'ECONNRESET' || reason.syscall === 'read')) {
+    console.log(`ℹ️  [Unhandled Rejection] Database connection timeout (expected with poolers): ${reason.message || reason.code}`);
+    return; // Don't log as error, just continue
+  }
+  console.error('⚠️  [Unhandled Rejection]', reason);
+  // Don't exit - let the app continue running
+});
+
+// Handle uncaught exceptions (but don't exit)
+process.on('uncaughtException', (error) => {
+  console.error('❌ [Uncaught Exception]', error);
+  // Don't exit - let the app continue running (better than crashing)
+});
+
 const feedMonitor = require('./services/feedMonitor');
 const FeedDiscovery = require('./services/feedDiscovery');
 const WebScraper = require('./services/webScraper');
@@ -1183,17 +1200,25 @@ app.post('/api/articles/send-telegram', async (req, res) => {
 // Get the most recent last_checked timestamp from all sources
 app.get('/api/monitor/last-checked', async (req, res) => {
   try {
-    const result = await database.pool.query(`
-      SELECT MAX(last_checked) as last_checked
-      FROM sources
-      WHERE last_checked IS NOT NULL
-    `);
+    // Use queryWithRetry to handle connection timeouts
+    const result = await database.queryWithRetry(
+      'SELECT MAX(last_checked) as last_checked FROM sources WHERE last_checked IS NOT NULL',
+      [],
+      2 // Only 2 retries for this non-critical query
+    );
     
     const lastChecked = result.rows[0]?.last_checked || null;
     res.json({ last_checked: lastChecked });
   } catch (error) {
-    console.error('Error fetching last checked time:', error);
-    res.status(500).json({ error: 'Failed to fetch last checked time' });
+    // Don't log timeout errors as errors - they're expected with connection poolers
+    if (error.code === 'ETIMEDOUT' || error.code === 'ECONNRESET' || error.message.includes('timeout')) {
+      console.log(`ℹ️  [API] Database timeout fetching last checked time (expected with poolers)`);
+      // Return null instead of error - frontend can handle this gracefully
+      res.json({ last_checked: null });
+    } else {
+      console.error('Error fetching last checked time:', error.message);
+      res.status(500).json({ error: 'Failed to fetch last checked time' });
+    }
   }
 });
 
@@ -2479,6 +2504,238 @@ app.post('/api/maintenance/backfill-pubdates', async (req, res) => {
   } catch (error) {
     console.error('Error backfilling pub dates:', error);
     res.status(500).json({ success: false, error: 'Failed to backfill pub dates' });
+  }
+});
+
+// ADK Web UI - Test agent with custom prompt
+app.post('/api/adk/test', async (req, res) => {
+  try {
+    const { url, customInstruction } = req.body;
+    
+    if (!url) {
+      return res.status(400).json({ error: 'URL is required' });
+    }
+
+    // Initialize ADK scraper
+    if (!adkScraper.initialized) {
+      await adkScraper.initialize();
+    }
+
+    if (!adkScraper.agent || !adkScraper.runner) {
+      return res.status(500).json({ error: 'ADK agent not initialized. Check GOOGLE_API_KEY environment variable.' });
+    }
+
+    // Create a test source
+    const testSource = {
+      url: url,
+      name: 'Test Source',
+      category: 'Test'
+    };
+
+    // If custom instruction provided, create a temporary agent with it
+    const originalAgent = adkScraper.agent;
+    let testRunner = adkScraper.runner;
+    
+    if (customInstruction) {
+      try {
+        const adk = await import('@google/adk');
+        const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
+        
+        // Create a test agent with custom instruction
+        const llm = new adk.Gemini({
+          model: adkScraper.modelName || 'gemini-2.0-flash-exp',
+          apiKey: apiKey
+        });
+        
+        const testAgent = new adk.LlmAgent({
+          name: 'article_finder_test',
+          model: llm,
+          description: 'Agent to find recent blog posts and articles from a given site using Google Search.',
+          instruction: customInstruction,
+          tools: [adk.GOOGLE_SEARCH]
+        });
+        
+        testRunner = new adk.InMemoryRunner({
+          agent: testAgent,
+          appName: 'distroblog-test'
+        });
+      } catch (error) {
+        return res.status(500).json({ error: `Failed to create test agent: ${error.message}` });
+      }
+    }
+
+    // Capture detailed debug info
+    const debugInfo = {
+      events: [],
+      functionCalls: [],
+      functionResponses: [],
+      rawResponse: '',
+      articles: [],
+      errors: [],
+      metrics: {
+        eventCount: 0,
+        functionCallCount: 0,
+        functionResponseCount: 0,
+        startTime: Date.now(),
+        endTime: null,
+        duration: null
+      }
+    };
+
+    try {
+      // Create a session
+      const session = await testRunner.sessionService.createSession({
+        appName: 'distroblog-test',
+        userId: 'test-user',
+        state: {}
+      });
+
+      const domain = new URL(url).hostname;
+      const baseDomain = domain.replace(/^www\./, '');
+      
+      const searchQuery = customInstruction 
+        ? `Find exactly 3 of the most recent blog posts/articles from ${url}.`
+        : `Find exactly 3 of the most recent blog posts/articles from ${url}.
+
+Rules (apply strictly):
+- Domain must be ${baseDomain} (hostname contains ${baseDomain}); ignore other domains.
+- URL must be a direct article with a meaningful path (length >= 11 chars); do not return ${url}, ${url}/, /about, /contact, /privacy, /terms, /team, /careers, /docs, /login, /signup, /dashboard, /app, or any generic page.
+- No Google redirect URLs (vertexaisearch / grounding / google.com/grounding); use the final article URL.
+- Prefer canonical/short article URLs when both short and long appear.
+- Title must be non-null, non-empty, and not generic (not "Blog" or "Home").
+- datePublished in ISO (YYYY-MM-DD or with time) when visible in search results; null only if no date is visible.
+- Sort newest first.
+
+Return only a JSON array of 3 objects with: title, url, description, datePublished. No extra text.`;
+
+      // Run the agent and capture all events
+      let fullResponse = '';
+      let articles = [];
+      
+      for await (const event of testRunner.runAsync({
+        userId: session.userId,
+        sessionId: session.id,
+        newMessage: {
+          role: 'user',
+          parts: [{ text: searchQuery }]
+        },
+        runConfig: {
+          maxLlmCalls: 5
+        }
+      })) {
+        debugInfo.metrics.eventCount++;
+        
+        // Capture event details
+        const eventInfo = {
+          eventNumber: debugInfo.metrics.eventCount,
+          author: event.author,
+          partial: event.partial || false,
+          hasContent: !!event.content,
+          contentRole: event.content?.role,
+          partsCount: event.content?.parts?.length || 0,
+          errorCode: event.errorCode,
+          errorMessage: event.errorMessage
+        };
+        
+        // Check for errors
+        if (event.errorCode || event.errorMessage) {
+          debugInfo.errors.push({
+            code: event.errorCode,
+            message: event.errorMessage,
+            eventNumber: debugInfo.metrics.eventCount
+          });
+        }
+        
+        // Extract function calls and responses
+        if (event.content && event.content.parts) {
+          for (const part of event.content.parts) {
+            if (part.functionCall) {
+              debugInfo.metrics.functionCallCount++;
+              debugInfo.functionCalls.push({
+                eventNumber: debugInfo.metrics.eventCount,
+                name: part.functionCall.name,
+                args: part.functionCall.args
+              });
+            }
+            
+            if (part.functionResponse) {
+              debugInfo.metrics.functionResponseCount++;
+              debugInfo.functionResponses.push({
+                eventNumber: debugInfo.metrics.eventCount,
+                name: part.functionResponse.name,
+                response: typeof part.functionResponse.response === 'string' 
+                  ? part.functionResponse.response.substring(0, 1000) 
+                  : JSON.stringify(part.functionResponse.response).substring(0, 1000)
+              });
+            }
+            
+            if (part.text) {
+              fullResponse += part.text + '\n';
+            }
+          }
+        }
+        
+        debugInfo.events.push(eventInfo);
+      }
+
+      debugInfo.rawResponse = fullResponse;
+      debugInfo.metrics.endTime = Date.now();
+      debugInfo.metrics.duration = debugInfo.metrics.endTime - debugInfo.metrics.startTime;
+
+      // Try to parse articles from response
+      try {
+        let text = fullResponse.trim();
+        if (text.includes('```json')) {
+          text = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+        } else if (text.includes('```')) {
+          text = text.replace(/```\n?/g, '').trim();
+        }
+        
+        text = text.replace(/[\x00-\x1F\x7F]/g, '');
+        const jsonMatch = text.match(/\[[\s\S]*\]/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            articles = parsed;
+          }
+        }
+      } catch (e) {
+        // Couldn't parse JSON, that's okay
+      }
+
+      debugInfo.articles = articles;
+
+      res.json({
+        success: true,
+        url,
+        model: adkScraper.modelName,
+        debugInfo,
+        articles,
+        message: articles.length > 0 
+          ? `Found ${articles.length} articles` 
+          : 'No articles found in response'
+      });
+    } catch (error) {
+      debugInfo.metrics.endTime = Date.now();
+      debugInfo.metrics.duration = debugInfo.metrics.endTime - debugInfo.metrics.startTime;
+      debugInfo.errors.push({
+        code: error.code || 'UNKNOWN',
+        message: error.message,
+        stack: error.stack
+      });
+      
+      res.status(500).json({
+        success: false,
+        error: error.message,
+        debugInfo
+      });
+    }
+  } catch (error) {
+    console.error('Error testing ADK:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
   }
 });
 

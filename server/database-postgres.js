@@ -79,7 +79,17 @@ class Database {
 
     // Handle pool errors (don't crash the app)
     this.pool.on('error', (err) => {
-      console.error('Unexpected error on idle client', err);
+      // Connection timeout errors on idle clients are expected with connection poolers
+      // These happen when a connection sits idle too long and the server closes it
+      // The pool will automatically create a new connection when needed
+      if (err.code === 'ETIMEDOUT' || err.code === 'ECONNRESET' || err.syscall === 'read') {
+        // These are expected timeout/reset errors on idle connections - log at debug level only
+        console.log(`ℹ️  [DB Pool] Idle connection ${err.code || err.syscall || 'timeout'} (normal with connection poolers, pool will auto-reconnect)`);
+      } else {
+        // Other errors should be logged as warnings
+        console.error('⚠️  [DB Pool] Unexpected error on idle client', err.message || err);
+        console.error('   Code:', err.code, 'Syscall:', err.syscall);
+      }
       // Don't throw - let the pool handle reconnection
     });
   }
@@ -350,10 +360,21 @@ class Database {
   }
 
   async updateSourceLastChecked(id) {
-    await this.pool.query(
-      'UPDATE sources SET last_checked = CURRENT_TIMESTAMP WHERE id = $1',
-      [id]
-    );
+    try {
+      // Use queryWithRetry to handle connection timeouts gracefully
+      await this.queryWithRetry(
+        'UPDATE sources SET last_checked = CURRENT_TIMESTAMP WHERE id = $1',
+        [id],
+        2 // Only 2 retries for timestamp updates (non-critical)
+      );
+    } catch (error) {
+      // Silently fail - timestamp updates are non-critical
+      // Log only if it's not a timeout (those are expected with poolers)
+      if (error.code !== 'ETIMEDOUT' && error.code !== 'ECONNRESET' && !error.message.includes('timeout')) {
+        console.warn(`⚠️  [DB] Could not update last_checked for source ${id}:`, error.message);
+      }
+      // Don't throw - let the process continue
+    }
   }
 
   async updateScrapingResult(id, result) {

@@ -42,7 +42,7 @@ class ADKScraper {
       // Pick the first available model that supports Google Search
       const candidateModels = [
         'gemini-2.0-flash-exp',         // preferred
-        'gemini-2.0-flash-live-001',    // live variant (from mcd reference)
+        'gemini-2.0-flash-live-001',    // live variant (from reference)
         'gemini-1.5-flash-latest',      // common alias
         'gemini-1.5-flash',             // fallback
         'gemini-1.5-flash-001',         // legacy fallback
@@ -490,21 +490,32 @@ Return only a JSON array of 3 objects with: title, url, description, datePublish
         console.log(`✅ [ADK] Found ${filteredArticles.length} articles from ${sourceDomain} domain${articlesFiltered > 0 ? ` (${articlesFiltered} external articles filtered out)` : ''}`);
       }
 
-      // Store scraping result for health tracking
+      // Store scraping result for health tracking (non-blocking)
+      // This is optional - don't let database errors stop scraping
       if (source.id) {
         try {
           const database = require('../database-postgres');
-          await database.updateScrapingResult(source.id, {
-            articlesFound: articlesBeforeFilter,
-            articlesAfterFilter: filteredArticles.length,
-            articlesFiltered: articlesFiltered,
-            success: filteredArticles.length > 0,
-            timestamp: new Date().toISOString(),
-            domain: sourceDomain,
-            method: 'ADK_AGENT'
-          });
+          // Use a timeout to prevent hanging if database is having issues
+          await Promise.race([
+            database.updateScrapingResult(source.id, {
+              articlesFound: articlesBeforeFilter,
+              articlesAfterFilter: filteredArticles.length,
+              articlesFiltered: articlesFiltered,
+              success: filteredArticles.length > 0,
+              timestamp: new Date().toISOString(),
+              domain: sourceDomain,
+              method: 'ADK_AGENT'
+            }),
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('Database query timeout')), 5000)
+            )
+          ]);
         } catch (err) {
-          console.warn('Could not store scraping result:', err.message);
+          // Silently ignore database errors - scraping was successful, that's what matters
+          // Only log if it's not a timeout/connection error (those are expected with poolers)
+          if (err.code !== 'ETIMEDOUT' && err.code !== 'ECONNRESET' && !err.message.includes('timeout')) {
+            console.warn(`⚠️  [ADK] Could not store scraping result for ${source.name}:`, err.message);
+          }
         }
       }
 

@@ -1,13 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { BrowserRouter as Router, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import './App.css';
 import './DistroScoopstream.css';
 import SourceManager from './components/SourceManager';
 import DistroScoutLanding from './components/DistroScoutLanding';
 import DistroScoutEditSend from './components/DistroScoutEditSend';
+import ADKWeb from './components/ADKWeb';
 import config from './config';
 
-function App() {
+function MainApp() {
   const [activeTab, setActiveTab] = useState('distro-scoopstream');
+  const location = useLocation();
+  const navigate = useNavigate();
   const [sources, setSources] = useState([]);
   const [selectedArticles, setSelectedArticles] = useState([]);
   const [workflowStep, setWorkflowStep] = useState('review'); // 'review', 'edit', 'send'
@@ -20,6 +24,18 @@ function App() {
   useEffect(() => {
     fetchSources();
   }, []);
+
+  // Check URL path on load and navigate accordingly
+  useEffect(() => {
+    const path = location.pathname;
+    if (path === '/agent-test' || path === '/adk-web' || path === '/agent') {
+      setActiveTab('adk-web');
+    } else if (path === '/sources') {
+      setActiveTab('sources');
+    } else if (path === '/' || path === '/scoopstream') {
+      setActiveTab('distro-scoopstream');
+    }
+  }, [location.pathname]);
 
   const fetchSources = async () => {
     try {
@@ -222,20 +238,37 @@ function App() {
             <p className="header-stats">news monitoring tool for journalists</p>
           </div>
           <nav className="header-nav">
-            {activeTab === 'sources' && (
+            {activeTab !== 'distro-scoopstream' && (
               <button 
                 className="nav-link"
-                onClick={() => setActiveTab('distro-scoopstream')}
+                onClick={() => {
+                  setActiveTab('distro-scoopstream');
+                  navigate('/');
+                }}
               >
                 Scoopstream
               </button>
             )}
-            {activeTab === 'distro-scoopstream' && (
+            {activeTab !== 'sources' && (
               <button 
                 className="nav-link"
-                onClick={() => setActiveTab('sources')}
+                onClick={() => {
+                  setActiveTab('sources');
+                  navigate('/sources');
+                }}
               >
                 Sources
+              </button>
+            )}
+            {activeTab !== 'adk-web' && (
+              <button 
+                className="nav-link"
+                onClick={() => {
+                  setActiveTab('adk-web');
+                  navigate('/agent-test');
+                }}
+              >
+                Agent Test
               </button>
             )}
           </nav>
@@ -269,6 +302,9 @@ function App() {
             refreshTrigger={refreshTrigger}
           />
         )}
+        {activeTab === 'adk-web' && (
+          <ADKWeb />
+        )}
         {activeTab === 'new' && workflowStep === 'send' && (
           <div className="send-confirmation">
             <h2>Send Articles</h2>
@@ -287,6 +323,21 @@ function App() {
 
       {/* Legacy modal not used for inline editing; keeping for future use but always closed */}
     </div>
+  );
+}
+
+function App() {
+  return (
+    <Router>
+      <Routes>
+        <Route path="/agent-test" element={<MainApp />} />
+        <Route path="/adk-web" element={<MainApp />} />
+        <Route path="/agent" element={<MainApp />} />
+        <Route path="/sources" element={<MainApp />} />
+        <Route path="/" element={<MainApp />} />
+        <Route path="/scoopstream" element={<MainApp />} />
+      </Routes>
+    </Router>
   );
 }
 
