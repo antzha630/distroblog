@@ -28,7 +28,7 @@ function MainApp() {
   // Check URL path on load and navigate accordingly
   useEffect(() => {
     const path = location.pathname;
-    if (path === '/agent-test' || path === '/adk-web' || path === '/agent') {
+    if (path === '/agent-test') {
       setActiveTab('adk-web');
     } else if (path === '/sources') {
       setActiveTab('sources');
@@ -331,8 +331,6 @@ function App() {
     <Router>
       <Routes>
         <Route path="/agent-test" element={<MainApp />} />
-        <Route path="/adk-web" element={<MainApp />} />
-        <Route path="/agent" element={<MainApp />} />
         <Route path="/sources" element={<MainApp />} />
         <Route path="/" element={<MainApp />} />
         <Route path="/scoopstream" element={<MainApp />} />
