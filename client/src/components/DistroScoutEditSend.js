@@ -83,18 +83,43 @@ function DistroScoutEditSend({ articles, onBack, onEditArticle, onRemoveArticle,
     }
   };
 
-  const handleSendToDistro = async () => {
+  const handleSendToDistro = async (articleId = null) => {
+    // Determine which articles to send
+    const articlesToSend = articleId 
+      ? localArticles.filter(a => a.id === articleId)
+      : localArticles;
+    
+    if (articlesToSend.length === 0) {
+      return;
+    }
+    
     // Show confirmation dialog
-    if (!window.confirm('Are you sure you want to send to Distro?')) {
+    const message = articleId 
+      ? `Are you sure you want to send this article to Distro?`
+      : `Are you sure you want to send ${articlesToSend.length} article(s) to Distro?`;
+    
+    if (!window.confirm(message)) {
       return; // User cancelled
     }
     
     setIsGenerating(true);
     try {
       if (onSendToDistro) {
-        await onSendToDistro(localArticles);
+        await onSendToDistro(articlesToSend);
         // Update local articles status to 'sent'
-        setLocalArticles(prev => prev.map(a => ({ ...a, status: 'sent' })));
+        setLocalArticles(prev => prev.map(a => 
+          articlesToSend.some(sent => sent.id === a.id) 
+            ? { ...a, status: 'sent' }
+            : a
+        ));
+        // Update status map
+        articlesToSend.forEach(article => {
+          statusMapRef.current.set(article.id, 'sent');
+        });
+        // Notify parent of status change
+        if (onArticleStatusChange && articleId) {
+          onArticleStatusChange(articleId, 'sent');
+        }
       }
     } finally {
       setIsGenerating(false);
@@ -313,7 +338,7 @@ function DistroScoutEditSend({ articles, onBack, onEditArticle, onRemoveArticle,
                 )}
                 
                 <button 
-                  onClick={() => handleSendToDistro()}
+                  onClick={() => handleSendToDistro(article.id)}
                   className={`send-btn ${article.status === 'sent' ? 'already-sent' : ''}`}
                   disabled={isGenerating || editingId === article.id || article.status === 'sent'}
                 >
