@@ -382,6 +382,7 @@
   cursor: pointer;
   transition: all 0.2s ease;
   white-space: nowrap;
+  min-width: fit-content;
 }
 
 .edit-btn:hover {
@@ -400,6 +401,7 @@
   cursor: pointer;
   transition: all 0.2s ease;
   white-space: nowrap;
+  min-width: fit-content;
 }
 
 .send-btn:hover:not(:disabled) {
@@ -424,6 +426,7 @@
   cursor: pointer;
   transition: all 0.2s ease;
   white-space: nowrap;
+  min-width: fit-content;
 }
 
 .telegram-btn:hover:not(:disabled) {
@@ -462,6 +465,7 @@
   cursor: pointer;
   transition: all 0.2s ease;
   white-space: nowrap;
+  min-width: fit-content;
   margin-left: auto;
 }
 

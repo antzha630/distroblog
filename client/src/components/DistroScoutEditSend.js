@@ -329,45 +329,47 @@ function DistroScoutEditSend({ articles, onBack, onEditArticle, onRemoveArticle,
                     <button onClick={handleCancelEdit} className="remove-btn">Cancel</button>
                   </>
                 ) : (
-                  <button 
-                    onClick={() => handleEditSummary(article)}
-                    className="edit-btn"
-                  >
-                    Edit Summary
-                  </button>
-                )}
-                
-                <button 
-                  onClick={() => handleSendToDistro(article.id)}
-                  className={`send-btn ${article.status === 'sent' ? 'already-sent' : ''}`}
-                  disabled={isGenerating || editingId === article.id || article.status === 'sent'}
-                >
-                  {isGenerating ? 'Sending...' : article.status === 'sent' ? 'Already Sent to Distro' : 'Send to Distro'}
-                </button>
-                
-                {(() => {
-                  const msgInfo = calculateTelegramMessageLength(article);
-                  const isOverLimit = msgInfo.isOverLimit;
-                  const isDisabled = telegramSending[article.id] || editingId === article.id || article.status === 'sent' || isOverLimit;
-                  return (
+                  <>
                     <button 
-                      onClick={() => handleSendToTelegram(article.id)}
-                      className={`telegram-btn ${article.status === 'sent' ? 'already-sent' : ''}`}
-                      disabled={isDisabled}
-                      title={isOverLimit ? `Message exceeds Telegram limit (${msgInfo.totalLength}/${msgInfo.maxLength} chars). Please shorten the content.` : undefined}
+                      onClick={() => handleEditSummary(article)}
+                      className="edit-btn"
                     >
-                      {telegramSending[article.id] ? 'Sending...' : article.status === 'sent' ? 'Already Sent to Telegram' : isOverLimit ? `Send to Telegram (${msgInfo.totalLength - msgInfo.maxLength} over)` : 'Send to Telegram'}
+                      Edit Summary
                     </button>
-                  );
-                })()}
-                
-                <button 
-                  onClick={() => handleRemove(article.id)}
-                  className="remove-btn"
-                  disabled={editingId === article.id}
-                >
-                  Remove
-                </button>
+                    
+                    {(() => {
+                      const msgInfo = calculateTelegramMessageLength(article);
+                      const isOverLimit = msgInfo.isOverLimit;
+                      const isDisabled = telegramSending[article.id] || editingId === article.id || article.status === 'sent' || isOverLimit;
+                      return (
+                        <button 
+                          onClick={() => handleSendToTelegram(article.id)}
+                          className={`telegram-btn ${article.status === 'sent' ? 'already-sent' : ''}`}
+                          disabled={isDisabled}
+                          title={isOverLimit ? `Message exceeds Telegram limit (${msgInfo.totalLength}/${msgInfo.maxLength} chars). Please shorten the content.` : undefined}
+                        >
+                          {telegramSending[article.id] ? 'Sending...' : article.status === 'sent' ? 'Already Sent to Telegram' : isOverLimit ? `Send to Telegram (${msgInfo.totalLength - msgInfo.maxLength} over)` : 'Send to Telegram'}
+                        </button>
+                      );
+                    })()}
+                    
+                    <button 
+                      onClick={() => handleSendToDistro(article.id)}
+                      className={`send-btn ${article.status === 'sent' ? 'already-sent' : ''}`}
+                      disabled={isGenerating || editingId === article.id || article.status === 'sent'}
+                    >
+                      {isGenerating ? 'Sending...' : article.status === 'sent' ? 'Already Sent to Distro' : 'Send to Distro'}
+                    </button>
+                    
+                    <button 
+                      onClick={() => handleRemove(article.id)}
+                      className="remove-btn"
+                      disabled={editingId === article.id}
+                    >
+                      Remove
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           ))

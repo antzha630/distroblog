@@ -953,23 +953,23 @@
   display: block;
 }
 
-.url-input {
+.add-url-section .url-input {
   flex: 1;
   padding: 10px 12px;
   border: 1px solid #ced4da;
   border-radius: 4px;
   font-size: 0.95rem;
-  background: white;
-  color: #495057;
+  background: white !important;
+  color: #495057 !important;
 }
 
-.url-input::placeholder {
-  color: #6c757d;
+.add-url-section .url-input::placeholder {
+  color: #6c757d !important;
 }
 
 .add-url-btn {
-  background: #6c757d;
-  color: white;
+  background: #6c757d !important;
+  color: white !important;
   border: none;
   padding: 10px 20px;
   border-radius: 4px;
