@@ -371,6 +371,10 @@
   border-top: 1px solid #e9ecef;
 }
 
+.article-actions button {
+  vertical-align: middle;
+}
+
 .edit-btn {
   background: #007bff;
   color: white;
@@ -383,6 +387,12 @@
   transition: all 0.2s ease;
   white-space: nowrap;
   min-width: fit-content;
+  box-sizing: border-box;
+  line-height: 1.5;
+  height: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .edit-btn:hover {
@@ -402,6 +412,12 @@
   transition: all 0.2s ease;
   white-space: nowrap;
   min-width: fit-content;
+  box-sizing: border-box;
+  line-height: 1.5;
+  height: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .send-btn:hover:not(:disabled) {
@@ -427,6 +443,12 @@
   transition: all 0.2s ease;
   white-space: nowrap;
   min-width: fit-content;
+  box-sizing: border-box;
+  line-height: 1.5;
+  height: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .telegram-btn:hover:not(:disabled) {
@@ -467,6 +489,12 @@
   white-space: nowrap;
   min-width: fit-content;
   margin-left: auto;
+  box-sizing: border-box;
+  line-height: 1.5;
+  height: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .remove-btn:hover {
