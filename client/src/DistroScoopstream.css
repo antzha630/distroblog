@@ -199,7 +199,7 @@
 .article-title {
   font-size: 1.3rem;
   font-weight: 700;
-  color: #2c3e50;
+  color: #2c3e50 !important;
   margin: 0 0 15px 0;
   line-height: 1.4;
 }
@@ -339,7 +339,7 @@
 .article-title {
   font-size: 1.4rem;
   font-weight: 700;
-  color: #2c3e50;
+  color: #2c3e50 !important;
   margin: 0 0 15px 0;
   line-height: 1.4;
 }
@@ -686,7 +686,7 @@ body {
 }
 
 .sent-article .article-title {
-  color: #6c757d;
+  color: #6c757d !important;
 }
 
 .sent-article .article-actions {
@@ -788,6 +788,14 @@ body {
   border: 1px solid #ced4da;
   border-radius: 6px;
   font-size: 0.95rem;
+  background: white;
+  color: #495057;
+}
+
+.headline-input::placeholder,
+.url-input::placeholder,
+.content-textarea::placeholder {
+  color: #6c757d;
 }
 
 .cancel-btn {

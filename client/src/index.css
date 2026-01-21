@@ -51,6 +51,15 @@ input, textarea, select {
   line-height: inherit;
 }
 
+/* Ensure inputs have proper defaults - only apply to unstyled inputs, not dark-themed components */
+input:not([class]):not([class*="chat-"]):not([class*="dark"]),
+textarea:not([class]):not([class*="chat-"]):not([class*="dark"]),
+select:not([class]):not([class*="chat-"]):not([class*="dark"]) {
+  background: white;
+  color: #495057;
+  border: 1px solid #ced4da;
+}
+
 /* Focus styles */
 button:focus,
 input:focus,

@@ -262,6 +262,13 @@
   border-radius: 4px;
   font-size: 0.95rem;
   transition: border-color 0.2s;
+  background: white;
+  color: #495057;
+}
+
+.form-input::placeholder,
+.form-textarea::placeholder {
+  color: #6c757d;
 }
 
 .form-input:focus, .form-textarea:focus, .form-select:focus {
@@ -640,7 +647,7 @@
 .article-title {
   font-size: 1.2rem;
   font-weight: 700;
-  color: #2c3e50;
+  color: #2c3e50 !important;
   margin: 0 0 12px 0;
   line-height: 1.3;
 }
@@ -949,6 +956,12 @@
   border: 1px solid #ced4da;
   border-radius: 4px;
   font-size: 0.95rem;
+  background: white;
+  color: #495057;
+}
+
+.url-input::placeholder {
+  color: #6c757d;
 }
 
 .add-url-btn {
