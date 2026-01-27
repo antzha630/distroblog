@@ -471,6 +471,10 @@ class FeedMonitor {
                 if (this.webScraper && typeof this.webScraper.close === 'function') {
               await this.webScraper.close();
                 }
+                // MEMORY FIX: Also clean up ADK scraper sessions
+                if (this.adkScraper && typeof this.adkScraper.close === 'function') {
+                  await this.adkScraper.close();
+                }
               } catch (closeError) {
                 // Ignore cleanup errors
               }
@@ -871,6 +875,10 @@ class FeedMonitor {
           // Ensure browser is closed even if error occurred
           try {
             await this.webScraper.close();
+            // MEMORY FIX: Also clean up ADK scraper sessions
+            if (this.adkScraper && typeof this.adkScraper.close === 'function') {
+              await this.adkScraper.close();
+            }
           } catch (closeError) {
             // Ignore close errors during error handling
           }

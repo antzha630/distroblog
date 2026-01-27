@@ -1508,8 +1508,9 @@ app.post('/api/sources/:id/re-scrape', async (req, res) => {
       // Extract articles using ADK (AI-powered extraction) - faster and more consistent
       const articles = await adkScraper.scrapeArticles(source);
       
-      // ADK doesn't need browser cleanup, but ensure traditional scraper is closed
+      // MEMORY FIX: Clean up both scrapers to free memory
       await webScraper.close();
+      await adkScraper.close();
       
       console.log(`📰 [Re-scrape] Found ${articles.length} articles from listing page, checking for existing ones to update...`);
       if (articles.length > 0) {
@@ -1944,8 +1945,9 @@ app.post('/api/sources/re-scrape-all', async (req, res) => {
       // Extract articles using ADK (AI-powered extraction) - faster and more consistent
       const articles = await adkScraper.scrapeArticles(source);
       
-      // ADK doesn't need browser cleanup, but ensure traditional scraper is closed
+      // MEMORY FIX: Clean up both scrapers to free memory
       await webScraper.close();
+      await adkScraper.close();
         
         let updated = 0;
         let deleted = 0;

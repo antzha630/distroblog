@@ -1,4 +1,4 @@
-// ADK (Agent Development Kit) implementation using Google Search
+ // ADK (Agent Development Kit) implementation using Google Search
 const axios = require('axios');
 // This uses an agent with Google Search tool instead of scraping HTML
 // Based on: https://google.github.io/adk-docs/
@@ -132,6 +132,9 @@ Return only the JSON array, nothing else.`,
    * Returns articles in RSS-like format for compatibility
    */
   async scrapeArticles(source) {
+    // MEMORY FIX: Track session outside try block so we can clean it up in catch
+    let session = null;
+    
     try {
       console.log(`🤖 [ADK] Finding articles from: ${source.url} using Google Search agent`);
 
@@ -156,9 +159,12 @@ Return only the JSON array, nothing else.`,
       this.lastRequestTime = Date.now();
 
       // Create a session for this request
-      const session = await this.runner.sessionService.createSession({
+      // MEMORY FIX: Use a unique session ID that we can clean up after use
+      const sessionId = `session-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+      session = await this.runner.sessionService.createSession({
         appName: 'distroblog',
         userId: 'system',
+        id: sessionId,
         state: {}
       });
 
@@ -631,6 +637,22 @@ Return only a JSON array of 3 objects with: title, url, description, datePublish
         : 0;
       console.log(`📊 [ADK] [SUMMARY] ${source.name}: ${lightweightArticles.length} valid articles, ${dateCoverage}% have dates`);
       
+      // MEMORY FIX: Delete the session after use to prevent memory accumulation
+      // InMemoryRunner stores all sessions in memory, causing OOM crashes over time
+      try {
+        if (this.runner && this.runner.sessionService && this.runner.sessionService.deleteSession) {
+          await this.runner.sessionService.deleteSession({
+            appName: 'distroblog',
+            userId: session.userId,
+            sessionId: session.id
+          });
+          console.log(`🧹 [ADK] Cleaned up session ${session.id}`);
+        }
+      } catch (cleanupErr) {
+        // Don't fail if cleanup fails, just log it
+        console.warn(`⚠️ [ADK] Could not clean up session: ${cleanupErr.message}`);
+      }
+      
       // If no valid articles found, throw error to trigger fallback to traditional scraper
       if (lightweightArticles.length === 0) {
         throw new Error(`ADK agent found 0 valid articles from ${source.url} (may need fallback to traditional scraper)`);
@@ -638,6 +660,20 @@ Return only a JSON array of 3 objects with: title, url, description, datePublish
       
       return lightweightArticles;
     } catch (error) {
+      // MEMORY FIX: Clean up session even on error
+      if (session && this.runner && this.runner.sessionService && this.runner.sessionService.deleteSession) {
+        try {
+          await this.runner.sessionService.deleteSession({
+            appName: 'distroblog',
+            userId: session.userId,
+            sessionId: session.id
+          });
+          console.log(`🧹 [ADK] Cleaned up session ${session.id} after error`);
+        } catch (cleanupErr) {
+          console.warn(`⚠️ [ADK] Could not clean up session after error: ${cleanupErr.message}`);
+        }
+      }
+      
       // Check if it's a rate limit error - log it but still throw to trigger fallback
       if ((error.message && error.message.includes('429')) || (error.message && error.message.includes('quota'))) {
         console.error(`❌ [ADK] Rate limit/quota exceeded for ${source.url}: ${error.message}`);
@@ -661,11 +697,52 @@ Return only a JSON array of 3 objects with: title, url, description, datePublish
   }
 
   /**
-   * Clean up resources (no-op for ADK, but kept for compatibility)
+   * Clean up resources - reset ADK state to free memory
    */
   async close() {
-    // ADK doesn't need cleanup like browsers
-    return Promise.resolve();
+    try {
+      // Reset the runner and agent to free memory
+      // This forces re-initialization on next use, which is safer than keeping stale state
+      if (this.runner) {
+        // Try to clean up any remaining sessions
+        try {
+          if (this.runner.sessionService && this.runner.sessionService.listSessions) {
+            const sessions = await this.runner.sessionService.listSessions({
+              appName: 'distroblog',
+              userId: 'system'
+            });
+            if (sessions && sessions.length > 0) {
+              console.log(`🧹 [ADK] Cleaning up ${sessions.length} remaining sessions...`);
+              for (const sess of sessions) {
+                try {
+                  await this.runner.sessionService.deleteSession({
+                    appName: 'distroblog',
+                    userId: sess.userId || 'system',
+                    sessionId: sess.id
+                  });
+                } catch (e) {
+                  // Ignore individual session cleanup errors
+                }
+              }
+            }
+          }
+        } catch (listErr) {
+          // Ignore session listing errors
+        }
+        
+        this.runner = null;
+      }
+      
+      this.agent = null;
+      this.initialized = false;
+      console.log('🧹 [ADK] Resources cleaned up');
+    } catch (error) {
+      console.warn(`⚠️ [ADK] Error during cleanup: ${error.message}`);
+      // Reset state anyway
+      this.runner = null;
+      this.agent = null;
+      this.initialized = false;
+    }
   }
 }
 
