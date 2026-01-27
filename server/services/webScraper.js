@@ -376,6 +376,9 @@ class WebScraper {
           const datePatterns = [
             // DD-MMM-YY format (e.g., "06-Nov-25", "03-Nov-25")
             /\b(\d{1,2})[-/](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[-/](\d{2,4})\b/i,
+            // Embedded date without separator: "News10/30/25Title" or "Press Release10/16/25Title"
+            // Match M/D/YY or MM/DD/YY at word boundaries or after category text
+            /(?:News|Press Release|Update|Blog|Article|Post)?(\d{1,2})\/(\d{1,2})\/(\d{2})\b/i,
             // DD-MM-YY or DD/MM/YYYY
             /\b(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})\b/,
             // Full month name (e.g., "November 6, 2025")
@@ -397,6 +400,16 @@ class WebScraper {
                   const month = match[2];
                   const year = match[3].length === 2 ? `20${match[3]}` : match[3];
                   dateStr = `${day}-${month}-${year}`;
+                }
+                
+                // Handle embedded MM/DD/YY format (e.g., "News10/30/25Title")
+                // Check if the pattern looks like M/D/YY or MM/DD/YY embedded in text
+                const embeddedMatch = match[0].match(/(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
+                if (embeddedMatch) {
+                  const month = embeddedMatch[1];
+                  const day = embeddedMatch[2];
+                  const year = `20${embeddedMatch[3]}`;
+                  dateStr = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
                 }
                 
                 const date = new Date(dateStr);

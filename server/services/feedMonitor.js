@@ -607,6 +607,26 @@ class FeedMonitor {
                   // Extract date from scraped article (lightweight, no full page fetch)
                   let improvedDate = article.datePublished ? new Date(article.datePublished) : null;
                   
+                  // Try to extract date from the title itself (e.g., "News10/30/25The Open AGI Symposium")
+                  // This handles sites that embed dates in titles without proper date metadata
+                  if (!improvedDate || isNaN(improvedDate.getTime())) {
+                    const titleDateMatch = article.title.match(/(?:News|Press Release|Update|Blog|Article|Post)?(\d{1,2})\/(\d{1,2})\/(\d{2})(?=[A-Za-z]|$)/i);
+                    if (titleDateMatch) {
+                      try {
+                        const month = titleDateMatch[1];
+                        const day = titleDateMatch[2];
+                        const year = `20${titleDateMatch[3]}`;
+                        const d = new Date(`${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`);
+                        if (!isNaN(d.getTime())) {
+                          improvedDate = d;
+                          console.log(`📅 [CHECK NOW] [${source.name}] Extracted date from title: ${d.toISOString()}`);
+                        }
+                      } catch (e) {
+                        // Ignore date parsing errors
+                      }
+                    }
+                  }
+                  
                   // For manual checks, try lightweight date extraction (static HTTP fetch) if still no date
                   if (isManual && (!improvedDate || isNaN(improvedDate.getTime()))) {
                     try {
@@ -1754,6 +1774,8 @@ class FeedMonitor {
         /\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b/,
         // MM/DD/YYYY or DD/MM/YYYY
         /\b(\d{1,2})[-/](\d{1,2})[-/](\d{4})\b/,
+        // Embedded date in title: "News10/30/25Title" or similar M/D/YY or MM/DD/YY
+        /(?:News|Press Release|Update|Blog|Article|Post)?(\d{1,2})\/(\d{1,2})\/(\d{2})(?=[A-Za-z]|$)/i,
         // DD-MMM-YY format (e.g., "06-Nov-25", "03-Nov-25")
         /\b(\d{1,2})[-/](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[-/](\d{2,4})\b/i,
         // ISO 8601 with time: 2025-12-15T10:00:00Z or 2025-12-15T10:00:00+00:00
@@ -1771,6 +1793,15 @@ class FeedMonitor {
               const month = match[2];
               const year = match[3].length === 2 ? `20${match[3]}` : match[3];
               dateStr = `${day}-${month}-${year}`;
+            }
+            
+            // Handle embedded MM/DD/YY format (e.g., "News10/30/25Title" -> 10/30/25)
+            const embeddedMatch = match[0].match(/(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
+            if (embeddedMatch) {
+              const month = embeddedMatch[1];
+              const day = embeddedMatch[2];
+              const year = `20${embeddedMatch[3]}`;
+              dateStr = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
             }
             
             const dt = new Date(dateStr);
