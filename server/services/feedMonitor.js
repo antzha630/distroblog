@@ -291,7 +291,7 @@ class FeedMonitor {
         return null;
       };
       
-      const MEMORY_LIMIT_MB = 450; // Stop if we exceed 450MB RSS to stay under 512MB limit
+      const MEMORY_LIMIT_MB = 380; // Stop if we exceed 380MB RSS to stay under 400MB heap limit (with safety buffer)
       
       // Skip list for problematic sources that cause memory issues
       // Hyper Cycle: ADK fails (returns 0 articles), falls back to Playwright, which causes memory crash
@@ -439,6 +439,25 @@ class FeedMonitor {
             } catch (scrapeError) {
               console.error(`❌ [CHECK NOW] [${source.name}] ADK error: ${scrapeError.message}`);
               articles = [];
+            }
+            
+            // MEMORY FIX: Clean up ADK session BEFORE Playwright fallback to free memory
+            // This prevents memory accumulation when ADK fails and we fall back to Playwright
+            if (articles.length === 0) {
+              try {
+                if (this.adkScraper && typeof this.adkScraper.close === 'function') {
+                  await this.adkScraper.close();
+                  console.log(`🧹 [CHECK NOW] [${source.name}] Cleaned up ADK session before Playwright fallback`);
+                }
+                // Force GC after ADK cleanup to reclaim memory
+                if (global.gc) {
+                  global.gc();
+                  const memAfterGC = getMemoryMB();
+                  console.log(`🧹 [CHECK NOW] [${source.name}] Forced GC after ADK cleanup, memory: ${memAfterGC}MB`);
+                }
+              } catch (cleanupErr) {
+                // Ignore cleanup errors
+              }
             }
             
             // Fallback to traditional scraper ONLY if ADK returned 0 articles
@@ -1991,7 +2010,7 @@ class FeedMonitor {
       return 0;
     };
     
-    const MEMORY_LIMIT_MB = 450;
+    const MEMORY_LIMIT_MB = 380; // Match the main memory limit
     const BATCH_SIZE = 2; // Smaller batches for auto-enrichment (less aggressive)
     const ENRICH_LIMIT = Math.min(maxArticles, 50); // Increased limit to 50 articles for better coverage
     

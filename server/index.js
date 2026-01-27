@@ -2831,7 +2831,7 @@ app.post('/api/articles/enrich-metadata', async (req, res) => {
     return 0;
   };
   
-  const MEMORY_LIMIT_MB = 450; // Bail if memory gets too high
+  const MEMORY_LIMIT_MB = 380; // Bail if memory gets too high (stay under 400MB heap limit)
   const BATCH_SIZE = 3; // Process 3 articles at a time
   const MAX_ARTICLES = parseInt(req.query.limit) || 30; // Default to 30 articles max
   
