@@ -643,6 +643,23 @@ class FeedMonitor {
                     }
                   }
                   
+                  // PLAYWRIGHT FALLBACK: If still no date, try Playwright for JS-rendered dates
+                  // Only for manual checks, and only if memory is safe
+                  if (isManual && (!improvedDate || isNaN(improvedDate.getTime()))) {
+                    try {
+                      const playwrightDate = await this.extractDatePlaywright(article.link);
+                      if (playwrightDate) {
+                        const d = new Date(playwrightDate);
+                        if (!isNaN(d.getTime())) {
+                          improvedDate = d;
+                          // Note: extractDatePlaywright already logs success
+                        }
+                      }
+                    } catch (e) {
+                      // extractDatePlaywright handles its own error logging
+                    }
+                  }
+                  
                   if (!isManual) {
                     // Validate URL before attempting metadata fetch
                     // Skip metadata fetching for invalid URLs (Google redirects, generic URLs, etc.)
@@ -1984,6 +2001,236 @@ class FeedMonitor {
       // Only log if it's not a 404 (common for old/deleted articles)
       if (err.response?.status !== 404) {
         console.log(`⚠️  [ENRICH] extractDateStatic failed for ${url.substring(0, 80)}...: ${errorMsg}`);
+      }
+      return null;
+    }
+  }
+  
+  // Playwright-based date extraction for JS-rendered sites
+  // MEMORY-SAFE: Checks memory before launching, closes browser immediately after
+  async extractDatePlaywright(url) {
+    // Memory check - don't use Playwright if memory is already high
+    const MEMORY_LIMIT_FOR_PLAYWRIGHT = 300; // Leave 100MB buffer for Render's 512MB limit
+    const getMemoryMB = () => {
+      if (process.memoryUsage) {
+        return Math.round(process.memoryUsage().rss / 1024 / 1024);
+      }
+      return 0;
+    };
+    
+    const currentMem = getMemoryMB();
+    if (currentMem > MEMORY_LIMIT_FOR_PLAYWRIGHT) {
+      console.log(`⚠️  [DATE-PW] Memory too high (${currentMem}MB > ${MEMORY_LIMIT_FOR_PLAYWRIGHT}MB), skipping Playwright date extraction`);
+      return null;
+    }
+    
+    let browser = null;
+    let page = null;
+    
+    try {
+      const { chromium } = require('playwright');
+      
+      // Launch with minimal memory footprint
+      browser = await chromium.launch({
+        headless: true,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+          '--single-process',
+          '--no-zygote',
+          '--disable-extensions',
+          '--disable-background-networking',
+          '--disable-sync',
+          '--disable-translate',
+          '--metrics-recording-only',
+          '--mute-audio',
+          '--no-first-run',
+          '--js-flags=--max-old-space-size=128' // Limit JS heap in browser
+        ]
+      });
+      
+      page = await browser.newPage();
+      
+      // Set a tight timeout to avoid hanging
+      page.setDefaultTimeout(15000);
+      page.setDefaultNavigationTimeout(15000);
+      
+      // Block unnecessary resources to save memory
+      await page.route('**/*', (route) => {
+        const resourceType = route.request().resourceType();
+        if (['image', 'media', 'font', 'stylesheet'].includes(resourceType)) {
+          route.abort();
+        } else {
+          route.continue();
+        }
+      });
+      
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      
+      // Wait briefly for JS to render dates
+      await page.waitForTimeout(2000);
+      
+      // Extract date using same selectors as static, but now JS-rendered content is available
+      const dateResult = await page.evaluate(() => {
+        const parseDate = (text) => {
+          if (!text) return null;
+          const patterns = [
+            /\b(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2}),?\s+(\d{4})\b/i,
+            /\b(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})\b/i,
+            /\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b/,
+            /\b(\d{1,2})[-/](\d{1,2})[-/](\d{4})\b/,
+            /\b(\d{1,2})[-/](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[-/](\d{2,4})\b/i,
+            /\b(\d{4})[-/](\d{2})[-/](\d{2})T\d{2}:\d{2}:\d{2}/,
+          ];
+          for (const pattern of patterns) {
+            const match = text.match(pattern);
+            if (match) {
+              try {
+                let dateStr = match[0];
+                if (match[2] && /[A-Za-z]{3}/.test(match[2])) {
+                  const day = match[1];
+                  const month = match[2];
+                  const year = match[3].length === 2 ? `20${match[3]}` : match[3];
+                  dateStr = `${day}-${month}-${year}`;
+                }
+                const dt = new Date(dateStr);
+                if (!isNaN(dt.getTime())) {
+                  const now = new Date();
+                  const yearDiff = dt.getFullYear() - now.getFullYear();
+                  if (yearDiff >= -10 && yearDiff <= 5) {
+                    return dt.toISOString();
+                  }
+                }
+              } catch (e) {}
+            }
+          }
+          return null;
+        };
+        
+        // Try meta tags first
+        const metaSelectors = [
+          'meta[property="article:published_time"]',
+          'meta[name="article:published_time"]',
+          'meta[property="og:article:published_time"]',
+          'meta[name="publishdate"]',
+          'meta[name="pubdate"]',
+          'meta[name="date"]',
+        ];
+        
+        for (const sel of metaSelectors) {
+          const el = document.querySelector(sel);
+          if (el) {
+            const content = el.getAttribute('content');
+            if (content) {
+              const parsed = parseDate(content);
+              if (parsed) return { date: parsed, source: 'meta' };
+            }
+          }
+        }
+        
+        // Try time elements
+        const timeEl = document.querySelector('time[datetime]');
+        if (timeEl) {
+          const dt = timeEl.getAttribute('datetime');
+          if (dt) {
+            const parsed = parseDate(dt);
+            if (parsed) return { date: parsed, source: 'time' };
+          }
+        }
+        
+        // Try JSON-LD
+        const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
+        for (const script of jsonLdScripts) {
+          try {
+            const data = JSON.parse(script.textContent);
+            const checkObj = (obj) => {
+              if (obj?.datePublished) return parseDate(obj.datePublished);
+              if (obj?.dateCreated) return parseDate(obj.dateCreated);
+              return null;
+            };
+            let found = checkObj(data);
+            if (!found && Array.isArray(data)) {
+              for (const item of data) {
+                found = checkObj(item);
+                if (found) break;
+              }
+            }
+            if (found) return { date: found, source: 'json-ld' };
+          } catch (e) {}
+        }
+        
+        // Try common date class elements (JS-rendered)
+        const dateSelectors = [
+          '[class*="date"]',
+          '[class*="published"]',
+          '[class*="timestamp"]',
+          '[data-date]',
+          '[data-published]',
+        ];
+        
+        for (const sel of dateSelectors) {
+          const els = document.querySelectorAll(sel);
+          for (const el of els) {
+            const text = el.getAttribute('datetime') || 
+                        el.getAttribute('data-date') || 
+                        el.getAttribute('content') ||
+                        el.textContent?.trim();
+            if (text && text.length < 100) { // Avoid long text blocks
+              const parsed = parseDate(text);
+              if (parsed) return { date: parsed, source: 'dom-' + sel };
+            }
+          }
+        }
+        
+        // Try article header area
+        const headerSelectors = ['article header', '.article-header', '.post-header', '.entry-header'];
+        for (const sel of headerSelectors) {
+          const header = document.querySelector(sel);
+          if (header) {
+            const text = header.textContent?.substring(0, 500);
+            if (text) {
+              const parsed = parseDate(text);
+              if (parsed) return { date: parsed, source: 'header' };
+            }
+          }
+        }
+        
+        return null;
+      });
+      
+      // Close browser IMMEDIATELY to free memory
+      await browser.close();
+      browser = null;
+      
+      // Force GC after browser close
+      if (global.gc) {
+        global.gc();
+      }
+      
+      if (dateResult) {
+        console.log(`📅 [DATE-PW] Found date via Playwright (${dateResult.source}): ${dateResult.date}`);
+        return dateResult.date;
+      }
+      
+      return null;
+    } catch (err) {
+      // Ensure browser is closed on error
+      if (browser) {
+        try {
+          await browser.close();
+        } catch (e) {}
+      }
+      
+      // Force GC after error
+      if (global.gc) {
+        global.gc();
+      }
+      
+      // Don't log timeout errors (common for slow sites)
+      if (!err.message?.includes('Timeout')) {
+        console.log(`⚠️  [DATE-PW] Playwright date extraction failed: ${err.message?.substring(0, 50)}`);
       }
       return null;
     }
