@@ -226,11 +226,31 @@ function MainApp() {
     }
   };
 
-  const handleStopChecking = () => {
+  const handleStopChecking = async () => {
+    // Clear client-side timeout
     if (checkTimeoutRef.current) {
       clearTimeout(checkTimeoutRef.current);
       checkTimeoutRef.current = null;
     }
+    
+    // Send cancel request to server
+    try {
+      console.log('Sending cancel request to server...');
+      const response = await fetch(`${config.API_BASE_URL}/api/monitor/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const data = await response.json();
+      console.log('Cancel response:', data);
+      
+      if (data.success) {
+        console.log('Server acknowledged cancellation');
+      }
+    } catch (error) {
+      console.error('Error sending cancel request:', error);
+      // Still stop the UI even if server request fails
+    }
+    
     setIsCheckingFeeds(false);
   };
 

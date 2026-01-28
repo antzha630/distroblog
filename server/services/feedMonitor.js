@@ -17,6 +17,28 @@ class FeedMonitor {
     // Use ADK scraper for AI-powered extraction (faster and more consistent than Playwright/Cheerio)
     this.adkScraper = new ADKScraper();
     this.isScrapingInProgress = false; // Lock to prevent concurrent scraping
+    this.isCheckNowCancelled = false; // Flag to cancel "Check Now" operation
+    this.currentCheckOperation = null; // Track current check operation for status
+  }
+  
+  // Cancel the current "Check Now" operation
+  cancelCheckNow() {
+    if (this.currentCheckOperation) {
+      console.log('🛑 [CHECK NOW] Cancellation requested by user');
+      this.isCheckNowCancelled = true;
+      return { success: true, message: 'Cancellation requested. Will stop after current source completes.' };
+    }
+    return { success: false, message: 'No check operation in progress' };
+  }
+  
+  // Check if cancellation was requested
+  shouldCancelCheck() {
+    return this.isCheckNowCancelled;
+  }
+  
+  // Reset cancellation flag (call at start of new check)
+  resetCancellation() {
+    this.isCheckNowCancelled = false;
   }
 
   // Detect RSS feeds from a website URL using robust discovery
@@ -301,8 +323,26 @@ class FeedMonitor {
         'Hyper Cycle'
       ];
       
+      // Reset cancellation flag at start of check
+      this.resetCancellation();
+      this.currentCheckOperation = { startTime, totalSources: activeSources.length, processedSources: 0 };
+      
       for (let i = 0; i < activeSources.length; i++) {
+        // Check for cancellation before processing each source
+        if (this.shouldCancelCheck()) {
+          console.log(`\n🛑 [CHECK NOW] Cancelled by user after processing ${i} of ${activeSources.length} sources`);
+          this.currentCheckOperation = null;
+          return {
+            cancelled: true,
+            processedSources: i,
+            totalSources: activeSources.length,
+            results,
+            message: `Check cancelled. Processed ${i} of ${activeSources.length} sources.`
+          };
+        }
+        
         const source = activeSources[i];
+        this.currentCheckOperation.processedSources = i + 1;
         console.log(`\n📊 [CHECK NOW] [${i + 1}/${activeSources.length}] Processing source: ${source.name}`);
         
         // Skip problematic sources
@@ -980,9 +1020,14 @@ class FeedMonitor {
       
       console.log(`🚀 [CHECK NOW] Finished at ${new Date().toISOString()}\n`);
       
+      // Clear operation tracker
+      this.currentCheckOperation = null;
+      
       return results;
     } catch (error) {
       console.error('Error checking all feeds:', error.message || error);
+      // Clear operation tracker on error
+      this.currentCheckOperation = null;
       throw error;
     }
   }

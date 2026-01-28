@@ -1232,6 +1232,23 @@ app.post('/api/monitor/trigger', async (req, res) => {
       const results = await feedMonitor.checkAllFeeds(true);
       const duration = Date.now() - startTime;
       
+      // Handle cancelled operation
+      if (results && results.cancelled) {
+        console.log(`🛑 [TRIGGER] Manual feed check was cancelled after ${duration}ms`);
+        return res.json({
+          success: true,
+          cancelled: true,
+          message: results.message,
+          summary: {
+            processedSources: results.processedSources,
+            totalSources: results.totalSources,
+            cancelled: true,
+            duration: `${duration}ms`
+          },
+          results: results.results || []
+        });
+      }
+      
       const summary = {
         totalSources: results.length,
         successfulSources: results.filter(r => r.success).length,
@@ -1258,6 +1275,62 @@ app.post('/api/monitor/trigger', async (req, res) => {
       error: 'Failed to check feeds',
       message: error.message,
       duration: `${duration}ms`
+    });
+  }
+});
+
+// Cancel the current "Check Now" operation
+app.post('/api/monitor/cancel', async (req, res) => {
+  console.log(`\n🛑 [CANCEL] Cancel request received at ${new Date().toISOString()}`);
+  
+  try {
+    const result = feedMonitor.cancelCheckNow();
+    
+    if (result.success) {
+      console.log(`✅ [CANCEL] Cancellation request accepted`);
+      res.json({
+        success: true,
+        message: result.message
+      });
+    } else {
+      console.log(`ℹ️  [CANCEL] ${result.message}`);
+      res.json({
+        success: false,
+        message: result.message
+      });
+    }
+  } catch (error) {
+    console.error(`❌ [CANCEL] Error processing cancel request:`, error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to cancel operation',
+      message: error.message
+    });
+  }
+});
+
+// Get status of current "Check Now" operation
+app.get('/api/monitor/status', async (req, res) => {
+  try {
+    const operation = feedMonitor.currentCheckOperation;
+    
+    if (operation) {
+      res.json({
+        inProgress: true,
+        processedSources: operation.processedSources,
+        totalSources: operation.totalSources,
+        startTime: operation.startTime,
+        elapsedMs: Date.now() - operation.startTime
+      });
+    } else {
+      res.json({
+        inProgress: false
+      });
+    }
+  } catch (error) {
+    res.status(500).json({
+      error: 'Failed to get status',
+      message: error.message
     });
   }
 });
