@@ -76,21 +76,25 @@ class ADKScraper {
       // Create LlmAgent with Google Search tool
       // The agent will use Google Search to find articles from websites
       // Based on Python ADK pattern: tools=[google_search] with simple instruction
+      // IMPORTANT: Keep instruction simple - complex rules cause agent to refuse
       this.agent = new adk.LlmAgent({
         name: 'article_finder',
         model: llm, // Pass the LLM object directly (not model name string)
-        description: 'Agent to find recent blog posts and articles from a website URL using Google Search.',
-        instruction: `You help a journalist by returning exactly 3 of the most recent blog posts or articles from a given site. Use the Google Search tool and return only a JSON array with objects: title, url, description, datePublished.
+        description: 'Agent that uses Google Search to find recent blog posts from websites.',
+        instruction: `You are a helpful research assistant. When given a website URL, use Google Search to find recent blog posts or articles from that site.
 
-Rules (must follow all):
-- Hostname must match the target domain; reject other domains.
-- URL must point to an article page with a meaningful path (length >= 11 chars); reject home/about/contact/privacy/terms/team/careers/docs/login/signup/dashboard/app or other generic pages.
-- No Google redirect URLs (vertexaisearch / grounding / google.com/grounding).
-- Prefer canonical/short article URLs over long slugs when both appear.
-- Title must be non-null, non-empty, and not generic (not "Blog" or "Home").
-- datePublished: use ISO (YYYY-MM-DD or with time) when visible in search; null if truly unavailable.
-- Sort newest first.
-Return only the JSON array, nothing else.`,
+Your task:
+1. Search for recent blog posts from the given website domain
+2. Return results as a JSON array with these fields: title, url, description, datePublished
+
+Guidelines:
+- Only include URLs from the target domain
+- Skip generic pages (home, about, contact, privacy, terms)
+- Use ISO format for dates (YYYY-MM-DD) or null if unknown
+- If you find articles, return them as JSON even if you only find 1-2
+- If you truly cannot find any articles, return an empty array []
+
+Always return valid JSON, nothing else.`,
         tools: [adk.GOOGLE_SEARCH] // Use Google Search tool (equivalent to Python's google_search)
       });
 
@@ -170,21 +174,23 @@ Return only the JSON array, nothing else.`,
       });
 
       // Ask the agent to find articles from the website using Google Search
-      // Improved prompt to get specific article URLs and most recent articles
+      // SIMPLIFIED prompt - complex rules cause agent to refuse when it can't find perfect matches
       const domain = new URL(source.url).hostname;
       const baseDomain = domain.replace(/^www\./, ''); // Remove www. for matching
-      const searchQuery = `Find exactly 3 of the most recent blog posts/articles from ${source.url}.
+      
+      // Use a simpler, more natural search query
+      // The agent is more likely to return results with a conversational prompt
+      const searchQuery = `Search for recent blog posts or news articles from site:${baseDomain}
 
-Rules (apply strictly):
-- Domain must be ${baseDomain} (hostname contains ${baseDomain}); ignore other domains.
-- URL must be a direct article with a meaningful path (length >= 11 chars); do not return ${source.url}, ${source.url}/, /about, /contact, /privacy, /terms, /team, /careers, /docs, /login, /signup, /dashboard, /app, or any generic page.
-- No Google redirect URLs (vertexaisearch / grounding / google.com/grounding); use the final article URL.
-- Prefer canonical/short article URLs when both short and long appear.
-- Title must be non-null, non-empty, and not generic (not "Blog" or "Home").
-- datePublished in ISO (YYYY-MM-DD or with time) when visible in search results; null only if no date is visible.
-- Sort newest first.
+Return the results as a JSON array. Each object should have:
+- title: the article title
+- url: the full URL to the article (must be on ${baseDomain})
+- description: a brief summary
+- datePublished: date in YYYY-MM-DD format, or null if unknown
 
-Return only a JSON array of 3 objects with: title, url, description, datePublished. No extra text.`;
+Return up to 3 articles. If you find any articles at all, include them. Return [] only if you truly find nothing.
+
+IMPORTANT: Always respond with valid JSON only, no explanatory text.`;
       
       let articles = [];
       let lastEvent = null;
