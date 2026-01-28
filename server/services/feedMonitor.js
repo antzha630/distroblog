@@ -314,6 +314,12 @@ class FeedMonitor {
       };
       
       const MEMORY_LIMIT_MB = 380; // Stop if we exceed 380MB RSS to stay under 400MB heap limit (with safety buffer)
+      const PLAYWRIGHT_MEMORY_LIMIT_MB = 300; // Lower limit before allowing Playwright (it can spike 100MB+)
+      
+      // Track consecutive Playwright fallbacks to prevent memory accumulation
+      // If too many ADK failures in a row cause Playwright fallback, skip some to let memory recover
+      let consecutivePlaywrightCount = 0;
+      const MAX_CONSECUTIVE_PLAYWRIGHT = 3; // After 3 Playwright fallbacks, skip next few scraping sources
       
       // Skip list for problematic sources that cause memory issues
       // Hyper Cycle: ADK fails (returns 0 articles), falls back to Playwright, which causes memory crash
@@ -472,7 +478,9 @@ class FeedMonitor {
               
               const scrapeDuration = Date.now() - scrapeStartTime;
               if (articles.length > 0) {
-              console.log(`✅ [CHECK NOW] [${source.name}] ADK extracted ${articles.length} articles in ${scrapeDuration}ms`);
+                console.log(`✅ [CHECK NOW] [${source.name}] ADK extracted ${articles.length} articles in ${scrapeDuration}ms`);
+                // Reset consecutive Playwright counter when ADK succeeds (no fallback needed)
+                consecutivePlaywrightCount = 0;
               } else {
                 console.log(`❌ [CHECK NOW] [${source.name}] ADK failed (0 valid articles) in ${scrapeDuration}ms`);
               }
@@ -505,11 +513,33 @@ class FeedMonitor {
             if (articles.length === 0) {
               // Check memory before using Playwright (which is memory-intensive)
               const currentMemMB = getMemoryMB();
-              if (currentMemMB > MEMORY_LIMIT_MB) {
-                console.warn(`⚠️  [CHECK NOW] [${source.name}] Memory too high (${currentMemMB}MB), skipping Playwright fallback to prevent crash`);
-                articles = []; // Skip scraping if memory is too high
+              
+              // Multiple safety checks before Playwright fallback:
+              // 1. Memory limit check
+              // 2. Consecutive Playwright counter (prevent memory accumulation from many ADK failures)
+              // 3. Lower memory threshold for Playwright (it can spike 100MB+)
+              
+              let skipPlaywright = false;
+              let skipReason = '';
+              
+              if (currentMemMB > PLAYWRIGHT_MEMORY_LIMIT_MB) {
+                skipPlaywright = true;
+                skipReason = `Memory ${currentMemMB}MB exceeds Playwright limit (${PLAYWRIGHT_MEMORY_LIMIT_MB}MB)`;
+              } else if (consecutivePlaywrightCount >= MAX_CONSECUTIVE_PLAYWRIGHT) {
+                skipPlaywright = true;
+                skipReason = `Too many consecutive Playwright fallbacks (${consecutivePlaywrightCount}). Letting memory recover.`;
+                // Reset counter after skipping one
+                consecutivePlaywrightCount = 0;
+              }
+              
+              if (skipPlaywright) {
+                console.warn(`⚠️  [CHECK NOW] [${source.name}] Skipping Playwright fallback: ${skipReason}`);
+                articles = []; // Skip scraping
               } else {
                 console.log(`🔄 [CHECK NOW] [${source.name}] ADK returned 0 articles, falling back to traditional scraper (Playwright/static)...`);
+                consecutivePlaywrightCount++; // Increment counter
+                console.log(`📊 [CHECK NOW] Consecutive Playwright fallbacks: ${consecutivePlaywrightCount}/${MAX_CONSECUTIVE_PLAYWRIGHT}`);
+                
               try {
                 articles = await this.webScraper.scrapeArticles(source);
                 const fallbackDuration = Date.now() - scrapeStartTime;

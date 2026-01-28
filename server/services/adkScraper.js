@@ -189,6 +189,7 @@ Always return valid JSON, nothing else.`,
       console.log(`📅 [ADK] Date filter: articles after ${cutoffDateStr} (today is ${todayStr})`);
       
       // Use a simpler, more natural search query with explicit date constraint
+      // CRITICAL: Must explicitly tell agent NOT to use Google redirect URLs (vertexaisearch.cloud.google.com)
       const searchQuery = `Search for recent blog posts or news articles from site:${baseDomain}
 
 TODAY'S DATE: ${todayStr}
@@ -197,9 +198,15 @@ Do NOT include any articles older than ${cutoffDateStr}.
 
 Return the results as a JSON array. Each object should have:
 - title: the article title
-- url: the full URL to the article (must be on ${baseDomain})
+- url: the ACTUAL direct URL to the article on ${baseDomain} (NOT a Google redirect URL)
 - description: a brief summary
 - datePublished: date in YYYY-MM-DD format (MUST be after ${cutoffDateStr}), or null if unknown
+
+CRITICAL URL RULES:
+- URLs MUST start with https://${baseDomain} or https://www.${baseDomain}
+- NEVER use vertexaisearch.cloud.google.com URLs - these are invalid
+- NEVER use grounding-api-redirect URLs - extract the actual article URL instead
+- If you cannot determine the actual URL, skip that article
 
 Return up to 3 articles that were published within the last 7 days.
 If no articles were published after ${cutoffDateStr}, return an empty array [].
