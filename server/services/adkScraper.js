@@ -40,13 +40,14 @@ class ADKScraper {
       const adk = await import('@google/adk');
       
       // Pick the first available model that supports Google Search
+      // Updated January 2026: gemini-2.0-flash-exp was deprecated, using GA models
       const candidateModels = [
-        'gemini-2.0-flash-exp',         // preferred
-        'gemini-2.0-flash-live-001',    // live variant (from reference)
+        'gemini-2.0-flash',             // GA version (preferred, replaced -exp)
+        'gemini-2.5-flash',             // Latest stable flash model
+        'gemini-2.5-flash-lite',        // Lightweight version
         'gemini-1.5-flash-latest',      // common alias
         'gemini-1.5-flash',             // fallback
         'gemini-1.5-flash-001',         // legacy fallback
-        'gemini-2.5-pro-preview-06-05'  // pro preview (used in reference)
       ];
 
       let llm = null;

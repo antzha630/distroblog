@@ -56,7 +56,22 @@ class WebScraper {
       }
       
       // If Playwright found nothing or failed, try static scraping as fallback
+      // But first check memory to prevent OOM crash
       if (articles.length === 0) {
+        const MEMORY_LIMIT_MB = 350; // Leave buffer for Render's limit
+        const getMemoryMB = () => {
+          if (process.memoryUsage) {
+            return Math.round(process.memoryUsage().rss / 1024 / 1024);
+          }
+          return 0;
+        };
+        
+        const currentMem = getMemoryMB();
+        if (currentMem > MEMORY_LIMIT_MB) {
+          console.log(`⚠️ Memory too high (${currentMem}MB > ${MEMORY_LIMIT_MB}MB), skipping static scraping to prevent OOM`);
+          return []; // Return empty instead of crashing
+        }
+        
         console.log(`📄 Trying static scraping as fallback...`);
         articles = await this.scrapeStatic(source.url);
         if (articles.length > 0) {
@@ -1167,6 +1182,20 @@ class WebScraper {
           // Ignore cleanup errors
         }
       }
+      
+      // MEMORY FIX: Wait for browser process to fully terminate after error
+      // This is critical when Playwright times out - the browser may still be running
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // Force GC after browser cleanup on error path
+      if (global.gc) {
+        try {
+          global.gc();
+        } catch (e) {
+          // Ignore GC errors
+        }
+      }
+      
       // Re-throw the error so caller can handle it appropriately
       throw error;
     }
