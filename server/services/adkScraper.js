@@ -178,17 +178,31 @@ Always return valid JSON, nothing else.`,
       const domain = new URL(source.url).hostname;
       const baseDomain = domain.replace(/^www\./, ''); // Remove www. for matching
       
-      // Use a simpler, more natural search query
-      // The agent is more likely to return results with a conversational prompt
+      // Calculate concrete date cutoff (7 days ago) per Jasleen's suggestion
+      // Providing an explicit date helps the model understand the recency requirement
+      const today = new Date();
+      const cutoffDate = new Date(today);
+      cutoffDate.setDate(cutoffDate.getDate() - 7);
+      const cutoffDateStr = cutoffDate.toISOString().split('T')[0]; // YYYY-MM-DD format
+      const todayStr = today.toISOString().split('T')[0];
+      
+      console.log(`📅 [ADK] Date filter: articles after ${cutoffDateStr} (today is ${todayStr})`);
+      
+      // Use a simpler, more natural search query with explicit date constraint
       const searchQuery = `Search for recent blog posts or news articles from site:${baseDomain}
+
+TODAY'S DATE: ${todayStr}
+IMPORTANT DATE RULE: Only include articles published AFTER ${cutoffDateStr} (within the last 7 days). 
+Do NOT include any articles older than ${cutoffDateStr}.
 
 Return the results as a JSON array. Each object should have:
 - title: the article title
 - url: the full URL to the article (must be on ${baseDomain})
 - description: a brief summary
-- datePublished: date in YYYY-MM-DD format, or null if unknown
+- datePublished: date in YYYY-MM-DD format (MUST be after ${cutoffDateStr}), or null if unknown
 
-Return up to 3 articles. If you find any articles at all, include them. Return [] only if you truly find nothing.
+Return up to 3 articles that were published within the last 7 days.
+If no articles were published after ${cutoffDateStr}, return an empty array [].
 
 IMPORTANT: Always respond with valid JSON only, no explanatory text.`;
       
@@ -374,7 +388,8 @@ IMPORTANT: Always respond with valid JSON only, no explanatory text.`;
           wrongDomain: 0,
           genericUrl: 0,
           shortPath: 0,
-          invalidUrl: 0
+          invalidUrl: 0,
+          outsideDateRange: 0
         },
         validArticles: 0,
         articlesWithDates: 0,
@@ -472,7 +487,43 @@ IMPORTANT: Always respond with valid JSON only, no explanatory text.`;
         }
       });
 
-      const articlesFiltered = articlesBeforeFilter - filteredArticles.length;
+      // POST-FILTER: Remove articles outside the date range (safety net)
+      // Even if the prompt asks for recent articles, the model may return older ones
+      const articlesBeforeDateFilter = filteredArticles.length;
+      const dateFilteredArticles = filteredArticles.filter(article => {
+        if (!article.datePublished) {
+          // If no date, we can't filter - keep it but log
+          console.log(`⚠️ [ADK] [DATE] Article has no date, keeping: "${article.title?.substring(0, 50) || 'unknown'}"`);
+          return true;
+        }
+        
+        try {
+          const articleDate = new Date(article.datePublished);
+          if (isNaN(articleDate.getTime())) {
+            console.log(`⚠️ [ADK] [DATE] Invalid date format "${article.datePublished}", keeping article: "${article.title?.substring(0, 50) || 'unknown'}"`);
+            return true;
+          }
+          
+          // Check if article is within the last 7 days
+          if (articleDate < cutoffDate) {
+            console.log(`⚠️ [ADK] [DATE] Filtering out old article (${article.datePublished} < ${cutoffDateStr}): "${article.title?.substring(0, 50) || 'unknown'}"`);
+            accuracyMetrics.filteredOut.outsideDateRange = (accuracyMetrics.filteredOut.outsideDateRange || 0) + 1;
+            return false;
+          }
+          
+          return true;
+        } catch (e) {
+          console.log(`⚠️ [ADK] [DATE] Error parsing date "${article.datePublished}": ${e.message}`);
+          return true; // Keep on error
+        }
+      });
+      
+      const articlesFilteredByDate = articlesBeforeDateFilter - dateFilteredArticles.length;
+      if (articlesFilteredByDate > 0) {
+        console.log(`📅 [ADK] [DATE] Filtered out ${articlesFilteredByDate} articles outside date range (before ${cutoffDateStr})`);
+      }
+      
+      const articlesFiltered = articlesBeforeFilter - dateFilteredArticles.length;
       
       // Log comprehensive ADK accuracy report
       console.log(`\n📊 [ADK] [ACCURACY REPORT] for ${source.name} (${sourceDomain}):`);
@@ -488,19 +539,20 @@ IMPORTANT: Always respond with valid JSON only, no explanatory text.`;
       console.log(`     - Generic/homepage URLs: ${accuracyMetrics.filteredOut.genericUrl}`);
       console.log(`     - Short path (< 11 chars): ${accuracyMetrics.filteredOut.shortPath}`);
       console.log(`     - Invalid URL format: ${accuracyMetrics.filteredOut.invalidUrl}`);
+      console.log(`     - Outside date range (>${7} days old): ${accuracyMetrics.filteredOut.outsideDateRange}`);
       const accuracyRate = accuracyMetrics.totalReturned > 0 
         ? ((accuracyMetrics.validArticles / accuracyMetrics.totalReturned) * 100).toFixed(1)
         : 0;
       console.log(`   Accuracy rate: ${accuracyRate}% (${accuracyMetrics.validArticles}/${accuracyMetrics.totalReturned} valid)\n`);
       
-      if (filteredArticles.length === 0) {
+      if (dateFilteredArticles.length === 0) {
         if (articlesBeforeFilter > 0) {
           console.log(`⚠️ [ADK] No articles found from ${sourceDomain} domain. ${articlesBeforeFilter} articles from other domains were filtered out.`);
         } else {
           console.log(`⚠️ [ADK] No articles found from ${sourceDomain} domain.`);
         }
       } else {
-        console.log(`✅ [ADK] Found ${filteredArticles.length} articles from ${sourceDomain} domain${articlesFiltered > 0 ? ` (${articlesFiltered} external articles filtered out)` : ''}`);
+        console.log(`✅ [ADK] Found ${dateFilteredArticles.length} articles from ${sourceDomain} domain${articlesFiltered > 0 ? ` (${articlesFiltered} external articles filtered out)` : ''}`);
       }
 
       // Store scraping result for health tracking (non-blocking)
@@ -512,9 +564,9 @@ IMPORTANT: Always respond with valid JSON only, no explanatory text.`;
           await Promise.race([
             database.updateScrapingResult(source.id, {
               articlesFound: articlesBeforeFilter,
-              articlesAfterFilter: filteredArticles.length,
+              articlesAfterFilter: dateFilteredArticles.length,
               articlesFiltered: articlesFiltered,
-              success: filteredArticles.length > 0,
+              success: dateFilteredArticles.length > 0,
               timestamp: new Date().toISOString(),
               domain: sourceDomain,
               method: 'ADK_AGENT'
@@ -534,7 +586,7 @@ IMPORTANT: Always respond with valid JSON only, no explanatory text.`;
 
       // Sort articles by date (most recent first) before limiting
       // Articles with dates come first, sorted by date (newest first)
-      filteredArticles.sort((a, b) => {
+      dateFilteredArticles.sort((a, b) => {
         const dateA = a.datePublished ? new Date(a.datePublished).getTime() : 0;
         const dateB = b.datePublished ? new Date(b.datePublished).getTime() : 0;
         if (dateA && dateB) return dateB - dateA; // Newest first
@@ -597,7 +649,7 @@ IMPORTANT: Always respond with valid JSON only, no explanatory text.`;
       // Return lightweight articles (limit to 3 most recent articles)
       // This ensures we get the most recent articles from each source
       // Resolve redirects to get canonical URLs (ADK may return long slugs that redirect to shorter ones)
-      const lightweightArticlesPromises = filteredArticles.slice(0, 3).map(async (article) => {
+      const lightweightArticlesPromises = dateFilteredArticles.slice(0, 3).map(async (article) => {
         let articleUrl = article.url || article.link;
         if (articleUrl && !articleUrl.startsWith('http')) {
           if (articleUrl.startsWith('/')) {
