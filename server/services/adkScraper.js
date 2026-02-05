@@ -76,25 +76,23 @@ class ADKScraper {
       // Create LlmAgent with Google Search tool
       // The agent will use Google Search to find articles from websites
       // Based on Python ADK pattern: tools=[google_search] with simple instruction
-      // IMPORTANT: Keep instruction simple - complex rules cause agent to refuse
+      // BEST PRACTICE: Keep instruction conversational and simple - the model decides when to search
+      // Reference: https://ai.google.dev/gemini-api/docs/grounding - "model automatically determines if search is needed"
       this.agent = new adk.LlmAgent({
         name: 'article_finder',
         model: llm, // Pass the LLM object directly (not model name string)
-        description: 'Agent that uses Google Search to find recent blog posts from websites.',
-        instruction: `You are a helpful research assistant. When given a website URL, use Google Search to find recent blog posts or articles from that site.
+        description: 'Agent that finds recent blog posts and articles from websites using Google Search.',
+        instruction: `You are a research assistant that helps find recent blog posts and articles from websites.
 
-Your task:
-1. Search for recent blog posts from the given website domain
-2. Return results as a JSON array with these fields: title, url, description, datePublished
+When asked about a website, search Google for their latest blog posts or news articles.
 
-Guidelines:
-- Only include URLs from the target domain
-- Skip generic pages (home, about, contact, privacy, terms)
-- Use ISO format for dates (YYYY-MM-DD) or null if unknown
-- If you find articles, return them as JSON even if you only find 1-2
-- If you truly cannot find any articles, return an empty array []
+Output format: Return a JSON array of articles. Each article should have:
+- title: article headline
+- url: direct link to the article (must be the actual article URL, not a redirect)
+- description: brief summary
+- datePublished: date in YYYY-MM-DD format, or null
 
-Always return valid JSON, nothing else.`,
+Return valid JSON only. If you can't find articles, return [].`,
         tools: [adk.GOOGLE_SEARCH] // Use Google Search tool (equivalent to Python's google_search)
       });
 
@@ -188,30 +186,23 @@ Always return valid JSON, nothing else.`,
       
       console.log(`📅 [ADK] Date filter: articles after ${cutoffDateStr} (today is ${todayStr})`);
       
-      // Use a simpler, more natural search query with explicit date constraint
-      // CRITICAL: Must explicitly tell agent NOT to use Google redirect URLs (vertexaisearch.cloud.google.com)
-      const searchQuery = `Search for recent blog posts or news articles from site:${baseDomain}
+      // BEST PRACTICE: Use natural, conversational prompts - the Google Search grounding tool works best
+      // with queries like you'd ask a colleague, not complex rule sets.
+      // The model automatically decides what to search for based on the conversation.
+      // Reference: ADK best practices - "natural language works better than rigid templates"
+      const searchQuery = `Find the most recent blog posts or articles from the ${baseDomain} website.
 
-TODAY'S DATE: ${todayStr}
-IMPORTANT DATE RULE: Only include articles published AFTER ${cutoffDateStr} (within the last 7 days). 
-Do NOT include any articles older than ${cutoffDateStr}.
+I'm looking for articles published in the last week (after ${cutoffDateStr}). Today is ${todayStr}.
 
-Return the results as a JSON array. Each object should have:
-- title: the article title
-- url: the ACTUAL direct URL to the article on ${baseDomain} (NOT a Google redirect URL)
-- description: a brief summary
-- datePublished: date in YYYY-MM-DD format (MUST be after ${cutoffDateStr}), or null if unknown
+Please search and return up to 3 recent articles as a JSON array with these fields:
+- title: the headline
+- url: the direct link to the article on ${baseDomain}
+- description: a short summary  
+- datePublished: the publication date (YYYY-MM-DD format), or null if not visible
 
-CRITICAL URL RULES:
-- URLs MUST start with https://${baseDomain} or https://www.${baseDomain}
-- NEVER use vertexaisearch.cloud.google.com URLs - these are invalid
-- NEVER use grounding-api-redirect URLs - extract the actual article URL instead
-- If you cannot determine the actual URL, skip that article
+Important: I need the actual article URLs from ${baseDomain}, not Google redirect links.
 
-Return up to 3 articles that were published within the last 7 days.
-If no articles were published after ${cutoffDateStr}, return an empty array [].
-
-IMPORTANT: Always respond with valid JSON only, no explanatory text.`;
+Return only the JSON array, no other text.`;
       
       let articles = [];
       let lastEvent = null;

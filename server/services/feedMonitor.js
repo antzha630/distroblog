@@ -313,13 +313,15 @@ class FeedMonitor {
         return null;
       };
       
-      const MEMORY_LIMIT_MB = 380; // Stop if we exceed 380MB RSS to stay under 400MB heap limit (with safety buffer)
-      const PLAYWRIGHT_MEMORY_LIMIT_MB = 300; // Lower limit before allowing Playwright (it can spike 100MB+)
+      const MEMORY_LIMIT_MB = 350; // More conservative: stop if we exceed 350MB (was 380MB)
+      const PLAYWRIGHT_MEMORY_LIMIT_MB = 280; // Lower limit: 280MB before allowing Playwright (was 300MB)
+      const CRITICAL_MEMORY_MB = 370; // If we hit this, skip ALL scraping for remainder
       
       // Track consecutive Playwright fallbacks to prevent memory accumulation
       // If too many ADK failures in a row cause Playwright fallback, skip some to let memory recover
       let consecutivePlaywrightCount = 0;
-      const MAX_CONSECUTIVE_PLAYWRIGHT = 3; // After 3 Playwright fallbacks, skip next few scraping sources
+      const MAX_CONSECUTIVE_PLAYWRIGHT = 2; // After 2 Playwright fallbacks, skip next 3 (was 3)
+      let playwrightSkipRemaining = 0; // Track how many more Playwright fallbacks to skip
       
       // Skip list for problematic sources that cause memory issues
       // Hyper Cycle: ADK fails (returns 0 articles), falls back to Playwright, which causes memory crash
@@ -374,7 +376,29 @@ class FeedMonitor {
         const currentMemMB = getMemoryMB();
         const memDetails = getMemoryDetails();
         
-        if (currentMemMB > MEMORY_LIMIT_MB) {
+        // CRITICAL: Force GC periodically every 5 sources to prevent memory buildup
+        if (i > 0 && i % 5 === 0 && global.gc) {
+          global.gc();
+          const afterGC = getMemoryMB();
+          console.log(`🧹 [CHECK NOW] Periodic GC at source ${i}: ${currentMemMB}MB -> ${afterGC}MB`);
+        }
+        
+        // CRITICAL memory check - if we're too high, skip ALL scraping
+        if (currentMemMB > CRITICAL_MEMORY_MB) {
+          if (source.monitoring_type === 'SCRAPING') {
+            const detailsStr = memDetails ? ` (RSS=${memDetails.rss}MB, heap=${memDetails.heapUsed}MB, external=${memDetails.external}MB)` : '';
+            console.warn(`🚨 [CHECK NOW] CRITICAL memory (${currentMemMB}MB > ${CRITICAL_MEMORY_MB}MB)${detailsStr}. Skipping ALL scraping sources to prevent OOM.`);
+            results.push({
+              source: source.name,
+              url: source.url,
+              newArticles: 0,
+              success: false,
+              error: 'Skipped - critical memory pressure',
+              skipped: true
+            });
+            continue;
+          }
+        } else if (currentMemMB > MEMORY_LIMIT_MB) {
           if (source.monitoring_type === 'SCRAPING') {
             const detailsStr = memDetails ? ` (RSS=${memDetails.rss}MB, heap=${memDetails.heapUsed}MB, external=${memDetails.external}MB)` : '';
             console.warn(`⚠️  [CHECK NOW] Memory usage (${currentMemMB}MB) exceeds limit (${MEMORY_LIMIT_MB}MB)${detailsStr}. Skipping scraping source "${source.name}" to prevent crash.`);
@@ -391,10 +415,11 @@ class FeedMonitor {
           // RSS feeds are lightweight, so continue processing them
         }
         
-        // Additional check: If memory is getting high (>400MB), add extra delay before scraping
-        if (source.monitoring_type === 'SCRAPING' && currentMemMB > 400) {
-          console.warn(`⚠️  [CHECK NOW] Memory is high (${currentMemMB}MB), adding extra delay before scraping "${source.name}"...`);
-          await new Promise(resolve => setTimeout(resolve, 2000)); // Extra 2s delay
+        // If memory is getting high, add extra delay and force GC before scraping
+        if (source.monitoring_type === 'SCRAPING' && currentMemMB > 320) {
+          console.warn(`⚠️  [CHECK NOW] Memory is elevated (${currentMemMB}MB), forcing GC before scraping "${source.name}"...`);
+          if (global.gc) global.gc();
+          await new Promise(resolve => setTimeout(resolve, 1500)); // Extra 1.5s delay
         }
         
         try {
@@ -522,19 +547,34 @@ class FeedMonitor {
               let skipPlaywright = false;
               let skipReason = '';
               
-              if (currentMemMB > PLAYWRIGHT_MEMORY_LIMIT_MB) {
+              // CRITICAL: If memory is dangerously high, skip Playwright entirely
+              if (currentMemMB > CRITICAL_MEMORY_MB) {
+                skipPlaywright = true;
+                skipReason = `CRITICAL memory ${currentMemMB}MB exceeds ${CRITICAL_MEMORY_MB}MB - skipping to prevent OOM`;
+              } else if (currentMemMB > PLAYWRIGHT_MEMORY_LIMIT_MB) {
                 skipPlaywright = true;
                 skipReason = `Memory ${currentMemMB}MB exceeds Playwright limit (${PLAYWRIGHT_MEMORY_LIMIT_MB}MB)`;
+              } else if (playwrightSkipRemaining > 0) {
+                // We're in a cooldown period - skip this one
+                skipPlaywright = true;
+                skipReason = `Memory cooldown: skipping ${playwrightSkipRemaining} more Playwright fallbacks`;
+                playwrightSkipRemaining--;
               } else if (consecutivePlaywrightCount >= MAX_CONSECUTIVE_PLAYWRIGHT) {
                 skipPlaywright = true;
-                skipReason = `Too many consecutive Playwright fallbacks (${consecutivePlaywrightCount}). Letting memory recover.`;
-                // Reset counter after skipping one
+                skipReason = `Too many consecutive Playwright fallbacks (${consecutivePlaywrightCount}). Skipping next 3 to let memory recover.`;
+                // Skip the next 3 Playwright fallbacks to give memory time to recover
+                playwrightSkipRemaining = 3;
                 consecutivePlaywrightCount = 0;
               }
               
               if (skipPlaywright) {
                 console.warn(`⚠️  [CHECK NOW] [${source.name}] Skipping Playwright fallback: ${skipReason}`);
                 articles = []; // Skip scraping
+                // Force GC when skipping to help memory
+                if (global.gc) {
+                  global.gc();
+                  console.log(`🧹 [CHECK NOW] Forced GC after skipping Playwright`);
+                }
               } else {
                 console.log(`🔄 [CHECK NOW] [${source.name}] ADK returned 0 articles, falling back to traditional scraper (Playwright/static)...`);
                 consecutivePlaywrightCount++; // Increment counter
