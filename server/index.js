@@ -2611,32 +2611,46 @@ app.post('/api/adk/test', async (req, res) => {
     const originalAgent = adkScraper.agent;
     let testRunner = adkScraper.runner;
     
-    if (customInstruction) {
-      try {
-        const adk = await import('@google/adk');
-        const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
-        
-        // Create a test agent with custom instruction
-        const llm = new adk.Gemini({
-          model: adkScraper.modelName || 'gemini-2.0-flash-exp',
-          apiKey: apiKey
-        });
-        
-        const testAgent = new adk.LlmAgent({
-          name: 'article_finder_test',
-          model: llm,
-          description: 'Agent to find recent blog posts and articles from a given site using Google Search.',
-          instruction: customInstruction,
-          tools: [adk.GOOGLE_SEARCH]
-        });
-        
-        testRunner = new adk.InMemoryRunner({
-          agent: testAgent,
-          appName: 'distroblog-test'
-        });
-      } catch (error) {
-        return res.status(500).json({ error: `Failed to create test agent: ${error.message}` });
-      }
+    // Default instruction matches adkScraper.js - conversational, natural language
+    const defaultInstruction = `You are a research assistant that helps find recent blog posts and articles from websites.
+
+When asked about a website, search Google for their latest blog posts or news articles.
+
+Output format: Return a JSON array of articles. Each article should have:
+- title: article headline
+- url: direct link to the article (must be the actual article URL, not a redirect)
+- description: brief summary
+- datePublished: date in YYYY-MM-DD format, or null
+
+Return valid JSON only. If you can't find articles, return [].`;
+    
+    // Use custom instruction if provided, otherwise use default
+    const agentInstruction = customInstruction || defaultInstruction;
+    
+    try {
+      const adk = await import('@google/adk');
+      const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
+      
+      // Create a test agent - always create fresh to use the instruction
+      const llm = new adk.Gemini({
+        model: adkScraper.modelName || 'gemini-2.0-flash',  // Fixed: use GA model, not deprecated -exp
+        apiKey: apiKey
+      });
+      
+      const testAgent = new adk.LlmAgent({
+        name: 'article_finder_test',
+        model: llm,
+        description: 'Agent that finds recent blog posts and articles from websites using Google Search.',
+        instruction: agentInstruction,
+        tools: [adk.GOOGLE_SEARCH]
+      });
+      
+      testRunner = new adk.InMemoryRunner({
+        agent: testAgent,
+        appName: 'distroblog-test'
+      });
+    } catch (error) {
+      return res.status(500).json({ error: `Failed to create test agent: ${error.message}` });
     }
 
     // Capture detailed debug info
@@ -2668,20 +2682,27 @@ app.post('/api/adk/test', async (req, res) => {
       const domain = new URL(url).hostname;
       const baseDomain = domain.replace(/^www\./, '');
       
-      const searchQuery = customInstruction 
-        ? `Find exactly 3 of the most recent blog posts/articles from ${url}.`
-        : `Find exactly 3 of the most recent blog posts/articles from ${url}.
+      // Calculate date cutoff (7 days ago) - same as adkScraper.js
+      const today = new Date();
+      const cutoffDate = new Date(today);
+      cutoffDate.setDate(cutoffDate.getDate() - 7);
+      const cutoffDateStr = cutoffDate.toISOString().split('T')[0];
+      const todayStr = today.toISOString().split('T')[0];
+      
+      // Use natural, conversational prompt - matches improved adkScraper.js style
+      const searchQuery = `Find the most recent blog posts or articles from the ${baseDomain} website.
 
-Rules (apply strictly):
-- Domain must be ${baseDomain} (hostname contains ${baseDomain}); ignore other domains.
-- URL must be a direct article with a meaningful path (length >= 11 chars); do not return ${url}, ${url}/, /about, /contact, /privacy, /terms, /team, /careers, /docs, /login, /signup, /dashboard, /app, or any generic page.
-- No Google redirect URLs (vertexaisearch / grounding / google.com/grounding); use the final article URL.
-- Prefer canonical/short article URLs when both short and long appear.
-- Title must be non-null, non-empty, and not generic (not "Blog" or "Home").
-- datePublished in ISO (YYYY-MM-DD or with time) when visible in search results; null only if no date is visible.
-- Sort newest first.
+I'm looking for articles published in the last week (after ${cutoffDateStr}). Today is ${todayStr}.
 
-Return only a JSON array of 3 objects with: title, url, description, datePublished. No extra text.`;
+Please search and return up to 3 recent articles as a JSON array with these fields:
+- title: the headline
+- url: the direct link to the article on ${baseDomain}
+- description: a short summary  
+- datePublished: the publication date (YYYY-MM-DD format), or null if not visible
+
+Important: I need the actual article URLs from ${baseDomain}, not Google redirect links.
+
+Return only the JSON array, no other text.`;
 
       // Run the agent and capture all events
       let fullResponse = '';
