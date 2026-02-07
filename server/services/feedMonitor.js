@@ -737,8 +737,9 @@ class FeedMonitor {
                     }
                   }
                   
-                  // For manual checks, try lightweight date extraction (static HTTP fetch) if still no date
-                  if (isManual && (!improvedDate || isNaN(improvedDate.getTime()))) {
+                  // ALWAYS try lightweight date extraction (static HTTP fetch) if still no date
+                  // This is critical for sites like peaq.xyz where dates are only on article pages, not listing pages
+                  if (!improvedDate || isNaN(improvedDate.getTime())) {
                     try {
                       const staticDate = await this.extractDateStatic(article.link);
                       if (staticDate) {
@@ -749,13 +750,18 @@ class FeedMonitor {
                         }
                       }
                     } catch (e) {
-                      console.log(`⚠️  [CHECK NOW] [${source.name}] Static date fetch failed: ${e.message}`);
+                      // Only log non-timeout errors to reduce noise
+                      if (!e.message?.includes('timeout')) {
+                        console.log(`⚠️  [CHECK NOW] [${source.name}] Static date fetch failed: ${e.message}`);
+                      }
                     }
                   }
                   
                   // PLAYWRIGHT FALLBACK: If still no date, try Playwright for JS-rendered dates
-                  // Only for manual checks, and only if memory is safe
-                  if (isManual && (!improvedDate || isNaN(improvedDate.getTime()))) {
+                  // Only for manual checks due to memory constraints, or when memory is low
+                  const currentMemMBForDate = getMemoryMB();
+                  const canUsePlaywrightForDate = isManual || currentMemMBForDate < 250; // Allow Playwright if memory is low
+                  if (canUsePlaywrightForDate && (!improvedDate || isNaN(improvedDate.getTime()))) {
                     try {
                       const playwrightDate = await this.extractDatePlaywright(article.link);
                       if (playwrightDate) {

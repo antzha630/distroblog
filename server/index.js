@@ -27,6 +27,7 @@ const FeedDiscovery = require('./services/feedDiscovery');
 const WebScraper = require('./services/webScraper');
 const ADKScraper = require('./services/adkScraper');
 const llmService = require('./services/llmService');
+const articleEnrichment = require('./services/articleEnrichment');
 const database = require('./database-postgres');
 
 const webScraper = new WebScraper();
@@ -2884,6 +2885,68 @@ app.post('/api/maintenance/backfill-categories-table', async (req, res) => {
   }
 });
 
+// Maintenance: Enrich articles with missing dates and descriptions
+// This fetches article pages to extract dates/descriptions that weren't captured during initial scraping
+app.post('/api/maintenance/enrich-articles', async (req, res) => {
+  try {
+    const limit = parseInt(req.body.limit) || 20;
+    console.log(`🔄 [API] Starting article enrichment (limit: ${limit})...`);
+    
+    const result = await articleEnrichment.runEnrichmentBatch(limit);
+    
+    res.json({ 
+      success: true, 
+      message: `Enriched ${result.enriched} of ${result.processed} articles`,
+      ...result,
+      stats: articleEnrichment.getStats()
+    });
+  } catch (error) {
+    console.error('Error enriching articles:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Maintenance: Get articles needing enrichment
+app.get('/api/maintenance/articles-needing-enrichment', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 50;
+    const articles = await database.getArticlesNeedingEnrichment(limit);
+    
+    // Count by type
+    const needsDate = articles.filter(a => a.needs_date).length;
+    const needsDescription = articles.filter(a => a.needs_description).length;
+    
+    res.json({ 
+      success: true, 
+      total: articles.length,
+      needsDate,
+      needsDescription,
+      articles: articles.map(a => ({
+        id: a.id,
+        title: a.title.substring(0, 60),
+        link: a.link,
+        needsDate: a.needs_date,
+        needsDescription: a.needs_description,
+        source: a.source_name
+      }))
+    });
+  } catch (error) {
+    console.error('Error fetching articles needing enrichment:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Maintenance: Get enrichment stats
+app.get('/api/maintenance/enrichment-stats', async (req, res) => {
+  try {
+    const stats = articleEnrichment.getStats();
+    res.json({ success: true, stats });
+  } catch (error) {
+    console.error('Error getting enrichment stats:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // Mark articles as viewed
 app.post('/api/articles/mark-viewed', async (req, res) => {
   try {
@@ -3320,6 +3383,17 @@ const startServer = async () => {
       } else {
           console.log('ℹ️  Automatic cleanup disabled (use ENABLE_AUTO_CLEANUP=true to enable)');
           console.log('ℹ️  Use POST /api/maintenance/cleanup-old-articles for manual cleanup');
+        }
+        
+        // Optional: Start automatic article enrichment (fills in missing dates/descriptions)
+        // This runs periodically to enrich articles that were scraped without dates
+        if (process.env.ENABLE_AUTO_ENRICHMENT === 'true') {
+          const enrichmentInterval = parseInt(process.env.ENRICHMENT_INTERVAL_MINUTES) || 30;
+          console.log(`📅 Automatic enrichment enabled: running every ${enrichmentInterval} minutes`);
+          articleEnrichment.startPeriodicEnrichment(enrichmentInterval);
+        } else {
+          console.log('ℹ️  Automatic enrichment disabled (use ENABLE_AUTO_ENRICHMENT=true to enable)');
+          console.log('ℹ️  Use POST /api/maintenance/enrich-articles for manual enrichment');
         }
         })
         .catch(err => {

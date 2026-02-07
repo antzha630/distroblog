@@ -746,6 +746,75 @@ class Database {
     return result.rowCount;
   }
 
+  // Get articles with missing descriptions (content/preview too short)
+  async getArticlesWithMissingDescriptions(limit = 50) {
+    const result = await this.pool.query(`
+      SELECT a.id, a.title, a.link, a.content, a.preview, a.pub_date, a.source_id, a.source_name, a.created_at,
+             s.monitoring_type, s.name as source_name_from_table
+      FROM articles a
+      LEFT JOIN sources s ON a.source_id = s.id
+      WHERE (a.content IS NULL OR LENGTH(a.content) < 50 OR a.content = '')
+        AND (a.preview IS NULL OR LENGTH(a.preview) < 50 OR a.preview = '')
+      ORDER BY a.created_at DESC
+      LIMIT $1
+    `, [limit]);
+    return result.rows;
+  }
+
+  // Get articles that need enrichment (missing dates OR missing descriptions)
+  async getArticlesNeedingEnrichment(limit = 50) {
+    const result = await this.pool.query(`
+      SELECT a.id, a.title, a.link, a.content, a.preview, a.pub_date, a.source_id, a.source_name, a.created_at,
+             s.monitoring_type, s.name as source_name_from_table,
+             CASE WHEN a.pub_date IS NULL THEN true ELSE false END as needs_date,
+             CASE WHEN (a.content IS NULL OR LENGTH(a.content) < 50) AND (a.preview IS NULL OR LENGTH(a.preview) < 50) THEN true ELSE false END as needs_description
+      FROM articles a
+      LEFT JOIN sources s ON a.source_id = s.id
+      WHERE a.pub_date IS NULL 
+         OR ((a.content IS NULL OR LENGTH(a.content) < 50) AND (a.preview IS NULL OR LENGTH(a.preview) < 50))
+      ORDER BY a.created_at DESC
+      LIMIT $1
+    `, [limit]);
+    return result.rows;
+  }
+
+  // Update article with enriched data (date and/or description)
+  async enrichArticle(id, { pubDate, content, preview, publisherDescription }) {
+    const fields = [];
+    const values = [];
+    let paramCount = 1;
+
+    if (pubDate !== undefined && pubDate !== null) {
+      fields.push(`pub_date = $${paramCount++}`);
+      values.push(pubDate);
+    }
+    if (content !== undefined && content !== null && content.length > 0) {
+      fields.push(`content = $${paramCount++}`);
+      values.push(content);
+    }
+    if (preview !== undefined && preview !== null && preview.length > 0) {
+      fields.push(`preview = $${paramCount++}`);
+      values.push(preview);
+    }
+    if (publisherDescription !== undefined && publisherDescription !== null && publisherDescription.length > 0) {
+      fields.push(`publisher_description = $${paramCount++}`);
+      values.push(publisherDescription);
+    }
+
+    if (fields.length === 0) {
+      return null; // Nothing to update
+    }
+
+    fields.push(`updated_at = CURRENT_TIMESTAMP`);
+    values.push(id);
+
+    const result = await this.pool.query(
+      `UPDATE articles SET ${fields.join(', ')} WHERE id = $${paramCount} RETURNING *`,
+      values
+    );
+    return result.rows[0];
+  }
+
   async markArticlesAsViewed(ids) {
     if (ids.length === 0) return 0;
     const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');

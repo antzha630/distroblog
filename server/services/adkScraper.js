@@ -86,11 +86,13 @@ class ADKScraper {
 
 When asked about a website, search Google for their latest blog posts or news articles.
 
-Output format: Return a JSON array of articles. Each article should have:
-- title: article headline
-- url: direct link to the article (must be the actual article URL, not a redirect)
-- description: brief summary
-- datePublished: date in YYYY-MM-DD format, or null
+IMPORTANT: Always try to find the publication date for each article. Google search results often show dates like "3 days ago", "Jan 15, 2026", etc. Convert these to YYYY-MM-DD format.
+
+Output format: Return a JSON array of articles. Each article must have:
+- title: the full article headline (not truncated)
+- url: direct link to the article (must be the actual article URL on the target domain, not a Google redirect)
+- description: 2-3 sentence summary of what the article is about
+- datePublished: publication date in YYYY-MM-DD format. If shown as "X days ago", calculate the actual date. Only use null if truly unknown.
 
 Return valid JSON only. If you can't find articles, return [].`,
         tools: [adk.GOOGLE_SEARCH] // Use Google Search tool (equivalent to Python's google_search)
@@ -195,12 +197,14 @@ Return valid JSON only. If you can't find articles, return [].`,
 I'm looking for articles published in the last week (after ${cutoffDateStr}). Today is ${todayStr}.
 
 Please search and return up to 3 recent articles as a JSON array with these fields:
-- title: the headline
-- url: the direct link to the article on ${baseDomain}
-- description: a short summary  
-- datePublished: the publication date (YYYY-MM-DD format), or null if not visible
+- title: the full article headline
+- url: the direct link to the article on ${baseDomain} (not a Google redirect URL)
+- description: 2-3 sentence summary of the article content
+- datePublished: the publication date in YYYY-MM-DD format (convert "X days ago" to actual dates using today's date ${todayStr})
 
-Important: I need the actual article URLs from ${baseDomain}, not Google redirect links.
+IMPORTANT: 
+- For datePublished, if the search result shows "3 days ago" and today is ${todayStr}, calculate the actual date.
+- I need real article URLs from ${baseDomain}, not Google redirect links starting with "vertexaisearch.cloud.google.com".
 
 Return only the JSON array, no other text.`;
       
