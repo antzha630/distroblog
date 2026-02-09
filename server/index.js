@@ -2947,6 +2947,39 @@ app.get('/api/maintenance/enrichment-stats', async (req, res) => {
   }
 });
 
+// Maintenance: Playwright-based enrichment for JS-rendered pages
+// Use this for articles where static enrichment failed (e.g., Vue/React sites)
+app.post('/api/maintenance/enrich-articles-playwright', async (req, res) => {
+  try {
+    const { limit = 3 } = req.body; // Default to just 3 for memory safety
+    console.log(`📡 [API] Playwright enrichment requested (limit: ${limit})`);
+    
+    // Check current memory before starting
+    const currentMem = process.memoryUsage ? Math.round(process.memoryUsage().rss / 1024 / 1024) : 0;
+    if (currentMem > 350) {
+      return res.status(503).json({ 
+        success: false, 
+        error: `Memory too high (${currentMem}MB), try again later`,
+        currentMemoryMB: currentMem
+      });
+    }
+    
+    const result = await articleEnrichment.runPlaywrightEnrichmentBatch(Math.min(limit, 5)); // Cap at 5 for safety
+    const stats = articleEnrichment.getStats();
+    
+    res.json({
+      success: true,
+      message: `Enriched ${result.enriched} of ${result.processed} articles with Playwright`,
+      ...result,
+      stats,
+      memoryAfterMB: process.memoryUsage ? Math.round(process.memoryUsage().rss / 1024 / 1024) : 0
+    });
+  } catch (error) {
+    console.error('Error in Playwright enrichment:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // Mark articles as viewed
 app.post('/api/articles/mark-viewed', async (req, res) => {
   try {

@@ -448,6 +448,438 @@ class ArticleEnrichmentService {
       errors: 0
     };
   }
+
+  /**
+   * Get current memory usage in MB
+   */
+  getMemoryMB() {
+    if (process.memoryUsage) {
+      return Math.round(process.memoryUsage().rss / 1024 / 1024);
+    }
+    return 0;
+  }
+
+  /**
+   * Memory-safe Playwright enrichment for a single article
+   * Only runs if memory is below threshold
+   */
+  async enrichWithPlaywright(article) {
+    const MEMORY_LIMIT = 280; // Leave plenty of buffer for Render's 512MB limit
+    const currentMem = this.getMemoryMB();
+    
+    if (currentMem > MEMORY_LIMIT) {
+      console.log(`⚠️  [ENRICH-PW] Memory too high (${currentMem}MB > ${MEMORY_LIMIT}MB), skipping Playwright`);
+      return { success: false, reason: 'memory_limit' };
+    }
+
+    let browser = null;
+    let page = null;
+    let enrichedDate = null;
+    let enrichedDescription = null;
+
+    try {
+      const { chromium } = require('playwright');
+
+      console.log(`🔄 [ENRICH-PW] Starting Playwright enrichment for: ${article.title.substring(0, 50)}...`);
+      console.log(`📊 [ENRICH-PW] Memory before: ${currentMem}MB`);
+
+      // Launch with minimal memory footprint
+      browser = await chromium.launch({
+        headless: true,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+          '--single-process',
+          '--no-zygote',
+          '--disable-extensions',
+          '--disable-background-networking',
+          '--disable-sync',
+          '--disable-translate',
+          '--metrics-recording-only',
+          '--mute-audio',
+          '--no-first-run',
+          '--js-flags=--max-old-space-size=128'
+        ]
+      });
+
+      page = await browser.newPage();
+      page.setDefaultTimeout(20000);
+      page.setDefaultNavigationTimeout(20000);
+
+      // Block unnecessary resources to save memory
+      await page.route('**/*', (route) => {
+        const resourceType = route.request().resourceType();
+        if (['image', 'media', 'font', 'stylesheet'].includes(resourceType)) {
+          route.abort();
+        } else {
+          route.continue();
+        }
+      });
+
+      await page.goto(article.link, { waitUntil: 'domcontentloaded', timeout: 20000 });
+
+      // Wait for JS to render content
+      await page.waitForTimeout(3000);
+
+      // Extract date and description from rendered page
+      const result = await page.evaluate(() => {
+        const parseDate = (text) => {
+          if (!text) return null;
+          
+          // Normalize text - insert spaces before month names that follow letters/words
+          // This handles cases like "PublishedFebruary" or "onFebruary" 
+          let normalizedText = text.replace(/(Published|on|Updated)\s*(?=(January|February|March|April|May|June|July|August|September|October|November|December))/gi, '$1 ');
+          
+          // Handle relative dates like "1 day ago", "3 days ago"
+          const relativeMatch = normalizedText.match(/(\d+)\s*(day|days|hour|hours|week|weeks)\s*ago/i);
+          if (relativeMatch) {
+            const amount = parseInt(relativeMatch[1]);
+            const unit = relativeMatch[2].toLowerCase();
+            const now = new Date();
+            if (unit.startsWith('day')) {
+              now.setDate(now.getDate() - amount);
+            } else if (unit.startsWith('hour')) {
+              now.setHours(now.getHours() - amount);
+            } else if (unit.startsWith('week')) {
+              now.setDate(now.getDate() - (amount * 7));
+            }
+            return now.toISOString();
+          }
+          
+          const patterns = [
+            // Standard month formats - with flexible spacing
+            /(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s*(\d{1,2}),?\s*(\d{4})/i,
+            /(\d{1,2})\s*(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s*(\d{4})/i,
+            // ISO formats
+            /(\d{4})[-/](\d{1,2})[-/](\d{1,2})/,
+            /(\d{1,2})[-/](\d{1,2})[-/](\d{4})/,
+            /(\d{4})[-/](\d{2})[-/](\d{2})T\d{2}:\d{2}:\d{2}/,
+          ];
+          for (const pattern of patterns) {
+            const match = normalizedText.match(pattern);
+            if (match) {
+              try {
+                let dateStr = match[0];
+                const dt = new Date(dateStr);
+                if (!isNaN(dt.getTime())) {
+                  const now = new Date();
+                  const yearDiff = dt.getFullYear() - now.getFullYear();
+                  if (yearDiff >= -10 && yearDiff <= 5) {
+                    return dt.toISOString();
+                  }
+                }
+              } catch (e) {}
+            }
+          }
+          return null;
+        };
+
+        let foundDate = null;
+        let foundDescription = null;
+
+        // === DATE EXTRACTION ===
+        
+        // Try meta tags first
+        const dateMetaSelectors = [
+          'meta[property="article:published_time"]',
+          'meta[name="article:published_time"]',
+          'meta[property="og:article:published_time"]',
+          'meta[name="publishdate"]',
+          'meta[name="pubdate"]',
+          'meta[name="date"]',
+        ];
+        for (const sel of dateMetaSelectors) {
+          const el = document.querySelector(sel);
+          if (el) {
+            const content = el.getAttribute('content');
+            if (content) {
+              const parsed = parseDate(content);
+              if (parsed) {
+                foundDate = parsed;
+                break;
+              }
+            }
+          }
+        }
+
+        // Try time elements
+        if (!foundDate) {
+          const timeEl = document.querySelector('time[datetime]');
+          if (timeEl) {
+            const dt = timeEl.getAttribute('datetime');
+            if (dt) foundDate = parseDate(dt);
+          }
+        }
+
+        // Try JSON-LD
+        if (!foundDate) {
+          const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
+          for (const script of jsonLdScripts) {
+            try {
+              const data = JSON.parse(script.textContent);
+              const checkObj = (obj) => {
+                if (obj?.datePublished) return parseDate(obj.datePublished);
+                if (obj?.dateCreated) return parseDate(obj.dateCreated);
+                return null;
+              };
+              let found = checkObj(data);
+              if (!found && Array.isArray(data)) {
+                for (const item of data) {
+                  found = checkObj(item);
+                  if (found) break;
+                }
+              }
+              if (found) {
+                foundDate = found;
+                break;
+              }
+            } catch (e) {}
+          }
+        }
+
+        // Try visible text with "Published" prefix or date patterns
+        if (!foundDate) {
+          const datePatternSelectors = [
+            '[class*="published"]',
+            '[class*="date"]',
+            '[class*="time"]',
+            '[class*="meta"]',
+            'article header',
+            '.post-meta',
+            '.article-meta',
+          ];
+          for (const sel of datePatternSelectors) {
+            const els = document.querySelectorAll(sel);
+            for (const el of els) {
+              const text = el.textContent?.trim();
+              if (text && text.length < 200) {
+                const parsed = parseDate(text);
+                if (parsed) {
+                  foundDate = parsed;
+                  break;
+                }
+              }
+            }
+            if (foundDate) break;
+          }
+        }
+
+        // Last resort: scan body text for date patterns
+        // Scan more text since dates can appear after navigation/header content
+        if (!foundDate) {
+          const bodyText = document.body?.textContent || '';
+          // Scan up to 15000 chars to find dates that appear after nav content
+          foundDate = parseDate(bodyText.substring(0, 15000));
+          
+          // If still not found, try searching specifically for "Published" context
+          if (!foundDate) {
+            const pubIndex = bodyText.indexOf('Published');
+            if (pubIndex > -1) {
+              const context = bodyText.substring(pubIndex, pubIndex + 100);
+              foundDate = parseDate(context);
+            }
+          }
+        }
+
+        // === DESCRIPTION EXTRACTION ===
+        
+        // Try meta description
+        const descMetaSelectors = [
+          'meta[name="description"]',
+          'meta[property="og:description"]',
+          'meta[name="twitter:description"]',
+        ];
+        for (const sel of descMetaSelectors) {
+          const el = document.querySelector(sel);
+          if (el) {
+            const content = el.getAttribute('content');
+            if (content && content.length > 50) {
+              foundDescription = content.substring(0, 500);
+              break;
+            }
+          }
+        }
+
+        // Try JSON-LD description
+        if (!foundDescription) {
+          const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
+          for (const script of jsonLdScripts) {
+            try {
+              const data = JSON.parse(script.textContent);
+              const getDesc = (obj) => obj?.description || obj?.articleBody?.substring(0, 500);
+              let desc = getDesc(data);
+              if (!desc && Array.isArray(data)) {
+                for (const item of data) {
+                  desc = getDesc(item);
+                  if (desc) break;
+                }
+              }
+              if (desc && desc.length > 50) {
+                foundDescription = desc.substring(0, 500);
+                break;
+              }
+            } catch (e) {}
+          }
+        }
+
+        // Try first meaningful paragraph (skip cookie consent, etc.)
+        if (!foundDescription) {
+          const articleEl = document.querySelector('article, [role="article"], main, [class*="article-content"], [class*="post-content"]');
+          if (articleEl) {
+            const paragraphs = articleEl.querySelectorAll('p');
+            for (const p of paragraphs) {
+              const text = p.textContent?.trim();
+              // Skip short text, cookie consent, navigation text
+              if (text && text.length > 50 && 
+                  !text.toLowerCase().includes('cookie') &&
+                  !text.toLowerCase().includes('privacy policy') &&
+                  !text.toLowerCase().includes('consent') &&
+                  !text.toLowerCase().includes('sign up') &&
+                  !text.toLowerCase().includes('subscribe')) {
+                foundDescription = text.substring(0, 500);
+                break;
+              }
+            }
+          }
+        }
+
+        return { date: foundDate, description: foundDescription };
+      });
+
+      enrichedDate = result.date;
+      enrichedDescription = result.description;
+
+      // Clean up Playwright resources
+      await page.close();
+      page = null;
+      await browser.close();
+      browser = null;
+
+      // Force garbage collection if available
+      if (global.gc) {
+        global.gc();
+      }
+
+      const memAfter = this.getMemoryMB();
+      console.log(`📊 [ENRICH-PW] Memory after cleanup: ${memAfter}MB`);
+
+      // Update database if we found anything
+      if (enrichedDate || enrichedDescription) {
+        const needsDate = !article.pub_date;
+        const needsDesc = !article.content || article.content.length < 50;
+
+        // Only update if we found what was needed
+        const updateDate = needsDate && enrichedDate ? enrichedDate : null;
+        const updateDesc = needsDesc && enrichedDescription ? enrichedDescription : null;
+
+        if (updateDate || updateDesc) {
+          await database.enrichArticle(article.id, {
+            pubDate: updateDate,
+            content: updateDesc,
+            preview: updateDesc ? updateDesc.substring(0, 200) : null,
+            publisherDescription: updateDesc
+          });
+
+          if (updateDate) {
+            this.stats.datesEnriched++;
+            console.log(`📅 [ENRICH-PW] Found date: ${updateDate}`);
+          }
+          if (updateDesc) {
+            this.stats.descriptionsEnriched++;
+            console.log(`📝 [ENRICH-PW] Found description: ${updateDesc.substring(0, 60)}...`);
+          }
+
+          return { success: true, date: updateDate, description: updateDesc };
+        }
+      }
+
+      console.log(`⚠️  [ENRICH-PW] No new data found for article`);
+      return { success: false, reason: 'no_data_found' };
+
+    } catch (error) {
+      console.error(`❌ [ENRICH-PW] Error: ${error.message}`);
+      this.stats.errors++;
+      return { success: false, reason: error.message };
+    } finally {
+      // Ensure cleanup happens even on error
+      try {
+        if (page) await page.close();
+        if (browser) await browser.close();
+      } catch (e) {
+        // Ignore cleanup errors
+      }
+      // Force garbage collection
+      if (global.gc) {
+        global.gc();
+      }
+    }
+  }
+
+  /**
+   * Run Playwright enrichment on articles that static enrichment couldn't handle
+   * Processes one article at a time with memory checks between each
+   */
+  async runPlaywrightEnrichmentBatch(limit = 5) {
+    if (this.isRunning) {
+      console.log('⏸️ [ENRICH-PW] Enrichment already running, skipping...');
+      return { processed: 0, enriched: 0 };
+    }
+
+    this.isRunning = true;
+    const startTime = Date.now();
+    console.log(`\n🔄 [ENRICH-PW] Starting Playwright enrichment batch (limit: ${limit})...`);
+    console.log(`📊 [ENRICH-PW] Initial memory: ${this.getMemoryMB()}MB`);
+
+    try {
+      const articles = await database.getArticlesNeedingEnrichment(limit);
+
+      if (articles.length === 0) {
+        console.log('✅ [ENRICH-PW] No articles need enrichment');
+        return { processed: 0, enriched: 0 };
+      }
+
+      console.log(`📊 [ENRICH-PW] Found ${articles.length} articles to process`);
+
+      let enrichedCount = 0;
+      let processedCount = 0;
+
+      for (const article of articles) {
+        // Check memory before each article
+        const currentMem = this.getMemoryMB();
+        if (currentMem > 350) {
+          console.log(`⚠️  [ENRICH-PW] Memory too high (${currentMem}MB), stopping batch early`);
+          break;
+        }
+
+        this.stats.articlesProcessed++;
+        processedCount++;
+
+        const result = await this.enrichWithPlaywright(article);
+        if (result.success) {
+          enrichedCount++;
+        }
+
+        // Wait between articles to let memory settle
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+
+      const duration = Date.now() - startTime;
+      console.log(`✅ [ENRICH-PW] Batch complete: ${enrichedCount}/${processedCount} articles enriched in ${duration}ms`);
+      console.log(`📊 [ENRICH-PW] Final memory: ${this.getMemoryMB()}MB`);
+
+      this.lastRunTime = new Date();
+      return { processed: processedCount, enriched: enrichedCount };
+
+    } catch (error) {
+      console.error('❌ [ENRICH-PW] Batch failed:', error.message);
+      this.stats.errors++;
+      throw error;
+    } finally {
+      this.isRunning = false;
+    }
+  }
 }
 
 module.exports = new ArticleEnrichmentService();
