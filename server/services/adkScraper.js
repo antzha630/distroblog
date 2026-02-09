@@ -76,25 +76,23 @@ class ADKScraper {
       // Create LlmAgent with Google Search tool
       // The agent will use Google Search to find articles from websites
       // Based on Python ADK pattern: tools=[google_search] with simple instruction
-      // BEST PRACTICE: Keep instruction conversational and simple - the model decides when to search
-      // Reference: https://ai.google.dev/gemini-api/docs/grounding - "model automatically determines if search is needed"
+      // ADK/Gemini prompt best practices (see ai.google.dev/gemini-api/docs/prompting-strategies, google.github.io/adk-docs/agents/llm-agents):
+      // - Be clear and specific; avoid long lists of "don't" (positive patterns beat anti-patterns).
+      // - Use few-shot examples for format and behavior; keep instructions focused.
       this.agent = new adk.LlmAgent({
         name: 'article_finder',
         model: llm, // Pass the LLM object directly (not model name string)
         description: 'Agent that finds recent blog posts and articles from websites using Google Search.',
-        instruction: `You are a research assistant that helps find recent blog posts and articles from websites.
+        instruction: `You are a research assistant that finds recent blog posts and articles from websites using search.
 
-When asked about a website, search Google for their latest blog posts or news articles.
+When asked about a website, search for their latest blog posts or news articles. For each search result you use, output one article object: the headline and the link must come from the same result (do not combine a title from one result with a URL from another).
 
-IMPORTANT: Always try to find the publication date for each article. Google search results often show dates like "3 days ago", "Jan 15, 2026", etc. Convert these to YYYY-MM-DD format.
+Try to include publication date when visible (e.g. "3 days ago", "Jan 15, 2026") as YYYY-MM-DD; use null only if unknown.
 
-Output format: Return a JSON array of articles. Each article must have:
-- title: the full article headline (not truncated)
-- url: direct link to the article (must be the actual article URL on the target domain, not a Google redirect)
-- description: 2-3 sentence summary of what the article is about
-- datePublished: publication date in YYYY-MM-DD format. If shown as "X days ago", calculate the actual date. Only use null if truly unknown.
+Return a JSON array only. Example shape:
+[{"title": "Example Post Title from the site", "url": "https://example.com/blog/example-post-title", "description": "Brief summary.", "datePublished": "2026-01-15"}]
 
-Return valid JSON only. If you can't find articles, return [].`,
+Each object must have: title (full headline), url (direct article URL on the target domain), description (short summary), datePublished (YYYY-MM-DD or null). Return [] if no articles found.`,
         tools: [adk.GOOGLE_SEARCH] // Use Google Search tool (equivalent to Python's google_search)
       });
 
@@ -423,6 +421,12 @@ Return only the JSON array, no other text.`;
             console.log(`⚠️ [ADK] [ACCURACY] Filtering out null/empty URL (title: ${article.title || 'unknown'})`);
             return false;
           }
+          // Filter out literal placeholder paths (e.g. /post/placeholder)
+          if (articleUrl.toLowerCase().includes('/placeholder')) {
+            accuracyMetrics.filteredOut.genericUrl++;
+            console.log(`⚠️ [ADK] [ACCURACY] Filtering out placeholder URL: ${articleUrl}`);
+            return false;
+          }
           
           const articleUrlObj = new URL(articleUrl);
           const articleDomain = articleUrlObj.hostname.replace(/^www\./, '').toLowerCase();
@@ -446,7 +450,8 @@ Return only the JSON array, no other text.`;
           // Filter out common non-article pages (about, contact, privacy, terms, etc.)
           const nonArticlePaths = ['/about', '/contact', '/privacy', '/terms', '/terms-of-service', 
                                    '/privacy-policy', '/legal', '/careers', '/jobs', '/team', 
-                                   '/faq', '/help', '/support', '/docs', '/documentation'];
+                                   '/faq', '/help', '/support', '/docs', '/documentation',
+                                   '/eco-system', '/build', '/developers'];
           const normalizedPath = articlePath.toLowerCase().replace(/\/$/, ''); // Remove trailing slash
           if (nonArticlePaths.includes(normalizedPath) || 
               normalizedPath.startsWith('/about/') ||
@@ -455,6 +460,13 @@ Return only the JSON array, no other text.`;
               normalizedPath.startsWith('/terms')) {
             accuracyMetrics.filteredOut.genericUrl++;
             console.log(`⚠️ [ADK] [ACCURACY] Filtering out non-article page (${normalizedPath}): ${articleUrl}`);
+            return false;
+          }
+          // Filter out section/landing paths that are not single-article pages
+          if (normalizedPath.includes('/eco-system') || normalizedPath.includes('/build/') ||
+              normalizedPath.endsWith('/developers') || normalizedPath.includes('/blog/events')) {
+            accuracyMetrics.filteredOut.genericUrl++;
+            console.log(`⚠️ [ADK] [ACCURACY] Filtering out non-article path (${normalizedPath}): ${articleUrl}`);
             return false;
           }
           

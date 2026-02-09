@@ -2534,6 +2534,38 @@ app.post('/api/maintenance/cleanup-old-articles', async (req, res) => {
   }
 });
 
+// Maintenance: List junk/placeholder articles (preview only)
+app.get('/api/maintenance/junk-articles', async (req, res) => {
+  try {
+    if (typeof database.getJunkArticles !== 'function') {
+      return res.status(501).json({ success: false, error: 'getJunkArticles not available (Postgres only)' });
+    }
+    const articles = await database.getJunkArticles();
+    res.json({ success: true, count: articles.length, articles });
+  } catch (error) {
+    console.error('Error listing junk articles:', error);
+    res.status(500).json({ success: false, error: 'Failed to list junk articles' });
+  }
+});
+
+// Maintenance: Delete junk/placeholder articles (placeholder URLs, "No results found", "FeaturedArticles", etc.)
+app.post('/api/maintenance/cleanup-junk-articles', async (req, res) => {
+  try {
+    if (typeof database.cleanupJunkArticles !== 'function') {
+      return res.status(501).json({ success: false, error: 'cleanupJunkArticles not available (Postgres only)' });
+    }
+    const deletedCount = await database.cleanupJunkArticles();
+    res.json({ 
+      success: true, 
+      message: `Removed ${deletedCount} junk/placeholder articles`,
+      deletedCount 
+    });
+  } catch (error) {
+    console.error('Error cleaning up junk articles:', error);
+    res.status(500).json({ success: false, error: 'Failed to clean up junk articles' });
+  }
+});
+
 // Maintenance: Get database statistics
 app.get('/api/maintenance/database-stats', async (req, res) => {
   try {

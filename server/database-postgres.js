@@ -533,6 +533,32 @@ class Database {
     return result.rows.length > 0;
   }
 
+  // Normalize link for dedup: strip query string and trailing slash (case-sensitive path)
+  _normalizedLink(link) {
+    if (!link || typeof link !== 'string') return '';
+    const withoutQuery = link.split('?')[0].trim();
+    return withoutQuery.replace(/\/+$/, '') || withoutQuery;
+  }
+
+  async articleExistsByNormalizedLink(link) {
+    const norm = this._normalizedLink(link);
+    if (!norm) return false;
+    const result = await this.pool.query(
+      `SELECT id FROM articles WHERE RTRIM(split_part(link, '?', 1), '/') = $1`,
+      [norm]
+    );
+    return result.rows.length > 0;
+  }
+
+  async articleExistsBySourceIdAndTitle(sourceId, title) {
+    if (!title || !sourceId) return false;
+    const result = await this.pool.query(
+      'SELECT id FROM articles WHERE source_id = $1 AND LOWER(TRIM(title)) = LOWER(TRIM($2))',
+      [sourceId, title]
+    );
+    return result.rows.length > 0;
+  }
+
   async updateArticle(id, updates) {
     const fields = [];
     const values = [];
@@ -937,6 +963,37 @@ class Database {
 
   // Clean up old articles to prevent database bloat and memory issues
   // Deletes articles older than specified days that are not 'sent' status
+  // Find articles that are placeholders, error pages, or generic non-article titles
+  async getJunkArticles() {
+    const result = await this.pool.query(`
+      SELECT id, title, link, source_name
+      FROM articles
+      WHERE link ILIKE '%/placeholder%'
+         OR title ILIKE '%no results found%'
+         OR title ILIKE '%check back later%'
+         OR TRIM(LOWER(title)) = 'featuredarticles'
+         OR TRIM(LOWER(title)) = 'featured articles'
+      ORDER BY id DESC
+    `);
+    return result.rows;
+  }
+
+  async cleanupJunkArticles() {
+    const result = await this.pool.query(`
+      DELETE FROM articles
+      WHERE link ILIKE '%/placeholder%'
+         OR title ILIKE '%no results found%'
+         OR title ILIKE '%check back later%'
+         OR TRIM(LOWER(title)) = 'featuredarticles'
+         OR TRIM(LOWER(title)) = 'featured articles'
+      RETURNING id, title, link
+    `);
+    if (result.rowCount > 0) {
+      console.log(`🧹 Cleaned up ${result.rowCount} junk/placeholder articles`);
+    }
+    return result.rowCount;
+  }
+
   async cleanupOldArticles(daysOld = 90) {
     try {
       const cutoffDate = new Date();

@@ -659,7 +659,10 @@ class FeedMonitor {
                   console.warn(`⚠️  [CHECK NOW] [${source.name}] Article missing link/url: ${JSON.stringify({title: article.title, link: article.link, url: article.url})}`);
                   continue;
                 }
-                const exists = await database.articleExists(articleLink);
+                let exists = await database.articleExists(articleLink);
+                if (!exists && database.articleExistsByNormalizedLink) {
+                  exists = await database.articleExistsByNormalizedLink(articleLink);
+                }
                 if (exists) {
                   continue; // Skip existing articles
                 }
@@ -961,6 +964,15 @@ class FeedMonitor {
                     continue;
                   }
                   
+                  // Dedup: skip if same source already has an article with this exact title
+                  if (database.articleExistsBySourceIdAndTitle && articleObj.sourceId && articleObj.title) {
+                    const duplicateTitle = await database.articleExistsBySourceIdAndTitle(articleObj.sourceId, articleObj.title);
+                    if (duplicateTitle) {
+                      console.log(`⚠️  [CHECK NOW] [${source.name}] Skipping duplicate title for same source: "${articleObj.title.substring(0, 50)}..."`);
+                      continue;
+                    }
+                  }
+                  
                   if (articleObj.title && articleObj.title.trim() !== '' && articleObj.link) {
                     try {
                     await database.addArticle(articleObj);
@@ -1076,12 +1088,10 @@ class FeedMonitor {
       console.log(`📊 [CHECK NOW] Summary: ${successfulSources}/${results.length} sources successful, ${totalNewArticles} new articles found`);
       
       // Automatically enrich dates for newly found scraping articles that don't have dates
-      if (totalNewArticles > 0 && allowManual) {
+      if (totalNewArticles > 0) {
         console.log(`\n🔍 [CHECK NOW] Auto-enriching dates for new articles without dates...`);
         try {
-          // Use a reasonable limit - try to enrich up to the number of new articles found
-          // Increased limit to 50 to cover more articles
-          const enrichLimit = Math.min(totalNewArticles, 50);
+          const enrichLimit = allowManual ? Math.min(totalNewArticles, 50) : Math.min(totalNewArticles, 15);
           const enrichedCount = await this.enrichNewArticlesDates(enrichLimit);
           if (enrichedCount > 0) {
             console.log(`✨ [CHECK NOW] Auto-enriched dates for ${enrichedCount} new articles`);
@@ -1202,6 +1212,7 @@ class FeedMonitor {
       const limitedItems = feed.items.slice(0, maxArticles);
       console.log(`📰 [CHECK NOW] Processing ${limitedItems.length} most recent articles from ${source.name} (feed has ${feed.items.length} total, checking up to ${maxArticles})`);
       
+      let rssFetchBodyCount = 0; // cap fetches when feed has no body (e.g. Medium)
       for (const item of limitedItems) {
         try {
           // Skip if no link
@@ -1209,8 +1220,11 @@ class FeedMonitor {
             continue;
           }
           
-        // Check if article already exists
-        const exists = await database.articleExists(item.link);
+        // Check if article already exists (exact or normalized link)
+        let exists = await database.articleExists(item.link);
+        if (!exists && database.articleExistsByNormalizedLink) {
+          exists = await database.articleExistsByNormalizedLink(item.link);
+        }
           if (exists) {
             continue; // Skip existing articles
           }
@@ -1293,12 +1307,23 @@ class FeedMonitor {
             console.log(`⚠️  [CHECK NOW] [${source.name}] Hook generation failed: ${hookError.message} (continuing without hook)`);
           }
 
+          let content = enhancedContent.content || item.contentSnippet || item.content || item.description || '';
+          let preview = enhancedContent.preview || (item.contentSnippet || item.content || item.description || '').substring(0, 200) + (content.length > 200 ? '...' : '');
+          if (content.trim().length < 80 && rssFetchBodyCount < 2 && item.link) {
+            const fetched = await this.fetchArticleBodyForRss(item.link);
+            if (fetched && fetched.content) {
+              content = fetched.content;
+              preview = fetched.preview || fetched.content.substring(0, 300);
+              rssFetchBodyCount++;
+            }
+          }
+
           const article = {
             sourceId: source.id,
             title: enhancedContent.title || item.title || 'Untitled',
             link: item.link || '',
-            content: enhancedContent.content || item.contentSnippet || item.content || item.description || '',
-            preview: enhancedContent.preview || (item.contentSnippet || item.content || item.description || '').substring(0, 200) + '...',
+            content,
+            preview,
             enhanced_content: enhancedContent,
             pubDate: pubDate ? pubDate.toISOString() : null,
             sourceName: source.name || 'Unknown Source',
@@ -1317,6 +1342,13 @@ class FeedMonitor {
           if (!article.link) {
             console.log(`⚠️ Skipping article with no link: ${article.title}`);
             continue;
+          }
+          // Dedup: skip if same source already has this title
+          if (database.articleExistsBySourceIdAndTitle && source.id && article.title) {
+            const duplicateTitle = await database.articleExistsBySourceIdAndTitle(source.id, article.title);
+            if (duplicateTitle) {
+              continue;
+            }
           }
 
           // Try to add article, handle duplicate key errors gracefully
@@ -1372,10 +1404,19 @@ class FeedMonitor {
       // Generate session ID for this batch of articles
       const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       
+      let rssFetchBodyCount = 0;
       for (const item of feed.items) {
-        // Check if article already exists
-        const exists = await database.articleExists(item.link);
+        // Check if article already exists (exact or normalized link)
+        let exists = await database.articleExists(item.link);
+        if (!exists && database.articleExistsByNormalizedLink) {
+          exists = await database.articleExistsByNormalizedLink(item.link);
+        }
         if (!exists) {
+          // Dedup: skip if same source already has this title
+          if (database.articleExistsBySourceIdAndTitle && source.id && item.title) {
+            const dup = await database.articleExistsBySourceIdAndTitle(source.id, item.title);
+            if (dup) continue;
+          }
           // Generate AI-enhanced content
           const enhancedContent = await this.enhanceArticleContent(item);
           
@@ -1452,11 +1493,22 @@ class FeedMonitor {
             console.log(`⚠️  [CHECK NOW] [${source.name}] Hook generation failed: ${hookError.message} (continuing without hook)`);
           }
 
+          let content = enhancedContent.content;
+          let preview = enhancedContent.preview;
+          if ((content || '').trim().length < 80 && rssFetchBodyCount < 2 && item.link) {
+            const fetched = await this.fetchArticleBodyForRss(item.link);
+            if (fetched && fetched.content) {
+              content = fetched.content;
+              preview = fetched.preview || fetched.content.substring(0, 300);
+              rssFetchBodyCount++;
+            }
+          }
+
           // Add to database with session ID
           const articleId = await database.addArticle({
             title: enhancedContent.title || 'Untitled',
-            content: enhancedContent.content,
-            preview: enhancedContent.preview,
+            content: content,
+            preview: preview,
             link: item.link,
             pubDate: pubDate ? pubDate.toISOString() : null,
             sourceId: source.id,
@@ -2357,6 +2409,41 @@ class FeedMonitor {
     }
   }
   
+  /**
+   * Fetch article body from URL when RSS only provides a short snippet (e.g. Medium).
+   * Used at most a few times per feed to avoid rate limits.
+   */
+  async fetchArticleBodyForRss(url) {
+    try {
+      const response = await axios.get(url, {
+        timeout: 8000,
+        maxContentLength: 500000,
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; DistroBlogRSS/1.0)' },
+        validateStatus: (s) => s >= 200 && s < 400
+      });
+      const $ = cheerio.load(response.data);
+      const selectors = [
+        'article',
+        '[role="main"]',
+        'main',
+        '.post-content', '.entry-content', '.article-body', '.content', '.post-body',
+        '.blog-post', '.story-body', '[class*="article"]', '[class*="post-content"]'
+      ];
+      let best = '';
+      for (const sel of selectors) {
+        const el = $(sel).first();
+        if (el.length) {
+          const text = el.text().replace(/\s+/g, ' ').trim();
+          if (text.length > best.length && text.length > 100) best = text;
+        }
+      }
+      if (best.length < 80) return null;
+      return { content: best.substring(0, 15000), preview: best.substring(0, 300) };
+    } catch (e) {
+      return null;
+    }
+  }
+
   // Check if title is generic/non-article (should be filtered out)
   isGenericTitle(title) {
     if (!title || title.length < 10) return true;
@@ -2393,7 +2480,12 @@ class FeedMonitor {
       /could not be found/i,
       /this page could not be found/i,
       /page not found/i,
-      /not found/i
+      /not found/i,
+      // Placeholder and error messages from scraped pages
+      /no results found/i,
+      /check back later/i,
+      /^featured\s*articles?$/i,
+      /^featuredarticles$/i
     ];
     
     return genericPatterns.some(pattern => pattern.test(lowerTitle));
