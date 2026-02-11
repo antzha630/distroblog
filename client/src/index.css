@@ -1,27 +1,59 @@
-/* CSS Reset and Base Styles */
+/* ========== DISTRO DESIGN SYSTEM ========== */
+/* Dark-mode-first, HUD / cyberpunk aesthetic */
+
+:root {
+  /* Core brand */
+  --color-green: #03d26f;
+  --color-lime: #cef431;
+  --color-teal: #014651;
+  --color-dark: #161514;
+  --color-light: #eaf4f4;
+  /* Teal scale */
+  --teal-500: #014651;
+  --teal-600: #013d45;
+  --teal-700: #013339;
+  --teal-800: #00292d;
+  --teal-900: #001f22;
+  /* Dark scale */
+  --dark-50: #f5f5f5;
+  --dark-400: #676664;
+  --dark-500: #3e3d3c;
+  --dark-600: #2d2c2b;
+  --dark-700: #232221;
+  --dark-800: #1a1918;
+  --dark-900: #161514;
+  /* Semantic */
+  --color-success: #03d26f;
+  --color-error: #ef4444;
+  --color-warning: #fbbf24;
+  --color-info: #2dd4bf;
+  /* Typography */
+  --font-display: 'Orbitron', 'Inter', sans-serif;
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+  /* Radius */
+  --radius: 0.75rem;
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+  /* Glow */
+  --glow-green: rgba(3, 210, 111, 0.2);
+  --glow-green-strong: rgba(3, 210, 111, 0.5);
+}
+
+/* Light mode overrides (optional) */
+:root.light {
+  --color-dark: #f8fafa;
+  --color-light: #161514;
+  --dark-900: #f8fafa;
+  --dark-800: #ffffff;
+}
+
 * {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
 }
 
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  background-color: #f8f9fa;
-  color: #333;
-  line-height: 1.6;
-}
-
-code {
-  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
-    monospace;
-}
-
-/* Ensure proper spacing and layout */
 html, body, #root {
   height: 100%;
 }
@@ -31,56 +63,60 @@ html, body, #root {
   flex-direction: column;
 }
 
-/* Button reset */
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--dark-900);
+  color: var(--color-light);
+  line-height: 1.6;
+}
+
+:root.light body {
+  background-color: #f8fafa;
+  color: #161514;
+}
+
+code {
+  font-family: var(--font-mono);
+}
+
 button {
   font-family: inherit;
   font-size: inherit;
   line-height: inherit;
+  cursor: pointer;
 }
 
-/* Link reset */
 a {
   color: inherit;
   text-decoration: none;
 }
 
-/* Input reset */
 input, textarea, select {
   font-family: inherit;
   font-size: inherit;
   line-height: inherit;
 }
 
-/* Ensure inputs have proper defaults - only apply to unstyled inputs, not dark-themed components */
-input:not([class]):not([class*="chat-"]):not([class*="dark"]),
-textarea:not([class]):not([class*="chat-"]):not([class*="dark"]),
-select:not([class]):not([class*="chat-"]):not([class*="dark"]) {
-  background: white;
-  color: #495057;
-  border: 1px solid #ced4da;
-}
-
-/* Focus styles */
-button:focus,
-input:focus,
-textarea:focus,
-select:focus {
-  outline: 2px solid #3498db;
+/* Focus: neon green ring */
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--color-green);
   outline-offset: 2px;
 }
 
-/* Remove default button styles */
 button {
   background: none;
   border: none;
   padding: 0;
   margin: 0;
-  cursor: pointer;
 }
 
-/* Ensure images are responsive */
 img {
   max-width: 100%;
   height: auto;
 }
-

@@ -257,57 +257,81 @@ function MainApp() {
   // Don't show header/nav for agent-test - it has its own full-screen UI
   const showHeaderNav = activeTab !== 'adk-web';
 
+  const [darkMode, setDarkMode] = useState(true);
+  const toggleTheme = () => setDarkMode((d) => !d);
+  useEffect(() => {
+    document.documentElement.classList.toggle('light', !darkMode);
+  }, [darkMode]);
+
   return (
-    <div className="App">
+    <div className="App distro-app">
       {showHeaderNav && (
-        <header className="header">
-          <div className="header-content">
-            <div>
-              <h1>Distro Scoopstream</h1>
-              <p className="header-stats">news monitoring tool for journalists</p>
+        <header className="distro-header">
+          <div className="distro-header-content">
+            <button
+              className="distro-logo"
+              onClick={() => { setActiveTab('distro-scoopstream'); navigate('/'); }}
+              aria-label="Distro home"
+            >
+              <span className="distro-logo-icon" aria-hidden>⚡</span>
+              <span className="distro-logo-text">DISTRO</span>
+            </button>
+            <nav className="distro-nav">
+              {activeTab !== 'distro-scoopstream' && (
+                <button
+                  className="distro-nav-link"
+                  onClick={() => { setActiveTab('distro-scoopstream'); navigate('/'); }}
+                >
+                  <span className="distro-nav-icon" aria-hidden>↑</span>
+                  STORIES
+                </button>
+              )}
+              {activeTab !== 'sources' && (
+                <button
+                  className="distro-nav-link"
+                  onClick={() => { setActiveTab('sources'); navigate('/sources'); }}
+                >
+                  <span className="distro-nav-icon" aria-hidden>◉</span>
+                  SOURCES
+                </button>
+              )}
+              {activeTab !== 'adk-web' && (
+                <button
+                  className="distro-nav-link"
+                  onClick={() => { setActiveTab('adk-web'); navigate('/agent-test'); }}
+                >
+                  <span className="distro-nav-icon" aria-hidden>◉</span>
+                  AGENT TEST
+                </button>
+              )}
+            </nav>
+            <div className="distro-header-actions">
+              <button type="button" className="distro-search-trigger" aria-label="Search">
+                <span className="distro-search-icon" aria-hidden>⌕</span>
+                <span className="distro-search-placeholder">Search...</span>
+                <span className="distro-search-kbd">⌘K</span>
+              </button>
+              <button
+                type="button"
+                className="distro-theme-toggle"
+                onClick={toggleTheme}
+                aria-label={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+              >
+                <span aria-hidden>{darkMode ? '☀' : '☾'}</span>
+              </button>
+              <button type="button" className="distro-btn-signin">
+                <span aria-hidden>→</span>
+                SIGN IN
+              </button>
             </div>
-            <nav className="header-nav">
-            {activeTab !== 'distro-scoopstream' && (
-              <button 
-                className="nav-link"
-                onClick={() => {
-                  setActiveTab('distro-scoopstream');
-                  navigate('/');
-                }}
-              >
-                Scoopstream
-              </button>
-            )}
-            {activeTab !== 'sources' && (
-              <button 
-                className="nav-link"
-                onClick={() => {
-                  setActiveTab('sources');
-                  navigate('/sources');
-                }}
-              >
-                Sources
-              </button>
-            )}
-            {activeTab !== 'adk-web' && (
-              <button 
-                className="nav-link"
-                onClick={() => {
-                  setActiveTab('adk-web');
-                  navigate('/agent-test');
-                }}
-              >
-                Agent Test
-              </button>
-            )}
-          </nav>
           </div>
         </header>
       )}
 
-      <main className={activeTab === 'adk-web' ? 'main-content-fullscreen' : 'main-content'}>
+      <main className={activeTab === 'adk-web' ? 'main-content-fullscreen' : 'distro-main main-content'}>
         {activeTab === 'distro-scoopstream' && distroScoutStep === 'landing' && (
-          <DistroScoutLanding 
+          <DistroScoutLanding
+            sources={sources}
             onArticlesSelected={handleDistroScoutArticlesSelected}
             onCheckNow={handleCheckNow}
             onStopChecking={handleStopChecking}
