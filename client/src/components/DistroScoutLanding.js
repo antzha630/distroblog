@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import config from '../config';
 
-function DistroScoutLanding({ sources = [], onArticlesSelected, onCheckNow, onStopChecking, isCheckingFeeds }) {
+function DistroScoutLanding({ onArticlesSelected, onCheckNow, onStopChecking, isCheckingFeeds }) {
   const [articles, setArticles] = useState([]);
   const [filteredArticles, setFilteredArticles] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -15,8 +15,6 @@ function DistroScoutLanding({ sources = [], onArticlesSelected, onCheckNow, onSt
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [sortOrder, setSortOrder] = useState('newest'); // 'newest' | 'oldest'
   const [lastChecked, setLastChecked] = useState(null);
-  const [storySearch, setStorySearch] = useState('');
-  const [carouselIndex, setCarouselIndex] = useState(0);
 
   useEffect(() => {
     fetchArticles();
@@ -26,7 +24,7 @@ function DistroScoutLanding({ sources = [], onArticlesSelected, onCheckNow, onSt
 
   useEffect(() => {
     applyFiltersAndSort();
-  }, [articles, selectedCategory, sortOrder, storySearch]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [articles, selectedCategory, sortOrder]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchArticles = async () => {
     try {
@@ -101,18 +99,6 @@ function DistroScoutLanding({ sources = [], onArticlesSelected, onCheckNow, onSt
     // Apply category filter
     if (selectedCategory !== 'all') {
       filtered = filtered.filter(article => article.category === selectedCategory);
-    }
-
-    // Apply search filter
-    if (storySearch.trim()) {
-      const q = storySearch.trim().toLowerCase();
-      filtered = filtered.filter(
-        (a) =>
-          (a.title && a.title.toLowerCase().includes(q)) ||
-          (a.preview && a.preview.toLowerCase().includes(q)) ||
-          (a.source_name && a.source_name.toLowerCase().includes(q)) ||
-          (a.source && String(a.source).toLowerCase().includes(q))
-      );
     }
 
     // Apply sort order
@@ -274,210 +260,156 @@ function DistroScoutLanding({ sources = [], onArticlesSelected, onCheckNow, onSt
     );
   }
 
-  const displaySources = sources.slice(0, 8);
-  const carouselPrev = () => setCarouselIndex((i) => Math.max(0, i - 1));
-  const carouselNext = () => setCarouselIndex((i) => Math.min(displaySources.length - 1, i + 1));
-
   return (
     <div className="distro-scoopstream-landing">
-      {/* Toolbar: time range + check now */}
-      <div className="distro-toolbar">
-        <div className="mode-toggle" role="group" aria-label="Article time range">
-          <button
-            type="button"
-            className={`mode-btn ${timeFilter === '2days' ? 'active' : ''}`}
-            onClick={() => setTimeFilter('2days')}
-          >
-            Past 2 Days
-          </button>
-          <button
-            type="button"
-            className={`mode-btn ${timeFilter === '7days' ? 'active' : ''}`}
-            onClick={() => setTimeFilter('7days')}
-          >
-            Past 7 Days
-          </button>
-        </div>
-        <div className="distro-toolbar-actions">
-          <button
-            onClick={handleCheckNow}
-            disabled={isRefreshing || isCheckingFeeds}
-            className="distro-btn-refresh"
-          >
-            {isRefreshing || isCheckingFeeds ? 'Checking…' : 'Check Now'}
-          </button>
-          {(isRefreshing || isCheckingFeeds) && onStopChecking && (
-            <button onClick={onStopChecking} className="distro-btn-stop">Stop</button>
-          )}
-          {lastChecked && !isRefreshing && !isCheckingFeeds && (
-            <span className="distro-last-checked">Last checked {formatLastChecked(lastChecked)}</span>
-          )}
+      {/* Header: Scoopstream title left, Past 2 Days / Past 7 Days / Check Now right */}
+      <div className="distro-scoopstream-header">
+        <h1 className="distro-scoopstream-title">Scoopstream</h1>
+        <div className="header-controls">
+          <div className="mode-toggle" role="group" aria-label="Article time range">
+            <button
+              type="button"
+              className={`mode-btn ${timeFilter === '2days' ? 'active' : ''}`}
+              onClick={() => setTimeFilter('2days')}
+            >
+              Past 2 Days
+            </button>
+            <button
+              type="button"
+              className={`mode-btn ${timeFilter === '7days' ? 'active' : ''}`}
+              onClick={() => setTimeFilter('7days')}
+            >
+              Past 7 Days
+            </button>
+            <button
+              onClick={handleCheckNow}
+              disabled={isRefreshing || isCheckingFeeds}
+              className="refresh-btn"
+            >
+              {isRefreshing || isCheckingFeeds ? '⏳ Checking...' : '🔍 Check Now'}
+            </button>
+          </div>
+          <div className="header-controls-meta">
+            {(isRefreshing || isCheckingFeeds) && onStopChecking && (
+              <button onClick={onStopChecking} className="stop-btn">Stop</button>
+            )}
+            {lastChecked && !isRefreshing && !isCheckingFeeds && (
+              <span className="last-checked-text">Last checked {formatLastChecked(lastChecked)}</span>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* CAROUSEL */}
-      <section className="distro-carousel-section">
-        <div className="distro-carousel-header">
-          <h2 className="distro-section-title">
-            <span className="distro-section-icon" aria-hidden>⚡</span>
-            CAROUSEL
-          </h2>
-          {displaySources.length > 0 && (
-            <>
-              <div className="distro-carousel-dots">
-                {displaySources.map((_, i) => (
-                  <span
-                    key={i}
-                    className={`distro-carousel-dot ${i === carouselIndex ? 'active' : ''}`}
-                    aria-hidden
-                  />
-                ))}
-              </div>
-              <div className="distro-carousel-nav">
-                <button type="button" className="distro-carousel-arrow" onClick={carouselPrev} aria-label="Previous">←</button>
-                <button type="button" className="distro-carousel-arrow" onClick={carouselNext} aria-label="Next">→</button>
-              </div>
-            </>
-          )}
-        </div>
-        <div className="distro-carousel-track">
-          {displaySources.length === 0 ? (
-            <div className="distro-carousel-card distro-carousel-card-placeholder">
-              <div className="distro-carousel-card-icon">D</div>
-              <div className="distro-carousel-card-name">No sources yet</div>
-              <div className="distro-carousel-card-meta">Add sources in the Sources tab</div>
-            </div>
-          ) : (
-            displaySources.map((src, i) => (
-              <div key={src.id || i} className="distro-carousel-card">
-                <div className="distro-carousel-card-icon">
-                  {(src.name || src.feed_name || 'S').charAt(0).toUpperCase()}
-                </div>
-                <div className="distro-carousel-card-name">{src.name || src.feed_name || 'Unnamed'}</div>
-                <div className="distro-carousel-card-meta">
-                  Last updated: {src.last_checked ? formatDate(src.last_checked) : '—'}
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      </section>
-
-      {/* SCROLL */}
-      <section className="distro-scroll-section">
-        <div className="distro-scroll-header">
-          <h2 className="distro-section-title">
-            <span className="distro-section-icon distro-section-icon-scroll" aria-hidden>≡</span>
-            SCROLL
-          </h2>
-          <span className="distro-stories-badge">{filteredArticles.length} stories</span>
-        </div>
-        <div className="distro-scroll-actions">
-          <button type="button" className="distro-btn-personalize">→ SIGN IN TO PERSONALIZE</button>
-          <span className="distro-scroll-stories-label">STORIES</span>
-        </div>
-        <div className="distro-scroll-controls">
-          <input
-            type="text"
-            placeholder="Search stories..."
-            value={storySearch}
-            onChange={(e) => setStorySearch(e.target.value)}
-            className="distro-search-stories"
-            aria-label="Search stories"
-          />
-          <div className="distro-scroll-toolbar">
+      {/* Filter and Sort */}
+      <div className="filter-sort-section">
+        <div className="filter-sort-controls">
+          <div className="dropdown-group">
+            <label htmlFor="category-filter">Filter:</label>
             <select
               id="category-filter"
               value={selectedCategory}
               onChange={(e) => setSelectedCategory(e.target.value)}
-              className="distro-select"
+              className="filter-dropdown"
             >
               <option value="all">All Categories</option>
               {categories.map((category) => (
                 <option key={category.id} value={category.name}>{category.name}</option>
               ))}
             </select>
+          </div>
+          <div className="dropdown-group">
+            <label htmlFor="sort-order">Sort:</label>
             <select
               id="sort-order"
               value={sortOrder}
               onChange={(e) => setSortOrder(e.target.value)}
-              className="distro-select"
+              className="sort-dropdown"
             >
-              <option value="newest">Newest first</option>
-              <option value="oldest">Oldest first</option>
+              <option value="newest">Newest to Oldest</option>
+              <option value="oldest">Oldest to Newest</option>
             </select>
-            <button onClick={handleSelectAll} className="distro-btn-select-all">
-              {selectedArticles.length === filteredArticles.length && filteredArticles.length > 0 ? 'Deselect All' : 'Select All'}
-            </button>
           </div>
         </div>
+        <button onClick={handleSelectAll} className="select-all-btn">
+          {selectedArticles.length === filteredArticles.length && filteredArticles.length > 0 ? 'All Selected' : 'Select All'}
+        </button>
+      </div>
 
-        <div className="distro-articles-list">
-          {filteredArticles.length === 0 ? (
-            <div className="distro-no-articles">
-              <p>No articles found. Try adding more sources or check back later.</p>
-            </div>
-          ) : (
-            filteredArticles.map((article) => (
-              <article
-                key={article.id}
-                className={`distro-story-card ${selectedArticles.includes(article.id) ? 'selected' : ''}`}
+      {/* Articles List */}
+      <div className="articles-list">
+        {filteredArticles.length === 0 ? (
+          <div className="no-articles">
+            <p>No articles found. Try adding more sources or check back later.</p>
+          </div>
+        ) : (
+          filteredArticles.map((article) => (
+            <div
+              key={article.id}
+              className={`article-card ${selectedArticles.includes(article.id) ? 'selected' : ''}`}
+            >
+              <button
+                type="button"
+                onClick={() => handleSelectArticle(article.id)}
+                className={`select-btn ${selectedArticles.includes(article.id) ? 'selected' : ''}`}
               >
-                <button
-                  type="button"
-                  onClick={() => handleSelectArticle(article.id)}
-                  className="distro-story-select-wrap"
-                  aria-pressed={selectedArticles.includes(article.id)}
-                >
-                  <span className="distro-story-icon">
-                    {(article.source_name || article.source || 'D').toString().charAt(0).toUpperCase()}
-                  </span>
-                </button>
-                <div className="distro-story-body">
-                  <div className="distro-story-source">{article.source_name || article.source || 'Unknown'}</div>
-                  <h3 className="distro-story-title">{article.title}</h3>
-                  {(article.preview && article.preview !== 'No preview available' && article.preview !== '9' && article.preview !== '9...') && (
-                    <p className="distro-story-desc">{article.preview}</p>
+                {selectedArticles.includes(article.id) ? 'Selected' : 'Select'}
+              </button>
+              <div className="article-content">
+                <div className={`article-source ${article.is_manual ? 'manual-url' : ''}`}>
+                  {article.is_manual ? (
+                    <>
+                      {article.source_name || article.source}
+                      <span className="manual-tag">🔗 MANUAL</span>
+                    </>
+                  ) : (
+                    (article.source_name || article.source || '').toUpperCase()
                   )}
-                  <div className="distro-story-meta">
-                    <span className="distro-story-time">{formatDate(article.pub_date)}</span>
-                  </div>
                 </div>
-                <a
-                  href={article.more_info_url || article.link}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="distro-story-read-more"
-                  aria-label="Read more"
-                >
-                  →
-                </a>
-              </article>
-            ))
-          )}
-        </div>
+                <h3 className="article-title">{article.title}</h3>
+                <div className="article-date">{formatDate(article.pub_date)}</div>
+                {article.preview && article.preview !== 'No preview available' && article.preview !== '9' && article.preview !== '9...' && (
+                  <div className="article-preview">{article.preview}</div>
+                )}
+                {article.author && article.author !== 'Author Name' && (
+                  <div className="article-author"><strong>Author:</strong> {article.author}</div>
+                )}
+                <div className="article-url">
+                  <a href={article.more_info_url || article.link} target="_blank" rel="noopener noreferrer" className="article-link">
+                    {article.more_info_url || article.link}
+                  </a>
+                </div>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
 
-        <div className="distro-landing-footer">
-          <form onSubmit={handleAddUrl} className="add-url-form">
-            <input
-              id="newUrl"
-              type="url"
-              value={newUrl}
-              onChange={(e) => setNewUrl(e.target.value)}
-              placeholder="Enter a URL to add to the list"
-              className="distro-url-input"
-            />
-            <button type="submit" className="distro-btn-add-url">Add URL</button>
-          </form>
-          <button
-            onClick={handleGenerateSummaries}
-            disabled={selectedArticles.length === 0 || isGenerating}
-            className="distro-btn-generate"
-          >
-            {isGenerating ? 'Generating…' : `Generate Summaries (${selectedArticles.length})`}
-          </button>
-        </div>
-      </section>
+      {/* Add URL */}
+      <div className="add-url-section">
+        <form onSubmit={handleAddUrl} className="add-url-form">
+          <label htmlFor="newUrl">Add URL:</label>
+          <input
+            id="newUrl"
+            type="url"
+            value={newUrl}
+            onChange={(e) => setNewUrl(e.target.value)}
+            placeholder="Enter a URL to add to the list"
+            className="url-input"
+          />
+          <button type="submit" className="add-url-btn">Add</button>
+        </form>
+      </div>
+
+      {/* Generate Summaries */}
+      <div className="generate-section">
+        <button
+          onClick={handleGenerateSummaries}
+          disabled={selectedArticles.length === 0 || isGenerating}
+          className="generate-btn"
+        >
+          {isGenerating ? 'Generating Summaries…' : `Generate Summaries (${selectedArticles.length})`}
+        </button>
+      </div>
     </div>
   );
 }
