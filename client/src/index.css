@@ -2,11 +2,11 @@
 /* Dark-mode-first, HUD / cyberpunk aesthetic */
 
 :root {
-  /* Core brand */
+  /* Core brand (from Distro style guide) */
   --color-green: #03d26f;
   --color-lime: #cef431;
   --color-teal: #014651;
-  --color-dark: #161514;
+  --color-dark: #1a1a1a;
   --color-light: #eaf4f4;
   /* Teal scale */
   --teal-500: #014651;
@@ -14,20 +14,26 @@
   --teal-700: #013339;
   --teal-800: #00292d;
   --teal-900: #001f22;
-  /* Dark scale */
+  /* Dark scale — lifted for readability (model: dark charcoal, not pure black) */
   --dark-50: #f5f5f5;
+  --dark-200: #b8b7b5;
+  --dark-300: #8f8e8c;
   --dark-400: #676664;
   --dark-500: #3e3d3c;
-  --dark-600: #2d2c2b;
-  --dark-700: #232221;
-  --dark-800: #1a1918;
-  --dark-900: #161514;
+  --dark-600: #363534;
+  --dark-700: #2a2928;
+  --dark-800: #222120;
+  --dark-900: #1a1a1a;
+  /* Text: primary and secondary for readable contrast */
+  --text-primary: #eaf4f4;
+  --text-secondary: #b8b7b5;
+  --text-muted: #8f8e8c;
   /* Semantic */
   --color-success: #03d26f;
   --color-error: #ef4444;
   --color-warning: #fbbf24;
   --color-info: #2dd4bf;
-  /* Typography */
+  /* Typography (exact from style guide) */
   --font-display: 'Orbitron', 'Inter', sans-serif;
   --font-sans: 'Inter', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
@@ -68,8 +74,24 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   background-color: var(--dark-900);
-  color: var(--color-light);
+  color: var(--text-primary);
   line-height: 1.6;
+}
+
+/* Subtle background texture (model has faint grid/lines) */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(3, 210, 111, 0.015) 2px,
+    rgba(3, 210, 111, 0.015) 3px
+  );
+  pointer-events: none;
+  z-index: -1;
 }
 
 :root.light body {

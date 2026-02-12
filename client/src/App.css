@@ -37,7 +37,7 @@
 /* ========== DISTRO HEADER ========== */
 .distro-header {
   background: var(--dark-900);
-  border-bottom: 1px solid rgba(3, 210, 111, 0.15);
+  border-bottom: 1px solid rgba(3, 210, 111, 0.12);
   padding: 1rem 0;
   position: sticky;
   top: 0;
@@ -66,13 +66,13 @@
   font-size: 1.5rem;
   font-weight: 700;
   letter-spacing: 0.02em;
-  color: var(--color-light);
+  color: var(--text-primary);
 }
 
 .distro-header-subtitle {
   margin: 0;
   font-size: 0.9rem;
-  color: var(--dark-500);
+  color: var(--text-muted);
 }
 
 .distro-nav {
@@ -82,9 +82,9 @@
 }
 
 .distro-nav-link {
-  background: none;
-  border: 1px solid rgba(3, 210, 111, 0.3);
-  color: var(--color-light);
+  background: var(--dark-800);
+  border: 1px solid rgba(3, 210, 111, 0.2);
+  color: var(--text-primary);
   font-family: var(--font-sans);
   font-size: 0.95rem;
   font-weight: 500;
@@ -102,25 +102,25 @@
 .distro-app .main-content .card,
 .distro-app .distro-main .card {
   background: var(--dark-800);
-  border: 1px solid rgba(3, 210, 111, 0.2);
+  border: 1px solid rgba(3, 210, 111, 0.18);
   border-radius: var(--radius);
-  color: var(--color-light);
+  color: var(--text-primary);
 }
 
 .distro-app .card-title {
-  color: var(--color-light);
+  color: var(--text-primary);
 }
 
 .distro-app .form-label {
-  color: var(--color-light);
+  color: var(--text-primary);
 }
 
 .distro-app .form-input,
 .distro-app .form-textarea,
 .distro-app .form-select {
   background: var(--dark-700);
-  border: 1px solid rgba(3, 210, 111, 0.25);
-  color: var(--color-light);
+  border: 1px solid rgba(3, 210, 111, 0.2);
+  color: var(--text-primary);
 }
 
 .distro-app .form-input:focus,
@@ -141,9 +141,9 @@
 }
 
 .distro-app .btn-secondary {
-  background: var(--dark-600);
-  border: 1px solid rgba(3, 210, 111, 0.3);
-  color: var(--color-light);
+  background: var(--dark-700);
+  border: 1px solid rgba(3, 210, 111, 0.25);
+  color: var(--text-primary);
 }
 
 .distro-app .btn-secondary:hover {
@@ -152,7 +152,7 @@
 }
 
 .distro-app .empty-state {
-  color: var(--dark-500);
+  color: var(--text-muted);
 }
 
 /* Legacy header (hidden when using distro header) */

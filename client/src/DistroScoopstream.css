@@ -3,7 +3,7 @@
 .distro-scoopstream-landing {
   max-width: 100%;
   font-family: var(--font-sans);
-  color: var(--color-light);
+  color: var(--text-primary);
 }
 
 /* ----- Page header: Scoopstream title left, Past 2 Days / Past 7 Days / Check Now right ----- */
@@ -13,7 +13,7 @@
   align-items: center;
   margin-bottom: 1.5rem;
   padding-bottom: 1rem;
-  border-bottom: 1px solid rgba(3, 210, 111, 0.15);
+  border-bottom: 1px solid rgba(3, 210, 111, 0.12);
 }
 
 .distro-scoopstream-title {
@@ -21,7 +21,7 @@
   font-family: var(--font-display);
   font-size: 2.2rem;
   font-weight: 700;
-  color: var(--color-light);
+  color: var(--text-primary);
 }
 
 .header-controls {
@@ -43,7 +43,7 @@
   padding: 0.5rem 1rem;
   font-size: 0.95rem;
   font-weight: 500;
-  color: var(--color-light);
+  color: var(--text-primary);
   background: transparent;
   border: none;
   cursor: pointer;
@@ -99,7 +99,7 @@
 
 .last-checked-text {
   font-size: 0.75rem;
-  color: var(--dark-500);
+  color: var(--text-muted);
 }
 
 /* ----- Filter and Sort ----- */
@@ -127,7 +127,7 @@
 .dropdown-group label {
   font-size: 0.9rem;
   font-weight: 600;
-  color: var(--color-light);
+  color: var(--text-primary);
   margin: 0;
 }
 
@@ -135,9 +135,9 @@
 .sort-dropdown {
   padding: 0.5rem 0.75rem;
   background: var(--dark-800);
-  border: 1px solid rgba(3, 210, 111, 0.25);
+  border: 1px solid rgba(3, 210, 111, 0.2);
   border-radius: var(--radius-md);
-  color: var(--color-light);
+  color: var(--text-primary);
   font-size: 0.9rem;
   cursor: pointer;
   min-width: 150px;
@@ -178,7 +178,7 @@
   position: relative;
   padding: 1.25rem 1.5rem;
   background: var(--dark-800);
-  border: 1px solid rgba(3, 210, 111, 0.2);
+  border: 1px solid rgba(3, 210, 111, 0.15);
   border-radius: var(--radius);
   border-left: 4px solid var(--color-green);
   transition: border-color 0.2s, box-shadow 0.2s;
@@ -199,10 +199,10 @@
   top: 1.25rem;
   right: 1.5rem;
   padding: 0.5rem 1rem;
-  background: var(--dark-600);
-  border: 1px solid rgba(3, 210, 111, 0.3);
+  background: var(--dark-700);
+  border: 1px solid rgba(3, 210, 111, 0.25);
   border-radius: var(--radius-md);
-  color: var(--color-light);
+  color: var(--text-primary);
   font-size: 0.9rem;
   font-weight: 600;
   cursor: pointer;
@@ -233,7 +233,7 @@
 }
 
 .article-source.manual-url {
-  color: var(--dark-500);
+  color: var(--text-muted);
 }
 
 .manual-tag {
@@ -251,20 +251,20 @@
 .article-title {
   font-size: 1.2rem;
   font-weight: 700;
-  color: var(--color-light);
+  color: var(--text-primary);
   margin: 0 0 0.5rem 0;
   line-height: 1.35;
 }
 
 .article-date {
   font-size: 0.9rem;
-  color: var(--dark-500);
+  color: var(--text-muted);
   margin-bottom: 0.75rem;
   display: block;
 }
 
 .article-preview {
-  color: var(--dark-400);
+  color: var(--text-secondary);
   line-height: 1.6;
   margin-bottom: 0.75rem;
   font-size: 0.95rem;
@@ -272,7 +272,7 @@
 
 .article-author {
   font-size: 0.9rem;
-  color: var(--dark-500);
+  color: var(--text-muted);
   margin-bottom: 0.5rem;
 }
 
@@ -284,7 +284,7 @@
   padding: 0.5rem 0.75rem;
   background: var(--dark-700);
   border-radius: var(--radius-sm);
-  border: 1px solid rgba(3, 210, 111, 0.2);
+  border: 1px solid rgba(3, 210, 111, 0.18);
 }
 
 .article-link:hover {
@@ -295,7 +295,7 @@
 .no-articles {
   text-align: center;
   padding: 3rem 1.5rem;
-  color: var(--dark-500);
+  color: var(--text-muted);
   background: var(--dark-800);
   border: 1px dashed rgba(3, 210, 111, 0.2);
   border-radius: var(--radius);
@@ -323,7 +323,7 @@
 
 .add-url-form label {
   font-weight: 500;
-  color: var(--color-light);
+  color: var(--text-primary);
   margin-bottom: 0.25rem;
   display: block;
 }
@@ -333,14 +333,14 @@
   min-width: 200px;
   padding: 0.5rem 0.75rem;
   background: var(--dark-700);
-  border: 1px solid rgba(3, 210, 111, 0.25);
+  border: 1px solid rgba(3, 210, 111, 0.2);
   border-radius: var(--radius-md);
-  color: var(--color-light);
+  color: var(--text-primary);
   font-size: 0.95rem;
 }
 
 .add-url-section .url-input::placeholder {
-  color: var(--dark-500);
+  color: var(--text-muted);
 }
 
 .add-url-section .url-input:focus {
@@ -350,10 +350,10 @@
 
 .add-url-btn {
   padding: 0.5rem 1rem;
-  background: var(--dark-600);
-  border: 1px solid rgba(3, 210, 111, 0.3);
+  background: var(--dark-700);
+  border: 1px solid rgba(3, 210, 111, 0.25);
   border-radius: var(--radius-md);
-  color: var(--color-light);
+  color: var(--text-primary);
   font-size: 0.9rem;
   font-weight: 500;
   cursor: pointer;
@@ -401,7 +401,7 @@
   align-items: center;
   justify-content: center;
   padding: 4rem 2rem;
-  color: var(--color-light);
+  color: var(--text-primary);
 }
 
 .distro-scoopstream-loading .loading-spinner {
@@ -441,7 +441,7 @@
 /* ----- Edit/Send page — Distro style ----- */
 .distro-scoopstream-edit-send {
   max-width: 100%;
-  color: var(--color-light);
+  color: var(--text-primary);
   font-family: var(--font-sans);
 }
 
@@ -459,16 +459,16 @@
   font-size: 1.25rem;
   font-weight: 600;
   letter-spacing: 0.05em;
-  color: var(--color-light);
+  color: var(--text-primary);
   margin: 0;
 }
 
 .distro-scoopstream-edit-send .back-btn {
   padding: 0.5rem 1.25rem;
   background: var(--dark-700);
-  border: 1px solid rgba(3, 210, 111, 0.3);
+  border: 1px solid rgba(3, 210, 111, 0.25);
   border-radius: var(--radius-md);
-  color: var(--color-light);
+  color: var(--text-primary);
   font-size: 0.9rem;
   font-weight: 500;
   cursor: pointer;
@@ -509,13 +509,13 @@
 }
 
 .distro-scoopstream-edit-send .article-title {
-  color: var(--color-light);
+  color: var(--text-primary);
   font-size: 1.1rem;
   margin-bottom: 0.5rem;
 }
 
 .distro-scoopstream-edit-send .article-date {
-  color: var(--dark-500);
+  color: var(--text-muted);
   font-size: 0.8rem;
   margin-bottom: 0.75rem;
 }
@@ -525,9 +525,9 @@
   width: 100%;
   padding: 0.6rem 0.75rem;
   background: var(--dark-700);
-  border: 1px solid rgba(3, 210, 111, 0.25);
+  border: 1px solid rgba(3, 210, 111, 0.2);
   border-radius: var(--radius-md);
-  color: var(--color-light);
+  color: var(--text-primary);
   font-size: 0.95rem;
   margin-bottom: 0.75rem;
 }
@@ -584,7 +584,7 @@
   background: var(--dark-800);
   border: 1px dashed rgba(3, 210, 111, 0.2);
   border-radius: var(--radius);
-  color: var(--dark-500);
+  color: var(--text-muted);
   padding: 2rem;
 }
 
