@@ -188,22 +188,21 @@
   align-items: flex-start;
   gap: 1rem;
   padding: 1.25rem 1.5rem;
-  background: rgba(22, 21, 20, 0.95);
-  backdrop-filter: blur(12px);
-  border: 1px solid var(--border-green);
+  background: #222222;
+  border: 1px solid rgba(3, 210, 111, 0.15);
   border-radius: var(--radius);
   border-left: 4px solid var(--color-green);
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 
 .article-card:hover {
-  border-color: rgba(3, 210, 111, 0.5);
+  border-color: rgba(3, 210, 111, 0.35);
   box-shadow: 0 0 20px rgba(3, 210, 111, 0.05);
 }
 
 .article-card.selected {
   border-left-color: var(--color-lime);
-  background: rgba(3, 210, 111, 0.06);
+  background: #252525;
 }
 
 .article-card-icon {
@@ -234,12 +233,12 @@
 .select-btn {
   position: absolute;
   top: 1.25rem;
-  right: 2.5rem;
+  right: 1.5rem;
   padding: 0.5rem 1rem;
-  background: var(--dark-700);
+  background: #2d2d2d;
   border: 1px solid var(--border-green);
   border-radius: var(--radius-md);
-  color: var(--text-primary);
+  color: #ffffff;
   font-size: 0.9rem;
   font-weight: 600;
   font-family: var(--font-sans);
@@ -257,29 +256,10 @@
   color: var(--dark-900);
 }
 
-.article-card-arrow {
-  position: absolute;
-  top: 1.25rem;
-  right: 1rem;
-  width: 2rem;
-  height: 2rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-muted);
-  font-size: 1rem;
-  border-radius: var(--radius-sm);
-  transition: color 0.2s;
-}
-
-.article-card-arrow:hover {
-  color: var(--color-green);
-}
-
 .article-content {
   flex: 1;
   min-width: 0;
-  padding-right: 7rem;
+  padding-right: 6rem;
 }
 
 .article-source {
@@ -313,20 +293,28 @@
   font-family: var(--font-sans);
   font-size: 1.1rem;
   font-weight: 700;
-  color: var(--text-primary);
   margin: 0 0 0.5rem 0;
   line-height: 1.35;
 }
 
+.article-title-link {
+  color: var(--color-green);
+  text-decoration: none;
+}
+
+.article-title-link:hover {
+  color: var(--color-lime);
+}
+
 .article-date {
   font-size: 0.9rem;
-  color: var(--text-muted);
+  color: #b0b0b0;
   margin-bottom: 0.75rem;
   display: block;
 }
 
 .article-preview {
-  color: var(--text-secondary);
+  color: #cccccc;
   line-height: 1.6;
   margin-bottom: 0.75rem;
   font-size: 0.95rem;
@@ -334,7 +322,7 @@
 
 .article-author {
   font-size: 0.9rem;
-  color: var(--text-muted);
+  color: #b0b0b0;
   margin-bottom: 0.5rem;
 }
 
@@ -357,8 +345,8 @@
 .no-articles {
   text-align: center;
   padding: 3rem 1.5rem;
-  color: var(--text-muted);
-  background: rgba(22, 21, 20, 0.95);
+  color: #b0b0b0;
+  background: #222222;
   border: 1px solid var(--border-green);
   border-radius: var(--radius);
 }
@@ -372,7 +360,7 @@
 .add-url-section {
   margin-top: 1.5rem;
   padding: 1.25rem;
-  background: rgba(22, 21, 20, 0.95);
+  background: #222222;
   border-radius: var(--radius);
   border: 1px solid var(--border-green);
 }

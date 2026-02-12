@@ -365,15 +365,6 @@ function DistroScoutLanding({ onArticlesSelected, onCheckNow, onStopChecking, is
               >
                 {selectedArticles.includes(article.id) ? 'Selected' : 'Select'}
               </button>
-              <a
-                href={article.more_info_url || article.link}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="article-card-arrow"
-                aria-label="Read more"
-              >
-                →
-              </a>
               <div className="article-content">
                 <div className={`article-source ${article.is_manual ? 'manual-url' : ''}`}>
                   {article.is_manual ? (
@@ -385,7 +376,11 @@ function DistroScoutLanding({ onArticlesSelected, onCheckNow, onStopChecking, is
                     (article.source_name || article.source || '').toUpperCase()
                   )}
                 </div>
-                <h3 className="article-title">{article.title}</h3>
+                <h3 className="article-title">
+                  <a href={article.more_info_url || article.link} target="_blank" rel="noopener noreferrer" className="article-title-link">
+                    {article.title}
+                  </a>
+                </h3>
                 <div className="article-date">{formatDate(article.pub_date)}</div>
                 {article.preview && article.preview !== 'No preview available' && article.preview !== '9' && article.preview !== '9...' && (
                   <div className="article-preview">{article.preview}</div>
