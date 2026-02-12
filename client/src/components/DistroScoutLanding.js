@@ -347,6 +347,17 @@ function DistroScoutLanding({ onArticlesSelected, onCheckNow, onStopChecking, is
               key={article.id}
               className={`article-card ${selectedArticles.includes(article.id) ? 'selected' : ''}`}
             >
+              <div className="distro-corners" aria-hidden>
+                <span className="tl" /><span className="tr" /><span className="bl" /><span className="br" />
+              </div>
+              <div className="article-card-icon">
+                <div className="distro-corners" aria-hidden>
+                  <span className="tl" /><span className="tr" /><span className="bl" /><span className="br" />
+                </div>
+                <span className="article-card-icon-letter">
+                  {(article.source_name || article.source || 'D').toString().charAt(0).toUpperCase()}
+                </span>
+              </div>
               <button
                 type="button"
                 onClick={() => handleSelectArticle(article.id)}
@@ -354,6 +365,15 @@ function DistroScoutLanding({ onArticlesSelected, onCheckNow, onStopChecking, is
               >
                 {selectedArticles.includes(article.id) ? 'Selected' : 'Select'}
               </button>
+              <a
+                href={article.more_info_url || article.link}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="article-card-arrow"
+                aria-label="Read more"
+              >
+                →
+              </a>
               <div className="article-content">
                 <div className={`article-source ${article.is_manual ? 'manual-url' : ''}`}>
                   {article.is_manual ? (

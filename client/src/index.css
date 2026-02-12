@@ -2,11 +2,11 @@
 /* Dark-mode-first, HUD / cyberpunk aesthetic */
 
 :root {
-  /* Core brand (from Distro style guide) */
+  /* Core brand — exact from Distro style guide */
   --color-green: #03d26f;
   --color-lime: #cef431;
   --color-teal: #014651;
-  --color-dark: #1a1a1a;
+  --color-dark: #161514;
   --color-light: #eaf4f4;
   /* Teal scale */
   --teal-500: #014651;
@@ -14,17 +14,17 @@
   --teal-700: #013339;
   --teal-800: #00292d;
   --teal-900: #001f22;
-  /* Dark scale — lifted for readability (model: dark charcoal, not pure black) */
+  /* Dark scale — exact from style guide */
   --dark-50: #f5f5f5;
   --dark-200: #b8b7b5;
   --dark-300: #8f8e8c;
   --dark-400: #676664;
   --dark-500: #3e3d3c;
-  --dark-600: #363534;
-  --dark-700: #2a2928;
-  --dark-800: #222120;
-  --dark-900: #1a1a1a;
-  /* Text: primary and secondary for readable contrast */
+  --dark-600: #2d2c2b;
+  --dark-700: #232221;
+  --dark-800: #1a1918;
+  --dark-900: #161514;
+  /* Text */
   --text-primary: #eaf4f4;
   --text-secondary: #b8b7b5;
   --text-muted: #8f8e8c;
@@ -33,7 +33,7 @@
   --color-error: #ef4444;
   --color-warning: #fbbf24;
   --color-info: #2dd4bf;
-  /* Typography (exact from style guide) */
+  /* Typography — exact from style guide */
   --font-display: 'Orbitron', 'Inter', sans-serif;
   --font-sans: 'Inter', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
@@ -41,9 +41,10 @@
   --radius: 0.75rem;
   --radius-md: calc(var(--radius) - 2px);
   --radius-sm: calc(var(--radius) - 4px);
-  /* Glow */
+  /* Glow / borders */
   --glow-green: rgba(3, 210, 111, 0.2);
   --glow-green-strong: rgba(3, 210, 111, 0.5);
+  --border-green: rgba(3, 210, 111, 0.3);
 }
 
 /* Light mode overrides (optional) */
@@ -142,3 +143,23 @@ img {
   max-width: 100%;
   height: auto;
 }
+
+/* Corner brackets — HUD decoration (style guide) */
+.distro-corners {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+}
+.distro-corners span {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-color: var(--border-green);
+  border-style: solid;
+  border-width: 0;
+}
+.distro-corners .tl { top: -1px; left: -1px; border-top-width: 1px; border-left-width: 1px; border-radius: 2px 0 0 0; }
+.distro-corners .tr { top: -1px; right: -1px; border-top-width: 1px; border-right-width: 1px; border-radius: 0 2px 0 0; }
+.distro-corners .bl { bottom: -1px; left: -1px; border-bottom-width: 1px; border-left-width: 1px; border-radius: 0 0 0 2px; }
+.distro-corners .br { bottom: -1px; right: -1px; border-bottom-width: 1px; border-right-width: 1px; border-radius: 0 0 2px 0; }
