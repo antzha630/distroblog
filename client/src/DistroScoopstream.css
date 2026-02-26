@@ -676,3 +676,44 @@
   border-color: var(--color-green) !important;
   background: #363534 !important;
 }
+
+/* Add URL section: dark theme (override App.css !important) */
+.distro-scoopstream-landing .add-url-section {
+  background: #222222 !important;
+  border: 1px solid rgba(3, 210, 111, 0.2) !important;
+  border-radius: var(--radius);
+}
+
+.distro-scoopstream-landing .add-url-form label {
+  color: var(--text-primary) !important;
+}
+
+.distro-scoopstream-landing .add-url-section .url-input {
+  background: #2d2d2d !important;
+  color: var(--text-primary) !important;
+  border: 1px solid rgba(3, 210, 111, 0.25) !important;
+  border-radius: var(--radius-md);
+}
+
+.distro-scoopstream-landing .add-url-section .url-input::placeholder {
+  color: var(--text-muted) !important;
+}
+
+.distro-scoopstream-landing .add-url-section .url-input:focus {
+  outline: none;
+  border-color: var(--color-green) !important;
+}
+
+.distro-scoopstream-landing .add-url-btn {
+  background: transparent !important;
+  color: var(--color-green) !important;
+  border: 1px solid rgba(3, 210, 111, 0.4) !important;
+  border-radius: var(--radius-md);
+  font-weight: 500;
+}
+
+.distro-scoopstream-landing .add-url-btn:hover {
+  background: rgba(3, 210, 111, 0.12) !important;
+  border-color: var(--color-green) !important;
+  color: var(--color-lime) !important;
+}

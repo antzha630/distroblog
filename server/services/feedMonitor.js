@@ -322,6 +322,7 @@ class FeedMonitor {
       let consecutivePlaywrightCount = 0;
       const MAX_CONSECUTIVE_PLAYWRIGHT = 2; // After 2 Playwright fallbacks, skip next 3 (was 3)
       let playwrightSkipRemaining = 0; // Track how many more Playwright fallbacks to skip
+      let allowOneZeroAdkFallbackDuringCooldown = true; // Allow one Playwright fallback when ADK returned 0 even during memory cooldown
       
       // Skip list for problematic sources that cause memory issues
       // Hyper Cycle: ADK fails (returns 0 articles), falls back to Playwright, which causes memory crash
@@ -555,10 +556,16 @@ class FeedMonitor {
                 skipPlaywright = true;
                 skipReason = `Memory ${currentMemMB}MB exceeds Playwright limit (${PLAYWRIGHT_MEMORY_LIMIT_MB}MB)`;
               } else if (playwrightSkipRemaining > 0) {
-                // We're in a cooldown period - skip this one
-                skipPlaywright = true;
-                skipReason = `Memory cooldown: skipping ${playwrightSkipRemaining} more Playwright fallbacks`;
-                playwrightSkipRemaining--;
+                // We're in a cooldown period - skip unless we have our one-time allowance for a source that got 0 from ADK
+                if (allowOneZeroAdkFallbackDuringCooldown) {
+                  allowOneZeroAdkFallbackDuringCooldown = false;
+                  console.log(`🔄 [CHECK NOW] [${source.name}] Using one-time Playwright fallback (ADK returned 0, memory cooldown active)`);
+                  // skipPlaywright stays false
+                } else {
+                  skipPlaywright = true;
+                  skipReason = `Memory cooldown: skipping ${playwrightSkipRemaining} more Playwright fallbacks`;
+                  playwrightSkipRemaining--;
+                }
               } else if (consecutivePlaywrightCount >= MAX_CONSECUTIVE_PLAYWRIGHT) {
                 skipPlaywright = true;
                 skipReason = `Too many consecutive Playwright fallbacks (${consecutivePlaywrightCount}). Skipping next 3 to let memory recover.`;
@@ -887,12 +894,14 @@ class FeedMonitor {
                   
                   // Try lightweight description fetch even during manual checks (static HTML only, no Playwright)
                   let articleDescription = article.description || article.contentSnippet || '';
-                  if (!articleDescription || articleDescription.length < 50) {
+                  if (!articleDescription || articleDescription.length < 100) {
                     try {
                       const staticDesc = await this.extractDescriptionStatic(article.link);
                       if (staticDesc && staticDesc.length > 50) {
                         articleDescription = staticDesc;
                         console.log(`📝 [CHECK NOW] [${source.name}] Extracted description via static fetch: ${articleDescription.substring(0, 60)}...`);
+                      } else if (!articleDescription || articleDescription.length < 50) {
+                        console.log(`⚠️ [CHECK NOW] [${source.name}] No description from static fetch for: ${article.link.substring(0, 50)}...`);
                       }
                     } catch (descError) {
                       // If description fetch fails, continue with what we have (silent fail for speed)
@@ -902,9 +911,11 @@ class FeedMonitor {
                   // Use scraped content from listing page (skip full content fetch to save memory)
                   let articleContent = article.content || articleDescription || '';
                   
-                  // Ensure we have at least a preview or description
-                  // Don't skip articles with short content if they have a description (from RSS or listing page)
-                  const preview = articleDescription || article.contentSnippet || articleContent.substring(0, 200);
+                  // Ensure we have at least a preview or description; fallback to title + source so dashboard never shows empty
+                  let preview = articleDescription || article.contentSnippet || articleContent.substring(0, 200);
+                  if (!preview || preview.trim().length < 30) {
+                    preview = (improvedTitle + ' — ' + source.name).substring(0, 200);
+                  }
                   
                   // Only skip if BOTH title is too short AND (content AND preview are too short)
                   // Allow articles with good titles even if content/preview is missing (they'll be enriched later)
@@ -944,17 +955,20 @@ class FeedMonitor {
                     finalPubDate = improvedDate.toISOString();
                   }
                   
+                  // Never store empty preview: use fallback so dashboard shows something
+                  const finalPreview = (enhancedContent.preview || articleDescription || article.description || article.contentSnippet || '').trim();
+                  const previewForDb = finalPreview.length >= 20 ? finalPreview : (improvedTitle + ' — ' + source.name).substring(0, 200);
                   const articleObj = {
                     sourceId: source.id,
                     title: improvedTitle, // Use optimized title from article page
                     link: article.link,
                     content: enhancedContent.content || articleContent || '',
-                    preview: enhancedContent.preview || articleDescription || article.description || article.contentSnippet || '',
+                    preview: previewForDb,
                     pubDate: finalPubDate, // Use optimized date from article page
                     sourceName: source.name || 'Unknown Source',
                     category: source.category || 'General',
                     status: 'new',
-                    publisherDescription: articleDescription || article.description || article.contentSnippet || null,
+                    publisherDescription: (articleDescription || article.description || article.contentSnippet || previewForDb).trim() || null,
                     articleHook: articleHook // Concise one-liner hook for dashboard
                   };
                   
@@ -985,6 +999,9 @@ class FeedMonitor {
                     
                     // Log new article found with optimized data
                     console.log(`✨ [CHECK NOW] [${source.name}] NEW ARTICLE ADDED (with optimized title/date): "${articleObj.title.substring(0, 60)}..." | Date: ${articleObj.pubDate || 'NO DATE'}`);
+                    if (finalPreview.length < 20) {
+                      console.log(`⚠️ [CHECK NOW] [${source.name}] Article added with fallback preview (no description): "${articleObj.title.substring(0, 50)}..."`);
+                    }
                     
                     // Removed per-article delay to speed up
                     } catch (addErr) {
@@ -1309,13 +1326,18 @@ class FeedMonitor {
 
           let content = enhancedContent.content || item.contentSnippet || item.content || item.description || '';
           let preview = enhancedContent.preview || (item.contentSnippet || item.content || item.description || '').substring(0, 200) + (content.length > 200 ? '...' : '');
-          if (content.trim().length < 80 && rssFetchBodyCount < 2 && item.link) {
+          const previewShortOrUseless = !(preview || '').trim() || (preview || '').trim().length < 40 || /^(continue reading|read more|\.\.\.|see more|view more)$/i.test((preview || '').trim());
+          const shouldFetchRssBody = (content.trim().length < 80 || previewShortOrUseless) && rssFetchBodyCount < 3 && item.link;
+          if (shouldFetchRssBody) {
             const fetched = await this.fetchArticleBodyForRss(item.link);
             if (fetched && fetched.content) {
               content = fetched.content;
               preview = fetched.preview || fetched.content.substring(0, 300);
               rssFetchBodyCount++;
             }
+          }
+          if (!preview || preview.trim().length < 20) {
+            preview = ((enhancedContent.title || item.title || 'Untitled') + ' — ' + source.name).substring(0, 200);
           }
 
           const article = {
@@ -1495,13 +1517,18 @@ class FeedMonitor {
 
           let content = enhancedContent.content;
           let preview = enhancedContent.preview;
-          if ((content || '').trim().length < 80 && rssFetchBodyCount < 2 && item.link) {
+          const previewShortOrUseless = !(preview || '').trim() || (preview || '').trim().length < 40 || /^(continue reading|read more|\.\.\.|see more|view more)$/i.test((preview || '').trim());
+          const shouldFetchRssBody = ((content || '').trim().length < 80 || previewShortOrUseless) && rssFetchBodyCount < 3 && item.link;
+          if (shouldFetchRssBody) {
             const fetched = await this.fetchArticleBodyForRss(item.link);
             if (fetched && fetched.content) {
               content = fetched.content;
               preview = fetched.preview || fetched.content.substring(0, 300);
               rssFetchBodyCount++;
             }
+          }
+          if (!preview || preview.trim().length < 20) {
+            preview = ((enhancedContent.title || item.title || 'Untitled') + ' — ' + source.name).substring(0, 200);
           }
 
           // Add to database with session ID
@@ -1918,34 +1945,61 @@ class FeedMonitor {
       const html = resp.data;
       const $ = cheerio.load(html);
 
-      // Try meta tags first
+      const titleText = ($('meta[property="og:title"]').attr('content') || $('title').text() || '').trim();
+      const isSameAsTitle = (text) => text && titleText && text.toLowerCase().trim() === titleText.toLowerCase().trim();
+
+      // 1) Meta tags
       let description = '';
-      const ogDesc = $('meta[property="og:description"]').attr('content') || '';
-      const metaDesc = $('meta[name="description"]').attr('content') || '';
-      const titleText = $('meta[property="og:title"]').attr('content') || $('title').text() || '';
-      
-      // Use OG description if it exists and is meaningful (not just the title)
-      if (ogDesc && ogDesc.length > 50 && ogDesc.toLowerCase() !== titleText.toLowerCase()) {
-        description = ogDesc;
-      } else if (metaDesc && metaDesc.length > 50 && metaDesc.toLowerCase() !== titleText.toLowerCase()) {
-        description = metaDesc;
-      }
-      
-      // If no good meta description, use first paragraph from article content
+      const ogDesc = ($('meta[property="og:description"]').attr('content') || '').trim();
+      const metaDesc = ($('meta[name="description"]').attr('content') || '').trim();
+      const metaItemprop = ($('meta[itemprop="description"]').attr('content') || '').trim();
+
+      if (ogDesc && ogDesc.length > 40 && !isSameAsTitle(ogDesc)) description = ogDesc;
+      else if (metaDesc && metaDesc.length > 40 && !isSameAsTitle(metaDesc)) description = metaDesc;
+      else if (metaItemprop && metaItemprop.length > 40 && !isSameAsTitle(metaItemprop)) description = metaItemprop;
+
+      // 2) JSON-LD Article/NewsArticle schema
       if (!description || description.length < 50) {
-        const firstParagraph = $('article p, main p, [class*="article-content"] p, [class*="post-content"] p').first().text().trim();
-        if (firstParagraph && firstParagraph.length > 50) {
-          description = firstParagraph.substring(0, 300) + (firstParagraph.length > 300 ? '...' : '');
-        } else {
-          // Last resort: any paragraph
-          const anyParagraph = $('p').first().text().trim();
-          if (anyParagraph && anyParagraph.length > 50) {
-            description = anyParagraph.substring(0, 300) + (anyParagraph.length > 300 ? '...' : '');
+        try {
+          $('script[type="application/ld+json"]').each((_, el) => {
+            const raw = $(el).html();
+            if (!raw) return;
+            const data = (() => { try { return JSON.parse(raw); } catch (e) { return null; } })();
+            const obj = Array.isArray(data) ? data.find(o => (o['@type'] || '').includes('Article')) : (data && (data['@type'] || '').includes('Article') ? data : null);
+            const ldDesc = (obj && (obj.description || obj.articleBody)) ? (obj.description || (typeof obj.articleBody === 'string' ? obj.articleBody.substring(0, 300) : '')).trim() : '';
+            if (ldDesc && ldDesc.length > 50 && !isSameAsTitle(ldDesc)) {
+              description = ldDesc.length > 300 ? ldDesc.substring(0, 300) + '...' : ldDesc;
+              return false; // break
+            }
+          });
+        } catch (e) { /* ignore */ }
+      }
+
+      // 3) First paragraph from article content (more selectors)
+      if (!description || description.length < 50) {
+        const selectors = [
+          'article p', 'main p', '[role="article"] p',
+          '[class*="article-content"] p', '[class*="post-content"] p', '[class*="content-body"] p',
+          '[class*="entry-content"] p', '[class*="blog-post"] p', '.prose p', '[class*="Prose"] p'
+        ];
+        let firstParagraph = '';
+        for (const sel of selectors) {
+          const el = $(sel).first();
+          if (el.length) {
+            const text = el.text().replace(/\s+/g, ' ').trim();
+            if (text.length > 50) {
+              firstParagraph = text;
+              break;
+            }
           }
         }
+        if (!firstParagraph) firstParagraph = $('p').first().text().replace(/\s+/g, ' ').trim();
+        if (firstParagraph && firstParagraph.length > 50) {
+          description = firstParagraph.length > 300 ? firstParagraph.substring(0, 300) + '...' : firstParagraph;
+        }
       }
-      
-      return description || null;
+
+      return (description && description.length >= 30) ? description : null;
     } catch (err) {
       return null;
     }
@@ -2571,7 +2625,7 @@ class FeedMonitor {
               return enriched;
             }
           } catch (error) {
-            console.warn(`   ⚠️  [ENRICH] Failed to enrich ${article.id}: ${error.message}`);
+            console.warn(`   ⚠️  [ENRICH] Failed to enrich ${article.id}: ${error.message} (URL: ${article.link || 'n/a'})`);
             // Continue with next article
           }
         }
@@ -3295,10 +3349,11 @@ class FeedMonitor {
         description
       };
     } catch (error) {
+      const status = error.response && error.response.status;
       // Handle 403 errors gracefully
-      if (error.response && error.response.status === 403) {
+      if (status === 403) {
         console.log(`⚠️ 403 Forbidden when extracting metadata from ${url} (Cloudflare protection)`);
-        return { 
+        return {
           title: 'Untitled',
           content: '',
           pubDate: null,
@@ -3306,7 +3361,18 @@ class FeedMonitor {
           description: ''
         };
       }
-      console.error('Error extracting article metadata:', error.message || error);
+      // Handle 404: page moved or removed - don't retry, return empty so enrichment continues
+      if (status === 404) {
+        console.warn(`⚠️ [ENRICH] 404 Not Found for article URL (skipping date enrichment): ${url}`);
+        return {
+          title: null,
+          content: '',
+          pubDate: null,
+          sourceName: '',
+          description: ''
+        };
+      }
+      console.error('Error extracting article metadata:', error.message || error, 'URL:', url);
       throw error;
     }
   }
