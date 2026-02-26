@@ -399,7 +399,11 @@ class WebScraper {
             // Full month name (e.g., "November 6, 2025")
             /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b/i,
             // YYYY-MM-DD
-            /\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b/
+            /\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b/,
+            // DD.MM.YYYY or DD.MM.YY (e.g., "30.10.2025")
+            /\b(\d{1,2})\.(\d{1,2})\.(\d{2,4})\b/,
+            // YYYY.MM.DD (e.g., "2025.10.30")
+            /\b(\d{4})\.(\d{1,2})\.(\d{1,2})\b/
           ];
           
           for (const pattern of datePatterns) {
@@ -425,6 +429,30 @@ class WebScraper {
                   const day = embeddedMatch[2];
                   const year = `20${embeddedMatch[3]}`;
                   dateStr = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+                }
+                
+                // Handle dot-separated numeric formats like 30.10.2025 or 2025.10.30
+                if (dateStr.includes('.')) {
+                  const dotMatch = dateStr.match(/(\d{1,4})\.(\d{1,2})\.(\d{2,4})/);
+                  if (dotMatch) {
+                    let year;
+                    let month;
+                    let day;
+                    
+                    if (dotMatch[1].length === 4) {
+                      // YYYY.MM.DD
+                      year = dotMatch[1];
+                      month = dotMatch[2];
+                      day = dotMatch[3];
+                    } else {
+                      // DD.MM.YYYY or DD.MM.YY
+                      day = dotMatch[1];
+                      month = dotMatch[2];
+                      year = dotMatch[3].length === 2 ? `20${dotMatch[3]}` : dotMatch[3];
+                    }
+                    
+                    dateStr = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+                  }
                 }
                 
                 const date = new Date(dateStr);

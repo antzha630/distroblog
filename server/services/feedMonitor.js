@@ -8,6 +8,43 @@ const ADKScraper = require('./adkScraper');
 
 const parser = new Parser();
 
+// Lightweight URL validator to avoid storing obvious 404 / error pages
+async function isArticleUrlLikelyValid(link, sourceName = 'Unknown') {
+  if (!link) return false;
+  try {
+    const response = await axios.get(link, {
+      timeout: 8000,
+      maxRedirects: 3,
+      validateStatus: (status) => status >= 200 && status < 500
+    });
+    
+    // Hard 404 or 4xx that clearly indicates not found
+    if (response.status === 404) {
+      console.log(`⚠️  [URL-CHECK] [${sourceName}] 404 Not Found for article URL, skipping: ${link.substring(0, 80)}...`);
+      return false;
+    }
+    
+    const body = typeof response.data === 'string' ? response.data.toLowerCase() : '';
+    if (body) {
+      // Common \"page not found\" signatures
+      if (body.includes('page not found') || body.includes('404') && body.includes('not found')) {
+        console.log(`⚠️  [URL-CHECK] [${sourceName}] Detected 404/error page content, skipping: ${link.substring(0, 80)}...`);
+        return false;
+      }
+    }
+    
+    return true;
+  } catch (err) {
+    // Treat network timeouts and transient issues as \"maybe valid\" to avoid being too aggressive
+    if (err.response && err.response.status === 404) {
+      console.log(`⚠️  [URL-CHECK] [${sourceName}] 404 Not Found (error response), skipping: ${link.substring(0, 80)}...`);
+      return false;
+    }
+    console.log(`⚠️  [URL-CHECK] [${sourceName}] URL check error for ${link.substring(0, 80)}...: ${err.message} (treating as valid)`);
+    return true;
+  }
+}
+
 class FeedMonitor {
   constructor() {
     this.isMonitoring = false;
@@ -989,6 +1026,12 @@ class FeedMonitor {
                   
                   if (articleObj.title && articleObj.title.trim() !== '' && articleObj.link) {
                     try {
+                    // Skip obvious 404 / error URLs before inserting into database
+                    const urlOk = await isArticleUrlLikelyValid(articleObj.link, source.name);
+                    if (!urlOk) {
+                      continue;
+                    }
+                    
                     await database.addArticle(articleObj);
                     newArticles.push({
                       id: articleObj.sourceId,
@@ -3147,7 +3190,11 @@ class FeedMonitor {
           // DD-MM-YY or DD/MM/YYYY
           /\b(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})\b/,
           // YYYY-MM-DD
-          /\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b/
+          /\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b/,
+          // DD.MM.YYYY or DD.MM.YY (e.g., "30.10.2025")
+          /\b(\d{1,2})\.(\d{1,2})\.(\d{2,4})\b/,
+          // YYYY.MM.DD (e.g., "2025.10.30")
+          /\b(\d{4})\.(\d{1,2})\.(\d{1,2})\b/
         ];
         
         for (const pattern of datePatterns) {
@@ -3177,7 +3224,23 @@ class FeedMonitor {
                 const year = match[3].length === 2 ? `20${match[3]}` : match[3];
                 parsed = new Date(`${day}-${month}-${year}`);
               }
-              // Handle numeric formats
+              // Handle dot-separated numeric formats explicitly (e.g., "30.10.2025", "2025.10.30")
+              else if (match[0].includes('.')) {
+                if (match[1] && match[1].length === 4) {
+                  // YYYY.MM.DD
+                  const year = match[1];
+                  const month = match[2];
+                  const day = match[3];
+                  parsed = new Date(`${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`);
+                } else {
+                  // DD.MM.YYYY or DD.MM.YY
+                  const day = match[1];
+                  const month = match[2];
+                  const year = match[3].length === 2 ? `20${match[3]}` : match[3];
+                  parsed = new Date(`${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`);
+                }
+              }
+              // Handle other numeric formats using Date's parser
               else {
                 parsed = new Date(match[0]);
               }

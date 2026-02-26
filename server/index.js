@@ -1431,7 +1431,7 @@ app.get('/api/articles/recent/:days', async (req, res) => {
     
     const articles = await database.getArticlesByDateRange(days);
     
-    console.log(`📊 Found ${articles.length} articles with pub_date from last ${days} days (articles without dates are excluded)`);
+    console.log(`📊 Found ${articles.length} articles from last ${days} days (using pub_date when available, otherwise created_at)`);
     
     // Format articles for professional display
     const formattedArticles = articles.map(article => {
