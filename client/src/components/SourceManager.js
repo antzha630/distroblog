@@ -421,7 +421,7 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
           textAlign: 'center',
           marginBottom: '24px',
           paddingBottom: '20px',
-          borderBottom: '1px solid #e9ecef'
+          borderBottom: '1px solid rgba(3, 210, 111, 0.25)'
         }}>
           <h2 className="card-title" style={{ margin: '0 0 16px 0' }}>Sources</h2>
           {!showAddForm && (
@@ -450,16 +450,16 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
         {showAddForm && (
           <div style={{ 
             padding: '20px', 
-            background: '#f8f9fa', 
-            borderRadius: '4px', 
+            background: 'var(--dark-800)', 
+            borderRadius: '8px', 
             marginBottom: '24px',
-            border: '1px solid #e9ecef'
+            border: '1px solid rgba(3, 210, 111, 0.25)'
           }}>
             <h3 style={{ marginTop: 0 }}>Add Source</h3>
             <form onSubmit={handleCheckFeed}>
               <div className="form-group">
                 <label className="form-label">Website URL *</label>
-                <div style={{ fontSize: '0.85rem', color: '#666', marginBottom: '8px' }}>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '8px' }}>
                   💡 Tip: Enter the blog URL (e.g., https://example.com/blog) for better results
                 </div>
                   <input
@@ -470,7 +470,7 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
                     placeholder="https://example.com/blog"
                     required
                 />
-                <div style={{ fontSize: '0.8rem', color: '#6c757d', marginTop: '4px' }}>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>
                   Enter a website URL and click "Check for RSS Feed" below to see if it has an RSS feed or needs scraping.
                 </div>
               </div>
@@ -507,14 +507,14 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
                       top: '100%',
                       left: 0,
                       right: 0,
-                      background: 'white',
-                      border: '1px solid #ddd',
+                      background: 'var(--dark-800)',
+                      border: '1px solid rgba(3, 210, 111, 0.25)',
                       borderTop: 'none',
                       borderRadius: '0 0 4px 4px',
                       maxHeight: '200px',
                       overflowY: 'auto',
                       zIndex: 1000,
-                      boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                      boxShadow: '0 8px 24px rgba(0,0,0,0.35)'
                     }}>
                       {filteredCategories.map((category) => (
                         <div
@@ -522,11 +522,12 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
                           style={{
                             padding: '8px 12px',
                             cursor: 'pointer',
-                            borderBottom: '1px solid #eee'
+                            borderBottom: '1px solid rgba(3, 210, 111, 0.15)',
+                            color: 'var(--text-primary)'
                           }}
                           onMouseDown={() => handleCategorySelect(category.name)}
-                          onMouseEnter={(e) => e.target.style.backgroundColor = '#f5f5f5'}
-                          onMouseLeave={(e) => e.target.style.backgroundColor = 'white'}
+                          onMouseEnter={(e) => e.target.style.backgroundColor = '#222222'}
+                          onMouseLeave={(e) => e.target.style.backgroundColor = 'transparent'}
                         >
                           {category.name}
                         </div>
@@ -677,32 +678,34 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
             <div style={{ 
               marginBottom: '20px', 
               fontSize: '1rem', 
-              color: '#495057',
+              color: 'var(--text-primary)',
               textAlign: 'center',
               fontWeight: '500'
             }}>
               Monitoring {sources.length} sources
-              <div style={{ fontSize: '0.8rem', marginTop: '8px', color: '#6c757d', fontWeight: 'normal' }}>
+              <div style={{ fontSize: '0.8rem', marginTop: '8px', color: 'var(--text-muted)', fontWeight: 'normal' }}>
                 💡 <strong>Paused sources:</strong> Won't be checked for new articles, but can be reactivated anytime
               </div>
             </div>
             
             {sources.map(source => (
               <div key={source.id} style={{
-                border: source.is_paused ? '1px solid #ffc107' : '1px solid #e9ecef',
-                borderRadius: '8px',
+                border: source.is_paused ? '1px solid rgba(255,193,7,0.6)' : '1px solid rgba(3, 210, 111, 0.18)',
+                borderRadius: '10px',
                 padding: '20px',
                 marginBottom: '16px',
-                background: source.is_paused ? '#fffbf0' : 'white',
-                boxShadow: source.is_paused ? '0 2px 8px rgba(255,193,7,0.15)' : '0 2px 4px rgba(0,0,0,0.05)',
-                opacity: source.is_paused ? 0.8 : 1
+                background: 'var(--dark-800)',
+                boxShadow: source.is_paused 
+                  ? '0 0 0 1px rgba(255,193,7,0.3)'
+                  : '0 0 24px rgba(3, 210, 111, 0.14)',
+                opacity: source.is_paused ? 0.9 : 1
               }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                   <div style={{ flex: 1 }}>
-                    <h3 style={{ margin: '0 0 12px 0', fontSize: '1.2rem', color: '#2c3e50' }}>
+                    <h3 style={{ margin: '0 0 12px 0', fontSize: '1.2rem', color: 'var(--text-primary)' }}>
                       {source.name}
                     </h3>
-                    <div style={{ fontSize: '0.9rem', color: '#6c757d', marginBottom: '12px' }}>
+                    <div style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '12px' }}>
                       {editingCategory === source.id ? (
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
                           <input
@@ -712,10 +715,12 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
                             placeholder="Enter category"
                             style={{
                               padding: '4px 8px',
-                              border: '1px solid #ced4da',
+                              border: '1px solid rgba(3, 210, 111, 0.25)',
                               borderRadius: '4px',
                               fontSize: '0.9rem',
-                              width: '150px'
+                              width: '150px',
+                              background: 'var(--dark-800)',
+                              color: 'var(--text-primary)'
                             }}
                             onKeyPress={(e) => {
                               if (e.key === 'Enter') {
@@ -726,8 +731,8 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
                           <button
                             onClick={() => handleSaveCategory(source.id)}
                             style={{
-                              background: '#28a745',
-                              color: 'white',
+                              background: 'var(--color-green)',
+                              color: 'var(--dark-900)',
                               border: 'none',
                               padding: '4px 8px',
                               borderRadius: '4px',
@@ -740,9 +745,9 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
                           <button
                             onClick={handleCancelEdit}
                             style={{
-                              background: '#6c757d',
-                              color: 'white',
-                              border: 'none',
+                              background: 'var(--dark-700)',
+                              color: 'var(--text-primary)',
+                              border: '1px solid rgba(3, 210, 111, 0.25)',
                               padding: '4px 8px',
                               borderRadius: '4px',
                               fontSize: '0.8rem',
@@ -754,13 +759,15 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
                         </div>
                       ) : (
                         <span style={{ 
-                          background: '#e9ecef', 
+                          background: 'var(--dark-700)', 
                           padding: '4px 10px', 
                           borderRadius: '12px',
                           marginRight: '12px',
                           fontWeight: '500',
                           cursor: 'pointer',
-                          display: 'inline-block'
+                          display: 'inline-block',
+                          color: 'var(--color-green)',
+                          border: '1px solid rgba(3, 210, 111, 0.3)'
                         }}
                         onClick={() => handleEditCategory(source.id, source.category)}
                         title="Click to edit category"
@@ -770,8 +777,8 @@ function SourceManager({ onSourceAdded, onSourceRemoved, refreshTrigger }) {
                       )}
                       Last checked: {formatDate(source.last_checked)}
                     </div>
-                    <div style={{ fontSize: '0.9rem', wordBreak: 'break-all', color: '#495057' }}>
-                      <a href={source.url} target="_blank" rel="noopener noreferrer" style={{ color: '#007bff', textDecoration: 'none' }}>
+                    <div style={{ fontSize: '0.9rem', wordBreak: 'break-all', color: 'var(--text-primary)' }}>
+                      <a href={source.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-green)', textDecoration: 'none' }}>
                         {source.url}
                       </a>
                     </div>
