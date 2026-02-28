@@ -357,8 +357,9 @@ function DistroScoutEditSend({ articles, onBack, onEditArticle, onRemoveArticle,
                       onClick={() => handleSendToDistro(article.id)}
                       className={`send-btn ${article.status === 'sent' ? 'already-sent' : ''}`}
                       disabled={isGenerating || editingId === article.id || article.status === 'sent'}
+                      title="Send this article to Distro"
                     >
-                      {isGenerating ? 'Sending...' : article.status === 'sent' ? 'Already Sent to Distro' : 'Send to Distro'}
+                      {isGenerating ? 'Sending...' : article.status === 'sent' ? 'Sent to Distro' : 'To Distro'}
                     </button>
                     
                     <button 

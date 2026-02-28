@@ -604,6 +604,10 @@
   padding-top: 1rem;
   margin-top: 1rem;
 }
+.distro-scoopstream-edit-send .article-actions button {
+  white-space: nowrap;
+  min-width: 2.5rem;
+}
 
 .distro-scoopstream-edit-send .edit-btn {
   background: rgba(3, 210, 111, 0.2);
@@ -614,6 +618,24 @@
 .distro-scoopstream-edit-send .edit-btn:hover {
   background: var(--color-green);
   color: var(--dark-900);
+}
+
+/* Telegram button: same visible Distro style as edit/send (was unstyled and appeared black) */
+.distro-scoopstream-edit-send .telegram-btn {
+  background: rgba(3, 210, 111, 0.2);
+  border: 1px solid var(--color-green);
+  color: var(--color-green);
+}
+.distro-scoopstream-edit-send .telegram-btn:hover:not(:disabled):not(.already-sent) {
+  background: var(--color-green);
+  color: var(--dark-900);
+}
+.distro-scoopstream-edit-send .telegram-btn.already-sent,
+.distro-scoopstream-edit-send .telegram-btn:disabled {
+  background: var(--dark-700);
+  border-color: rgba(3, 210, 111, 0.25);
+  color: var(--text-muted);
+  cursor: not-allowed;
 }
 
 .distro-scoopstream-edit-send .send-btn:not(:disabled):not(.already-sent),
