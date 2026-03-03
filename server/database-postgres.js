@@ -303,6 +303,24 @@ class Database {
         ADD COLUMN IF NOT EXISTS article_hook TEXT
       `);
 
+      // Track where each article was sent (for "Already sent" by destination)
+      await client.query(`
+        ALTER TABLE articles 
+        ADD COLUMN IF NOT EXISTS sent_to_distro_at TIMESTAMP
+      `);
+      await client.query(`
+        ALTER TABLE articles 
+        ADD COLUMN IF NOT EXISTS sent_to_telegram_at TIMESTAMP
+      `);
+
+      // Backfill: existing status='sent' articles get both timestamps so they appear in both lists
+      await client.query(`
+        UPDATE articles 
+        SET sent_to_distro_at = COALESCE(sent_to_distro_at, updated_at),
+            sent_to_telegram_at = COALESCE(sent_to_telegram_at, updated_at)
+        WHERE status = 'sent' AND (sent_to_distro_at IS NULL OR sent_to_telegram_at IS NULL)
+      `);
+
       // Add last_scraping_result column to track scraping health
       await client.query(`
         ALTER TABLE sources 
@@ -585,6 +603,46 @@ class Database {
       [status, id]
     );
     return result.rows[0];
+  }
+
+  async markSentToDistro(id) {
+    const result = await this.pool.query(
+      `UPDATE articles SET status = 'sent', sent_to_distro_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING *`,
+      [id]
+    );
+    return result.rows[0];
+  }
+
+  async markSentToTelegram(id) {
+    const result = await this.pool.query(
+      `UPDATE articles SET status = 'sent', sent_to_telegram_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING *`,
+      [id]
+    );
+    return result.rows[0];
+  }
+
+  async getSentToDistro() {
+    const result = await this.pool.query(`
+      SELECT a.*, s.name as source_name 
+      FROM articles a 
+      LEFT JOIN sources s ON a.source_id = s.id 
+      WHERE a.sent_to_distro_at IS NOT NULL 
+      ORDER BY a.sent_to_distro_at DESC
+      LIMIT 100
+    `);
+    return result.rows;
+  }
+
+  async getSentToTelegram() {
+    const result = await this.pool.query(`
+      SELECT a.*, s.name as source_name 
+      FROM articles a 
+      LEFT JOIN sources s ON a.source_id = s.id 
+      WHERE a.sent_to_telegram_at IS NOT NULL 
+      ORDER BY a.sent_to_telegram_at DESC
+      LIMIT 100
+    `);
+    return result.rows;
   }
 
   async deleteArticleByLink(link) {

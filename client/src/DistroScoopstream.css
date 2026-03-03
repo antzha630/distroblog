@@ -755,6 +755,38 @@
   border-radius: var(--radius-md);
 }
 
+/* Already sent section — two categories */
+.distro-scoopstream-edit-send .already-sent-section {
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid rgba(3, 210, 111, 0.2);
+}
+
+.distro-scoopstream-edit-send .already-sent-section .section-title {
+  margin-bottom: 1.25rem;
+}
+
+.distro-scoopstream-edit-send .already-sent-category {
+  margin-bottom: 1.5rem;
+}
+
+.distro-scoopstream-edit-send .already-sent-category-title {
+  font-family: var(--font-display);
+  font-size: 0.9rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin: 0 0 0.75rem 0;
+}
+
+.distro-scoopstream-edit-send .article-card-sent {
+  margin-bottom: 1rem;
+}
+
+.distro-scoopstream-edit-send .article-card-sent .article-content {
+  padding-right: 0;
+}
+
 /* Override App.css so scoopstream landing has no white box and green links */
 .distro-scoopstream-landing .article-preview {
   background: transparent !important;

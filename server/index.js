@@ -759,9 +759,9 @@ app.post('/api/articles/send', async (req, res) => {
       }
     }
     
-    // Mark all articles as sent (regardless of API success/failure)
+    // Mark all articles as sent to Distro (regardless of API success/failure)
     for (const id of articleIds) {
-      await database.updateArticleStatus(id, 'sent');
+      await database.markSentToDistro(id);
     }
     
     const successCount = results.filter(r => r.success).length;
@@ -1038,8 +1038,8 @@ app.post('/api/articles/send-telegram', async (req, res) => {
         console.log(`✅ [TELEGRAM] Message ID: ${telegramResponse.data.result.message_id}`);
         results.telegram.success = true;
         results.telegram.messageId = telegramResponse.data.result.message_id;
-        // Mark article as sent when Telegram succeeds
-        await database.updateArticleStatus(article.id, 'sent');
+        // Mark article as sent to Telegram when succeeds
+        await database.markSentToTelegram(article.id);
       } else {
         console.error(`❌ [TELEGRAM] Telegram API returned ok=false`);
         console.error(`❌ [TELEGRAM] Error description: ${telegramResponse.data.description}`);
@@ -2451,6 +2451,28 @@ app.get('/api/sources/:id/scraping-status', async (req, res) => {
   } catch (error) {
     console.error('Error fetching scraping status:', error);
     res.status(500).json({ error: 'Failed to fetch scraping status' });
+  }
+});
+
+// Get articles sent to Distro (for Already sent section)
+app.get('/api/articles/sent-to-distro', async (req, res) => {
+  try {
+    const articles = await database.getSentToDistro();
+    res.json(articles);
+  } catch (error) {
+    console.error('Error fetching sent-to-distro articles:', error);
+    res.status(500).json({ error: 'Failed to fetch articles sent to Distro' });
+  }
+});
+
+// Get articles sent to Telegram (for Already sent section)
+app.get('/api/articles/sent-to-telegram', async (req, res) => {
+  try {
+    const articles = await database.getSentToTelegram();
+    res.json(articles);
+  } catch (error) {
+    console.error('Error fetching sent-to-telegram articles:', error);
+    res.status(500).json({ error: 'Failed to fetch articles sent to Telegram' });
   }
 });
 

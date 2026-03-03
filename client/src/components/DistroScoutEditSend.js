@@ -7,6 +7,8 @@ function DistroScoutEditSend({ articles, onBack, onEditArticle, onRemoveArticle,
   const [localArticles, setLocalArticles] = useState([]);
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({ title: '', url: '', content: '' });
+  const [sentToDistro, setSentToDistro] = useState([]);
+  const [sentToTelegram, setSentToTelegram] = useState([]);
   // Use a ref to track status changes so we can preserve them across prop updates
   const statusMapRef = useRef(new Map());
 
@@ -32,6 +34,29 @@ function DistroScoutEditSend({ articles, onBack, onEditArticle, onRemoveArticle,
     
     setLocalArticles(mergedArticles);
   }, [articles]);
+
+  const fetchSentLists = async () => {
+    try {
+      const [distroRes, telegramRes] = await Promise.all([
+        fetch(`${config.API_BASE_URL}/api/articles/sent-to-distro`),
+        fetch(`${config.API_BASE_URL}/api/articles/sent-to-telegram`)
+      ]);
+      if (distroRes.ok) {
+        const data = await distroRes.json();
+        setSentToDistro(Array.isArray(data) ? data : []);
+      }
+      if (telegramRes.ok) {
+        const data = await telegramRes.json();
+        setSentToTelegram(Array.isArray(data) ? data : []);
+      }
+    } catch (e) {
+      console.error('Failed to fetch sent articles:', e);
+    }
+  };
+
+  useEffect(() => {
+    fetchSentLists();
+  }, []);
 
   const handleEditSummary = (article) => {
     setEditingId(article.id);
@@ -116,6 +141,7 @@ function DistroScoutEditSend({ articles, onBack, onEditArticle, onRemoveArticle,
         articlesToSend.forEach(article => {
           statusMapRef.current.set(article.id, 'sent');
         });
+        fetchSentLists(); // Refresh Already sent section
         // Notify parent of status change
         if (onArticleStatusChange && articleId) {
           onArticleStatusChange(articleId, 'sent');
@@ -152,6 +178,7 @@ function DistroScoutEditSend({ articles, onBack, onEditArticle, onRemoveArticle,
         setLocalArticles(prev => prev.map(a => 
           a.id === articleId ? { ...a, status: 'sent' } : a
         ));
+        fetchSentLists(); // Refresh Already sent section
         // Notify parent component of status change
         if (onArticleStatusChange) {
           onArticleStatusChange(articleId, 'sent');
@@ -389,6 +416,61 @@ function DistroScoutEditSend({ articles, onBack, onEditArticle, onRemoveArticle,
           </button>
         </div>
       )}
+
+      {/* Already sent — two categories */}
+      <div className="already-sent-section">
+        <h2 className="section-title">Already sent</h2>
+
+        <div className="already-sent-category">
+          <h3 className="already-sent-category-title">Sent to Distro</h3>
+          {sentToDistro.length === 0 ? (
+            <div className="no-articles">No articles sent to Distro yet.</div>
+          ) : (
+            sentToDistro.map(article => (
+              <div key={`distro-${article.id}`} className="article-card article-card-sent">
+                <div className="article-content">
+                  <div className="article-source">{article.source_name || article.source || 'Unknown source'}</div>
+                  <h3 className="article-title">{article.title}</h3>
+                  <div className="article-date">{formatDate(article.sent_to_distro_at || article.updated_at || article.pub_date)}</div>
+                  <div className="article-summary">
+                    {article.ai_summary || article.publisher_description || article.preview || article.content || 'No summary'}
+                  </div>
+                  {article.link && (
+                    <a href={article.link} target="_blank" rel="noopener noreferrer" className="article-link">
+                      {article.link}
+                    </a>
+                  )}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="already-sent-category">
+          <h3 className="already-sent-category-title">Sent to Telegram</h3>
+          {sentToTelegram.length === 0 ? (
+            <div className="no-articles">No articles sent to Telegram yet.</div>
+          ) : (
+            sentToTelegram.map(article => (
+              <div key={`telegram-${article.id}`} className="article-card article-card-sent">
+                <div className="article-content">
+                  <div className="article-source">{article.source_name || article.source || 'Unknown source'}</div>
+                  <h3 className="article-title">{article.title}</h3>
+                  <div className="article-date">{formatDate(article.sent_to_telegram_at || article.updated_at || article.pub_date)}</div>
+                  <div className="article-summary">
+                    {article.ai_summary || article.publisher_description || article.preview || article.content || 'No summary'}
+                  </div>
+                  {article.link && (
+                    <a href={article.link} target="_blank" rel="noopener noreferrer" className="article-link">
+                      {article.link}
+                    </a>
+                  )}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
     </div>
   );
 }
