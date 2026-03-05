@@ -721,28 +721,27 @@ app.post('/api/articles/send', async (req, res) => {
     
     const articles = await database.getArticlesByIds(articleIds);
     
-    // Send each article individually to the external API
+    // Send each article individually to the Distro external API
     const results = [];
     
     for (const article of articles) {
+      // Map Scoopstream article fields into Distro external API payload
+      const hotTake = article.content || article.ai_summary || article.publisher_description || article.preview || '';
       const payload = {
         user_info: {
-          name: userInfo.name || "Author Name"
+          name: userInfo.name || 'Bradley Keoun'
         },
-        more_info_url: article.link,
-        source: article.source_name,
-        cost: 10,
-        preview: article.preview,
         title: article.title,
-        content: article.content
+        content: `<p>${hotTake}</p>`,
+        more_info_url: article.link,
+        source: article.source_name || 'Unknown Source'
       };
       
       try {
-                const response = await axios.post(config.distro.apiEndpoint, payload, {
+        const response = await axios.post(config.distro.apiEndpoint, payload, {
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${config.distro.apiKey}`,
-            'X-API-Key': config.distro.apiKey
+            'x-api-key': config.distro.apiKey
           },
           timeout: 10000
         });

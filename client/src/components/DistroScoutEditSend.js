@@ -131,10 +131,14 @@ function DistroScoutEditSend({ articles, onBack, onEditArticle, onRemoveArticle,
     try {
       if (onSendToDistro) {
         await onSendToDistro(articlesToSend);
-        // Update local articles status to 'sent'
+        // Update local articles to reflect that they've been sent to Distro
         setLocalArticles(prev => prev.map(a => 
           articlesToSend.some(sent => sent.id === a.id) 
-            ? { ...a, status: 'sent' }
+            ? { 
+                ...a, 
+                status: 'sent',
+                sent_to_distro_at: new Date().toISOString()
+              }
             : a
         ));
         // Update status map
@@ -174,9 +178,15 @@ function DistroScoutEditSend({ articles, onBack, onEditArticle, onRemoveArticle,
         alert('✅ Article sent to Telegram successfully!');
         // Update status map ref to preserve 'sent' status across prop updates
         statusMapRef.current.set(articleId, 'sent');
-        // Update local article status to 'sent'
+        // Update local article to reflect that it's been sent to Telegram
         setLocalArticles(prev => prev.map(a => 
-          a.id === articleId ? { ...a, status: 'sent' } : a
+          a.id === articleId 
+            ? { 
+                ...a, 
+                status: 'sent',
+                sent_to_telegram_at: new Date().toISOString()
+              } 
+            : a
         ));
         fetchSentLists(); // Refresh Already sent section
         // Notify parent component of status change
@@ -367,26 +377,33 @@ function DistroScoutEditSend({ articles, onBack, onEditArticle, onRemoveArticle,
                     {(() => {
                       const msgInfo = calculateTelegramMessageLength(article);
                       const isOverLimit = msgInfo.isOverLimit;
-                      const isDisabled = telegramSending[article.id] || editingId === article.id || article.status === 'sent' || isOverLimit;
+                      const hasSentToTelegram = !!article.sent_to_telegram_at;
+                      const isDisabled = telegramSending[article.id] || editingId === article.id || hasSentToTelegram || isOverLimit;
                       return (
                         <button 
                           onClick={() => handleSendToTelegram(article.id)}
-                          className={`telegram-btn ${article.status === 'sent' ? 'already-sent' : ''}`}
+                          className={`telegram-btn ${hasSentToTelegram ? 'already-sent' : ''}`}
                           disabled={isDisabled}
                           title={isOverLimit ? `Message exceeds Telegram limit (${msgInfo.totalLength}/${msgInfo.maxLength} chars). Please shorten the content.` : undefined}
                         >
-                          {telegramSending[article.id] ? 'Sending...' : article.status === 'sent' ? 'Already Sent to Telegram' : isOverLimit ? `Send to Telegram (${msgInfo.totalLength - msgInfo.maxLength} over)` : 'Send to Telegram'}
+                          {telegramSending[article.id] 
+                            ? 'Sending...' 
+                            : hasSentToTelegram 
+                              ? 'Already Sent to Telegram' 
+                              : isOverLimit 
+                                ? `Send to Telegram (${msgInfo.totalLength - msgInfo.maxLength} over)` 
+                                : 'Send to Telegram'}
                         </button>
                       );
                     })()}
                     
                     <button 
                       onClick={() => handleSendToDistro(article.id)}
-                      className={`send-btn ${article.status === 'sent' ? 'already-sent' : ''}`}
-                      disabled={isGenerating || editingId === article.id || article.status === 'sent'}
+                      className={`send-btn ${article.sent_to_distro_at ? 'already-sent' : ''}`}
+                      disabled={isGenerating || editingId === article.id || !!article.sent_to_distro_at}
                       title="Send this article to Distro"
                     >
-                      {isGenerating ? 'Sending...' : article.status === 'sent' ? 'Sent to Distro' : 'To Distro'}
+                      {isGenerating ? 'Sending...' : article.sent_to_distro_at ? 'Sent to Distro' : 'To Distro'}
                     </button>
                     
                     <button 

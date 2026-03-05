@@ -2,8 +2,9 @@ require('dotenv').config();
 
 module.exports = {
   distro: {
-    apiKey: process.env.DISTRO_API_KEY || 'IO3t4aEov&[pswo&m)pE[5q?d5nGc,y*',
-    apiEndpoint: process.env.DISTRO_API_ENDPOINT || 'https://pulse-chain-dc452eb2642a.herokuapp.com/api/external/news'
+    // Distro API (staging by default – override with DISTRO_API_ENDPOINT / DISTRO_API_KEY for production)
+    apiKey: process.env.DISTRO_API_KEY || 'dv_WxgyqdDNJxofDkywhmuHXQ',
+    apiEndpoint: process.env.DISTRO_API_ENDPOINT || 'http://3.233.81.252:5001/api/external/news'
   },
   telegram: {
     botToken: process.env.TELEGRAM_BOT_TOKEN || '',
