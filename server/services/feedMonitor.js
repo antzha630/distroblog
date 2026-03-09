@@ -5,6 +5,7 @@ const database = require('../database-postgres');
 const FeedDiscovery = require('./feedDiscovery');
 const WebScraper = require('./webScraper');
 const ADKScraper = require('./adkScraper');
+const config = require('../config');
 
 const parser = new Parser();
 
@@ -51,8 +52,13 @@ class FeedMonitor {
     this.monitoringInterval = null;
     this.feedDiscovery = new FeedDiscovery();
     this.webScraper = new WebScraper();
+    // ADK: enabled only when SCOOPSTREAM_MODE=v2 or SCOOPSTREAM_ENABLE_ADK=true
+    this.enableAdk = config.adk?.enabled;
     // Use ADK scraper for AI-powered extraction (faster and more consistent than Playwright/Cheerio)
-    this.adkScraper = new ADKScraper();
+    this.adkScraper = this.enableAdk ? new ADKScraper() : null;
+    if (!this.enableAdk) {
+      console.log('⚙️ [CONFIG] ADK disabled for this instance (RSS + scraping only).');
+    }
     this.isScrapingInProgress = false; // Lock to prevent concurrent scraping
     this.isCheckNowCancelled = false; // Flag to cancel "Check Now" operation
     this.currentCheckOperation = null; // Track current check operation for status
@@ -478,15 +484,23 @@ class FeedMonitor {
             hasRSSFeed = true;
             console.log(`📡 [CHECK NOW] [${source.name}] Using RSS feed: ${source.url}`);
           } else if (monitoringType === 'ADK') {
-            // ADK monitoring type: skip RSS check, go directly to ADK
+            // ADK monitoring type: in ADK-enabled mode we go directly to ADK,
+            // otherwise we fall back to traditional scraping.
             hasRSSFeed = false;
-            console.log(`🤖 [CHECK NOW] [${source.name}] ADK monitoring type - using ADK directly`);
+            if (this.enableAdk && this.adkScraper) {
+              console.log(`🤖 [CHECK NOW] [${source.name}] ADK monitoring type - using ADK directly`);
+            } else {
+              console.log(`🤖 [CHECK NOW] [${source.name}] ADK monitoring type but ADK is disabled; using traditional scraper`);
+            }
           } else {
             // For SCRAPING sources: RSS discovery already happened during setup
             // If RSS was found, source would be 'RSS' type. Since it's 'SCRAPING', no RSS was found.
-            // Skip RSS discovery and go straight to ADK (which was working before)
             hasRSSFeed = false;
-            console.log(`🤖 [CHECK NOW] [${source.name}] SCRAPING type - RSS already checked during setup, using ADK`);
+            if (this.enableAdk && this.adkScraper) {
+              console.log(`🤖 [CHECK NOW] [${source.name}] SCRAPING type - RSS already checked during setup, using ADK`);
+            } else {
+              console.log(`🤖 [CHECK NOW] [${source.name}] SCRAPING type - RSS already checked during setup, using traditional scraper only (ADK disabled)`);
+            }
           }
           
           if (hasRSSFeed) {
@@ -502,78 +516,83 @@ class FeedMonitor {
             
             totalNewArticlesProcessed += newArticles.length;
           } else {
-            // No RSS feed found (or ADK monitoring type) - try ADK, then scraping fallback if ADK returns 0
+            // No RSS feed found (or ADK monitoring type)
             const scrapeStartTime = Date.now();
             let articles = [];
+            const useAdk = this.enableAdk && this.adkScraper;
             
-            const adkMessage = monitoringType === 'ADK' 
-              ? `Using ADK monitoring type from: ${source.url}`
-              : `No RSS feed, trying ADK from: ${source.url}`;
-            console.log(`🤖 [CHECK NOW] [${source.name}] ${adkMessage}`);
-            
-            try {
-              articles = await this.adkScraper.scrapeArticles(source);
+            if (useAdk) {
+              const adkMessage = monitoringType === 'ADK' 
+                ? `Using ADK monitoring type from: ${source.url}`
+                : `No RSS feed, trying ADK from: ${source.url}`;
+              console.log(`🤖 [CHECK NOW] [${source.name}] ${adkMessage}`);
               
-              const sourceDomain = new URL(source.url).hostname.replace(/^www\./, '').toLowerCase();
-              
-              // Check if ADK returned valid results (not empty, not wrong domain)
-              if (articles.length === 0) {
-                console.log(`⚠️ [CHECK NOW] [${source.name}] ADK returned 0 articles, falling back to traditional scraper`);
-              } else {
-                // Verify articles are from correct domain
-                const validArticles = articles.filter(article => {
-                  try {
-                    const articleDomain = new URL(article.link || article.url).hostname.replace(/^www\./, '').toLowerCase();
-                    return articleDomain === sourceDomain;
-                  } catch (e) {
-                    return false;
-                  }
-                });
-                
-                if (validArticles.length === 0 && articles.length > 0) {
-                  console.log(`⚠️ [CHECK NOW] [${source.name}] ADK returned ${articles.length} articles from wrong domain, falling back to traditional scraper`);
-                  articles = []; // Clear invalid articles
-                } else if (validArticles.length < articles.length) {
-                  console.log(`⚠️ [CHECK NOW] [${source.name}] ADK returned ${articles.length} articles, but only ${validArticles.length} are from correct domain`);
-                  articles = validArticles; // Keep only valid ones
-                }
-              }
-              
-              const scrapeDuration = Date.now() - scrapeStartTime;
-              if (articles.length > 0) {
-                console.log(`✅ [CHECK NOW] [${source.name}] ADK extracted ${articles.length} articles in ${scrapeDuration}ms`);
-                // Reset consecutive Playwright counter when ADK succeeds (no fallback needed)
-                consecutivePlaywrightCount = 0;
-              } else {
-                console.log(`❌ [CHECK NOW] [${source.name}] ADK failed (0 valid articles) in ${scrapeDuration}ms`);
-              }
-            } catch (scrapeError) {
-              console.error(`❌ [CHECK NOW] [${source.name}] ADK error: ${scrapeError.message}`);
-              articles = [];
-            }
-            
-            // MEMORY FIX: Clean up ADK session BEFORE Playwright fallback to free memory
-            // This prevents memory accumulation when ADK fails and we fall back to Playwright
-            if (articles.length === 0) {
               try {
-                if (this.adkScraper && typeof this.adkScraper.close === 'function') {
-                  await this.adkScraper.close();
-                  console.log(`🧹 [CHECK NOW] [${source.name}] Cleaned up ADK session before Playwright fallback`);
+                articles = await this.adkScraper.scrapeArticles(source);
+                
+                const sourceDomain = new URL(source.url).hostname.replace(/^www\./, '').toLowerCase();
+                
+                // Check if ADK returned valid results (not empty, not wrong domain)
+                if (articles.length === 0) {
+                  console.log(`⚠️ [CHECK NOW] [${source.name}] ADK returned 0 articles, falling back to traditional scraper`);
+                } else {
+                  // Verify articles are from correct domain
+                  const validArticles = articles.filter(article => {
+                    try {
+                      const articleDomain = new URL(article.link || article.url).hostname.replace(/^www\./, '').toLowerCase();
+                      return articleDomain === sourceDomain;
+                    } catch (e) {
+                      return false;
+                    }
+                  });
+                  
+                  if (validArticles.length === 0 && articles.length > 0) {
+                    console.log(`⚠️ [CHECK NOW] [${source.name}] ADK returned ${articles.length} articles from wrong domain, falling back to traditional scraper`);
+                    articles = []; // Clear invalid articles
+                  } else if (validArticles.length < articles.length) {
+                    console.log(`⚠️ [CHECK NOW] [${source.name}] ADK returned ${articles.length} articles, but only ${validArticles.length} are from correct domain`);
+                    articles = validArticles; // Keep only valid ones
+                  }
                 }
-                // Force GC after ADK cleanup to reclaim memory
-                if (global.gc) {
-                  global.gc();
-                  const memAfterGC = getMemoryMB();
-                  console.log(`🧹 [CHECK NOW] [${source.name}] Forced GC after ADK cleanup, memory: ${memAfterGC}MB`);
+                
+                const scrapeDuration = Date.now() - scrapeStartTime;
+                if (articles.length > 0) {
+                  console.log(`✅ [CHECK NOW] [${source.name}] ADK extracted ${articles.length} articles in ${scrapeDuration}ms`);
+                  // Reset consecutive Playwright counter when ADK succeeds (no fallback needed)
+                  consecutivePlaywrightCount = 0;
+                } else {
+                  console.log(`❌ [CHECK NOW] [${source.name}] ADK failed (0 valid articles) in ${scrapeDuration}ms`);
                 }
-              } catch (cleanupErr) {
-                // Ignore cleanup errors
+              } catch (scrapeError) {
+                console.error(`❌ [CHECK NOW] [${source.name}] ADK error: ${scrapeError.message}`);
+                articles = [];
               }
+              
+              // MEMORY FIX: Clean up ADK session BEFORE Playwright fallback to free memory
+              // This prevents memory accumulation when ADK fails and we fall back to Playwright
+              if (articles.length === 0) {
+                try {
+                  if (this.adkScraper && typeof this.adkScraper.close === 'function') {
+                    await this.adkScraper.close();
+                    console.log(`🧹 [CHECK NOW] [${source.name}] Cleaned up ADK session before Playwright fallback`);
+                  }
+                  // Force GC after ADK cleanup to reclaim memory
+                  if (global.gc) {
+                    global.gc();
+                    const memAfterGC = getMemoryMB();
+                    console.log(`🧹 [CHECK NOW] [${source.name}] Forced GC after ADK cleanup, memory: ${memAfterGC}MB`);
+                  }
+                } catch (cleanupErr) {
+                  // Ignore cleanup errors
+                }
+              }
+            } else {
+              console.log(`🤖 [CHECK NOW] [${source.name}] ADK disabled; using traditional scraper only`);
             }
             
-            // Fallback to traditional scraper ONLY if ADK returned 0 articles
+            // Traditional scraper is used when ADK is disabled OR when ADK returned 0 articles.
             // webScraper handles Playwright first, then static scraping as fallback (same as original implementation)
-            if (articles.length === 0) {
+            if (!useAdk || articles.length === 0) {
               // Check memory before using Playwright (which is memory-intensive)
               const currentMemMB = getMemoryMB();
               
