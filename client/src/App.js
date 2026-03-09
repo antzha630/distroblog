@@ -138,10 +138,6 @@ function MainApp() {
 
       const result = await response.json();
       alert(`Successfully sent ${result.successCount} articles to Distro!`);
-      
-      // Reset workflow
-      setDistroScoutStep('landing');
-      setSelectedArticles([]);
     } catch (error) {
       console.error('Error sending articles:', error);
       alert('Failed to send articles. Please try again.');
