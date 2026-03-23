@@ -37,9 +37,7 @@ function MainApp() {
   useEffect(() => {
     const path = location.pathname;
     const tab = getActiveTabFromPath(path);
-    if (tab !== activeTab) {
-      setActiveTab(tab);
-    }
+    setActiveTab(prev => (prev === tab ? prev : tab));
   }, [location.pathname]);
 
   const fetchSources = async () => {
@@ -59,15 +57,6 @@ function MainApp() {
 
   const handleSourceRemoved = () => {
     fetchSources();
-  };
-
-  const handleArticlesUpdated = () => {
-    // Articles are managed by the NewArticles component
-  };
-
-  const handleArticlesSelected = (articles) => {
-    setSelectedArticles(articles);
-    setWorkflowStep('edit');
   };
 
   const handleDistroScoutArticlesSelected = async (articles) => {
@@ -115,8 +104,6 @@ function MainApp() {
     ));
   };
 
-  const handleSaveEditedArticle = () => {};
-
   const handleSendToDistro = async (articles) => {
     try {
       const response = await fetch(`${config.API_BASE_URL}/api/articles/send`, {
@@ -142,15 +129,6 @@ function MainApp() {
       console.error('Error sending articles:', error);
       alert('Failed to send articles. Please try again.');
     }
-  };
-
-  const handleEditComplete = () => {
-    setWorkflowStep('send');
-  };
-
-  const handleBackToReview = () => {
-    setWorkflowStep('review');
-    setSelectedArticles([]);
   };
 
   const handleBackToEdit = () => {
