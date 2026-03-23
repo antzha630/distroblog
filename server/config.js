@@ -1,14 +1,14 @@
 require('dotenv').config();
 
-// Global Scoopstream config shared by server modules
-const mode = process.env.SCOOPSTREAM_MODE || 'v1';
+// Global Scoopstream config shared by server modules (same repo; two Render services differ only by env).
+// - SCOOPSTREAM_MODE=v1 → RSS + traditional scraping (Playwright/static) for sources without feeds. ADK is never used.
+// - SCOOPSTREAM_MODE=v2 → RSS + ADK for sources without feeds. No Playwright/static fallback (ADK-only).
+const rawMode = (process.env.SCOOPSTREAM_MODE || 'v1').toLowerCase();
+const mode = rawMode === 'v2' ? 'v2' : 'v1';
 
-// ADK is disabled by default in v1 for performance/reliability.
-// It can be explicitly enabled via SCOOPSTREAM_ENABLE_ADK=true or by running in v2 mode.
 const enableAdkEnv = (process.env.SCOOPSTREAM_ENABLE_ADK || '').toLowerCase();
-const enableAdk =
-  enableAdkEnv === 'true' ||
-  (enableAdkEnv === '' && mode === 'v2');
+// ADK runs only on v2. SCOOPSTREAM_ENABLE_ADK=false disables ADK on v2 (emergency kill-switch; no-RSS sources then yield nothing).
+const enableAdk = mode === 'v2' && enableAdkEnv !== 'false';
 
 module.exports = {
   mode,

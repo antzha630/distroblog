@@ -3430,6 +3430,10 @@ const startServer = async () => {
     app.listen(PORT, async () => {
       console.log(`Distro Scoopstream server running on port ${PORT}`);
       console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+      const v = config.mode === 'v2' ? 'RSS + ADK (no scraping fallback)' : 'RSS + scraping (no ADK)';
+      console.log(
+        `Scoopstream mode: ${config.mode} (${v}) | ADK=${config.adk.enabled ? 'on' : 'off'}`
+      );
       
       // Initialize database in the background (non-blocking)
       database.init()

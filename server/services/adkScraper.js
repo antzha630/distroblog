@@ -1,5 +1,6 @@
  // ADK (Agent Development Kit) implementation using Google Search
 const axios = require('axios');
+const config = require('../config');
 // This uses an agent with Google Search tool instead of scraping HTML
 // Based on: https://google.github.io/adk-docs/
 
@@ -137,7 +138,8 @@ Each object must have: title (full headline), url (direct article URL on the tar
   async scrapeArticles(source) {
     // MEMORY FIX: Track session outside try block so we can clean it up in catch
     let session = null;
-    
+    const scrapeStartedAt = Date.now();
+
     try {
       console.log(`🤖 [ADK] Finding articles from: ${source.url} using Google Search agent`);
 
@@ -147,54 +149,30 @@ Each object must have: title (full headline), url (direct article URL on the tar
       }
 
       if (!this.agent || !this.runner) {
-      throw new Error('ADK agent not initialized. Check GOOGLE_API_KEY environment variable.');
+        throw new Error('ADK agent not initialized. Check GOOGLE_API_KEY environment variable.');
       }
 
-      // Rate limiting: Ensure we don't exceed 10 RPM limit
-      // Wait if necessary to maintain at least 7 seconds between requests
-      const now = Date.now();
-      const timeSinceLastRequest = now - this.lastRequestTime;
-      if (timeSinceLastRequest < this.minRequestInterval) {
-        const waitTime = this.minRequestInterval - timeSinceLastRequest;
-        console.log(`⏳ [ADK] Rate limiting: waiting ${waitTime}ms to stay under 10 RPM limit...`);
-        await new Promise(resolve => setTimeout(resolve, waitTime));
-      }
-      this.lastRequestTime = Date.now();
+      const maxAttempts = config.mode === 'v2' ? 2 : 1;
+      const maxItems = config.mode === 'v2' ? 8 : 3;
+      const v2ObsStart = Date.now();
 
-      // Create a session for this request
-      // MEMORY FIX: Use a unique session ID that we can clean up after use
-      const sessionId = `session-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-      session = await this.runner.sessionService.createSession({
-        appName: 'distroblog',
-        userId: 'system',
-        id: sessionId,
-        state: {}
-      });
-
-      // Ask the agent to find articles from the website using Google Search
-      // SIMPLIFIED prompt - complex rules cause agent to refuse when it can't find perfect matches
       const domain = new URL(source.url).hostname;
       const baseDomain = domain.replace(/^www\./, ''); // Remove www. for matching
-      
+
       // Calculate concrete date cutoff (7 days ago) per Jasleen's suggestion
-      // Providing an explicit date helps the model understand the recency requirement
       const today = new Date();
       const cutoffDate = new Date(today);
       cutoffDate.setDate(cutoffDate.getDate() - 7);
       const cutoffDateStr = cutoffDate.toISOString().split('T')[0]; // YYYY-MM-DD format
       const todayStr = today.toISOString().split('T')[0];
-      
+
       console.log(`📅 [ADK] Date filter: articles after ${cutoffDateStr} (today is ${todayStr})`);
-      
-      // BEST PRACTICE: Use natural, conversational prompts - the Google Search grounding tool works best
-      // with queries like you'd ask a colleague, not complex rule sets.
-      // The model automatically decides what to search for based on the conversation.
-      // Reference: ADK best practices - "natural language works better than rigid templates"
-      const searchQuery = `Find the most recent blog posts or articles from the ${baseDomain} website.
+
+      const primarySearchQuery = `Find the most recent blog posts or articles from the ${baseDomain} website.
 
 I'm looking for articles published in the last week (after ${cutoffDateStr}). Today is ${todayStr}.
 
-Please search and return up to 3 recent articles as a JSON array with these fields:
+Please search and return up to ${maxItems} recent articles as a JSON array with these fields:
 - title: the full article headline
 - url: the direct link to the article on ${baseDomain} (not a Google redirect URL)
 - description: 2-3 sentence summary of the article content
@@ -205,7 +183,43 @@ IMPORTANT:
 - I need real article URLs from ${baseDomain}, not Google redirect links starting with "vertexaisearch.cloud.google.com".
 
 Return only the JSON array, no other text.`;
-      
+
+      const retrySearchQuery = `RETRY with a different search strategy. Use Google Search with queries like:
+site:${baseDomain} (blog OR news OR post OR article)
+after:${cutoffDateStr}
+Today is ${todayStr}.
+
+Return ONLY a JSON array (no markdown, no prose) of up to ${maxItems} objects with: title, url, description, datePublished.
+Each url must be a direct article URL on ${baseDomain} only (not Google redirect / vertexaisearch). If date is unknown use null for datePublished.`;
+
+      let lightweightArticles = [];
+      let lastRawCount = 0;
+      let lastValidCount = 0;
+
+      for (let qi = 0; qi < maxAttempts; qi++) {
+        const searchQuery = qi === 0 ? primarySearchQuery : retrySearchQuery;
+        if (qi > 0) {
+          console.log(`🔁 [ADK] Alternate prompt attempt ${qi + 1}/${maxAttempts} for ${source.name}`);
+        }
+
+        // Rate limiting: Ensure we don't exceed 10 RPM limit
+        const now = Date.now();
+        const timeSinceLastRequest = now - this.lastRequestTime;
+        if (timeSinceLastRequest < this.minRequestInterval) {
+          const waitTime = this.minRequestInterval - timeSinceLastRequest;
+          console.log(`⏳ [ADK] Rate limiting: waiting ${waitTime}ms to stay under 10 RPM limit...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+        }
+        this.lastRequestTime = Date.now();
+
+        const sessionId = `session-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+        session = await this.runner.sessionService.createSession({
+          appName: 'distroblog',
+          userId: 'system',
+          id: sessionId,
+          state: {}
+        });
+
       let articles = [];
       let lastEvent = null;
       let fullResponse = '';
@@ -236,12 +250,14 @@ Return only the JSON array, no other text.`;
         if (event.errorCode || event.errorMessage) {
           console.error(`❌ [ADK] API Error - Code: ${event.errorCode}, Message: ${event.errorMessage}`);
           if (event.errorCode === '429') {
-            console.error(`⚠️ [ADK] Rate limit/quota exceeded. Will fallback to traditional scraper.`);
-            // Throw error to trigger fallback
+            console.error(
+              `⚠️ [ADK] Rate limit/quota exceeded.${config.mode === 'v2' ? ' (V2: no Playwright fallback — empty result).' : ' Will fallback to traditional scraper.'}`
+            );
             throw new Error(`Rate limit exceeded (429): ${event.errorMessage}`);
           } else if (event.errorCode === '400' && event.errorMessage && event.errorMessage.includes('Search as tool is not enabled')) {
-            console.error(`⚠️ [ADK] Model does not support Google Search tool. Will fallback to traditional scraper.`);
-            // Throw error to trigger fallback
+            console.error(
+              `⚠️ [ADK] Model does not support Google Search tool.${config.mode === 'v2' ? ' (V2: no Playwright fallback — empty result).' : ' Will fallback to traditional scraper.'}`
+            );
             throw new Error(`Model does not support Google Search: ${event.errorMessage}`);
           }
         }
@@ -558,6 +574,14 @@ Return only the JSON array, no other text.`;
         ? ((accuracyMetrics.validArticles / accuracyMetrics.totalReturned) * 100).toFixed(1)
         : 0;
       console.log(`   Accuracy rate: ${accuracyRate}% (${accuracyMetrics.validArticles}/${accuracyMetrics.totalReturned} valid)\n`);
+
+      if (config.mode === 'v2') {
+        const fo = accuracyMetrics.filteredOut;
+        console.log(
+          `🔬 [ADK][V2][diag] attempt=${qi + 1}/${maxAttempts} rawJson=${articlesBeforeFilter} afterUrlFilters=${filteredArticles.length} afterDateFilter=${dateFilteredArticles.length} responseChars=${fullResponse.length} events=${eventCount} ` +
+            `filteredWrongDomain=${fo.wrongDomain} googleRedirect=${fo.googleRedirect} outsideDate=${fo.outsideDateRange || 0} shortPath=${fo.shortPath} genericUrl=${fo.genericUrl}`
+        );
+      }
       
       if (dateFilteredArticles.length === 0) {
         if (articlesBeforeFilter > 0) {
@@ -663,7 +687,7 @@ Return only the JSON array, no other text.`;
       // Return lightweight articles (limit to 3 most recent articles)
       // This ensures we get the most recent articles from each source
       // Resolve redirects to get canonical URLs (ADK may return long slugs that redirect to shorter ones)
-      const lightweightArticlesPromises = dateFilteredArticles.slice(0, 3).map(async (article) => {
+      const lightweightArticlesPromises = dateFilteredArticles.slice(0, maxItems).map(async (article) => {
         let articleUrl = article.url || article.link;
         if (articleUrl && !articleUrl.startsWith('http')) {
           if (articleUrl.startsWith('/')) {
@@ -695,7 +719,7 @@ Return only the JSON array, no other text.`;
       });
 
       // Wait for all redirect resolutions
-      const lightweightArticles = await Promise.all(lightweightArticlesPromises);
+        lightweightArticles = await Promise.all(lightweightArticlesPromises);
 
       console.log(`✅ [ADK] [${source.url}] Agent found ${lightweightArticles.length} articles`);
       if (lightweightArticles.length > 0) {
@@ -709,7 +733,10 @@ Return only the JSON array, no other text.`;
         ? ((lightweightArticles.filter(a => a.datePublished).length / lightweightArticles.length) * 100).toFixed(1)
         : 0;
       console.log(`📊 [ADK] [SUMMARY] ${source.name}: ${lightweightArticles.length} valid articles, ${dateCoverage}% have dates`);
-      
+
+        lastRawCount = accuracyMetrics.totalReturned;
+        lastValidCount = accuracyMetrics.validArticles;
+
       // MEMORY FIX: Delete the session after use to prevent memory accumulation
       // InMemoryRunner stores all sessions in memory, causing OOM crashes over time
       try {
@@ -725,12 +752,27 @@ Return only the JSON array, no other text.`;
         // Don't fail if cleanup fails, just log it
         console.warn(`⚠️ [ADK] Could not clean up session: ${cleanupErr.message}`);
       }
-      
-      // If no valid articles found, throw error to trigger fallback to traditional scraper
+
+        if (lightweightArticles.length > 0) {
+          break;
+        }
+      } // end for qi (retry attempts)
+
+      if (config.mode === 'v2') {
+        const ms = Date.now() - v2ObsStart;
+        console.log(
+          `📈 [ADK][V2] observability source=${source.name} domain=${new URL(source.url).hostname} ms=${ms} attempts=${maxAttempts} final=${lightweightArticles.length} rawReturned=${lastRawCount} validAfterDomainRules=${lastValidCount}`
+        );
+      }
+
+      // If no valid articles found: V2 returns [] (ADK-only, no implicit fallback); V1 throws for scraper fallback
       if (lightweightArticles.length === 0) {
+        if (config.mode === 'v2') {
+          return [];
+        }
         throw new Error(`ADK agent found 0 valid articles from ${source.url} (may need fallback to traditional scraper)`);
       }
-      
+
       return lightweightArticles;
     } catch (error) {
       // MEMORY FIX: Clean up session even on error
@@ -747,10 +789,12 @@ Return only the JSON array, no other text.`;
         }
       }
       
-      // Check if it's a rate limit error - log it but still throw to trigger fallback
+      // Check if it's a rate limit error
       if ((error.message && error.message.includes('429')) || (error.message && error.message.includes('quota'))) {
         console.error(`❌ [ADK] Rate limit/quota exceeded for ${source.url}: ${error.message}`);
-        console.log(`🔄 [ADK] Will fallback to traditional scraper for ${source.name}`);
+        if (config.mode !== 'v2') {
+          console.log(`🔄 [ADK] Will fallback to traditional scraper for ${source.name}`);
+        }
       } else {
         console.error(`❌ [ADK] Error finding articles from ${source.url}:`, error.message);
       }
@@ -764,7 +808,16 @@ Return only the JSON array, no other text.`;
         this.modelName = null;
       }
 
-      // Throw error to trigger fallback to traditional scraper in feedMonitor
+      // V2: ADK-only — return [] so feedMonitor does not treat as "success" but also does not imply Playwright fallback
+      if (config.mode === 'v2') {
+        const ms = Date.now() - scrapeStartedAt;
+        console.warn(`⚠️ [ADK][V2] Returning empty result after error for ${source.name} (no scraper fallback)`);
+        console.log(
+          `📈 [ADK][V2] observability source=${source.name} domain=${source.url ? new URL(source.url).hostname : '?'} ms=${ms} attempts=error final=0 rawReturned=0 validAfterDomainRules=0 error=${(error.message || 'unknown').substring(0, 120)}`
+        );
+        return [];
+      }
+
       throw error;
     }
   }

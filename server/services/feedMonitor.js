@@ -52,7 +52,7 @@ class FeedMonitor {
     this.monitoringInterval = null;
     this.feedDiscovery = new FeedDiscovery();
     this.webScraper = new WebScraper();
-    // ADK: enabled only when SCOOPSTREAM_MODE=v2 or SCOOPSTREAM_ENABLE_ADK=true
+    // ADK: only when SCOOPSTREAM_MODE=v2 (and SCOOPSTREAM_ENABLE_ADK is not false). V1 never uses ADK.
     this.enableAdk = config.adk?.enabled;
     // Use ADK scraper for AI-powered extraction (faster and more consistent than Playwright/Cheerio)
     this.adkScraper = this.enableAdk ? new ADKScraper() : null;
@@ -470,11 +470,11 @@ class FeedMonitor {
           const monitoringType = source.monitoring_type || 'RSS';
           let newArticles = [];
           
-          // Flow: RSS → ADK → SCRAPING (fallback only if ADK returns 0 articles)
+          // Flow depends on SCOOPSTREAM_MODE (see server/config.js):
+          // V1: RSS → (no feed) traditional scraper only. V2: RSS → (no feed) ADK only (no scraping fallback).
           // Monitoring types:
           // - 'RSS': Use RSS feed directly (url field already contains RSS feed URL from initial setup)
-          // - 'ADK': Skip RSS check, go directly to ADK, then scraping fallback if ADK returns 0
-          // - 'SCRAPING': Skip RSS discovery (already checked during setup), go directly to ADK, then scraping fallback
+          // - 'ADK' / 'SCRAPING': No RSS in DB — V1 uses scraping; V2 uses ADK
           // Note: RSS discovery happens during source setup. If RSS was found, source would be marked as 'RSS' type.
           // For 'Check Now', we don't need to rediscover RSS - just use what was determined during setup.
           let hasRSSFeed = false;
@@ -489,17 +489,21 @@ class FeedMonitor {
             hasRSSFeed = false;
             if (this.enableAdk && this.adkScraper) {
               console.log(`🤖 [CHECK NOW] [${source.name}] ADK monitoring type - using ADK directly`);
+            } else if (config.mode === 'v2') {
+              console.log(`🤖 [CHECK NOW] [${source.name}] ADK monitoring type but ADK is off — V2 cannot use scraping; skipping`);
             } else {
-              console.log(`🤖 [CHECK NOW] [${source.name}] ADK monitoring type but ADK is disabled; using traditional scraper`);
+              console.log(`🤖 [CHECK NOW] [${source.name}] ADK monitoring type — V1: using traditional scraper (ADK not used on v1)`);
             }
           } else {
             // For SCRAPING sources: RSS discovery already happened during setup
             // If RSS was found, source would be 'RSS' type. Since it's 'SCRAPING', no RSS was found.
             hasRSSFeed = false;
             if (this.enableAdk && this.adkScraper) {
-              console.log(`🤖 [CHECK NOW] [${source.name}] SCRAPING type - RSS already checked during setup, using ADK`);
+              console.log(`🤖 [CHECK NOW] [${source.name}] SCRAPING type - V2: using ADK (no RSS)`);
+            } else if (config.mode === 'v2') {
+              console.log(`🤖 [CHECK NOW] [${source.name}] SCRAPING type - V2: ADK off — cannot scrape; skipping`);
             } else {
-              console.log(`🤖 [CHECK NOW] [${source.name}] SCRAPING type - RSS already checked during setup, using traditional scraper only (ADK disabled)`);
+              console.log(`🤖 [CHECK NOW] [${source.name}] SCRAPING type - V1: using traditional scraper only (no ADK on v1)`);
             }
           }
           
@@ -534,7 +538,11 @@ class FeedMonitor {
                 
                 // Check if ADK returned valid results (not empty, not wrong domain)
                 if (articles.length === 0) {
-                  console.log(`⚠️ [CHECK NOW] [${source.name}] ADK returned 0 articles, falling back to traditional scraper`);
+                  if (config.mode === 'v2') {
+                    console.log(`⚠️ [CHECK NOW] [${source.name}] ADK returned 0 articles — V2 ADK-only path (no Playwright/scraper fallback)`);
+                  } else {
+                    console.log(`⚠️ [CHECK NOW] [${source.name}] ADK returned 0 articles, falling back to traditional scraper`);
+                  }
                 } else {
                   // Verify articles are from correct domain
                   const validArticles = articles.filter(article => {
@@ -547,7 +555,11 @@ class FeedMonitor {
                   });
                   
                   if (validArticles.length === 0 && articles.length > 0) {
-                    console.log(`⚠️ [CHECK NOW] [${source.name}] ADK returned ${articles.length} articles from wrong domain, falling back to traditional scraper`);
+                    if (config.mode === 'v2') {
+                      console.log(`⚠️ [CHECK NOW] [${source.name}] ADK returned ${articles.length} articles from wrong domain — V2 ADK-only path (no Playwright/scraper fallback)`);
+                    } else {
+                      console.log(`⚠️ [CHECK NOW] [${source.name}] ADK returned ${articles.length} articles from wrong domain, falling back to traditional scraper`);
+                    }
                     articles = []; // Clear invalid articles
                   } else if (validArticles.length < articles.length) {
                     console.log(`⚠️ [CHECK NOW] [${source.name}] ADK returned ${articles.length} articles, but only ${validArticles.length} are from correct domain`);
@@ -574,7 +586,11 @@ class FeedMonitor {
                 try {
                   if (this.adkScraper && typeof this.adkScraper.close === 'function') {
                     await this.adkScraper.close();
-                    console.log(`🧹 [CHECK NOW] [${source.name}] Cleaned up ADK session before Playwright fallback`);
+                    console.log(
+                      config.mode === 'v2'
+                        ? `🧹 [CHECK NOW] [${source.name}] Cleaned up ADK session (V2: no Playwright fallback)`
+                        : `🧹 [CHECK NOW] [${source.name}] Cleaned up ADK session before Playwright fallback`
+                    );
                   }
                   // Force GC after ADK cleanup to reclaim memory
                   if (global.gc) {
@@ -587,12 +603,17 @@ class FeedMonitor {
                 }
               }
             } else {
-              console.log(`🤖 [CHECK NOW] [${source.name}] ADK disabled; using traditional scraper only`);
+              if (config.mode === 'v2') {
+                console.log(`🤖 [CHECK NOW] [${source.name}] V2: ADK unavailable — no traditional scraper fallback`);
+              } else {
+                console.log(`🤖 [CHECK NOW] [${source.name}] V1: ADK not used — using traditional scraper for no-RSS sources`);
+              }
             }
             
-            // Traditional scraper is used when ADK is disabled OR when ADK returned 0 articles.
-            // webScraper handles Playwright first, then static scraping as fallback (same as original implementation)
-            if (!useAdk || articles.length === 0) {
+            // V1: Playwright/static when ADK not in play or ADK returned 0. V2: never use traditional scraper for no-RSS sources.
+            const shouldUseTraditionalScraper =
+              config.mode === 'v1' && (!useAdk || articles.length === 0);
+            if (shouldUseTraditionalScraper) {
               // Check memory before using Playwright (which is memory-intensive)
               const currentMemMB = getMemoryMB();
               
