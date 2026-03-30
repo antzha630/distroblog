@@ -181,21 +181,26 @@ Example (your entire final message must look like this, nothing else):
       const domain = new URL(source.url).hostname;
       const baseDomain = domain.replace(/^www\./, ''); // Remove www. for matching
 
-      // Calculate concrete date cutoff (7 days ago) per Jasleen's suggestion
+      // Calculate concrete date cutoff:
+      // - V1: keep tighter 7-day window
+      // - V2: widen so Google Search has more opportunity to return results
+      const daysBack = config.mode === 'v2' ? 30 : 7;
       const today = new Date();
       const cutoffDate = new Date(today);
-      cutoffDate.setDate(cutoffDate.getDate() - 7);
+      cutoffDate.setDate(cutoffDate.getDate() - daysBack);
       const cutoffDateStr = cutoffDate.toISOString().split('T')[0]; // YYYY-MM-DD format
       const todayStr = today.toISOString().split('T')[0];
 
-      console.log(`📅 [ADK] Date filter: articles after ${cutoffDateStr} (today is ${todayStr})`);
+      console.log(
+        `📅 [ADK] Date filter: articles after ${cutoffDateStr} (today is ${todayStr}, daysBack=${daysBack})`
+      );
 
       const mediumPub = mediumPublicationPathPrefix(source.url);
       const mediumHint = mediumPub
         ? `\nMedium publication: only include article URLs whose path starts with "${mediumPub}/" (same publication as ${source.url}). Do not include other Medium authors or publications.\n`
         : '';
 
-      const primarySearchQuery = `Task: find up to ${maxItems} blog or news articles on ${baseDomain} published on or after ${cutoffDateStr}. Today is ${todayStr}.
+      const primarySearchQuery = `Task: find up to ${maxItems} blog or news articles on ${baseDomain} published within the last ${daysBack} days (after ${cutoffDateStr}). Today is ${todayStr}.
 Source URL for scope: ${source.url}
 ${mediumHint}
 Step 1 — Use Google Search now with queries such as:
@@ -591,7 +596,7 @@ Return ONLY valid JSON: an array of up to ${maxItems} objects {title, url, descr
             return true;
           }
           
-          // Check if article is within the last 7 days
+          // Check if article is within the last `daysBack` days
           if (articleDate < cutoffDate) {
             console.log(`⚠️ [ADK] [DATE] Filtering out old article (${article.datePublished} < ${cutoffDateStr}): "${article.title?.substring(0, 50) || 'unknown'}"`);
             accuracyMetrics.filteredOut.outsideDateRange = (accuracyMetrics.filteredOut.outsideDateRange || 0) + 1;
@@ -627,7 +632,7 @@ Return ONLY valid JSON: an array of up to ${maxItems} objects {title, url, descr
       console.log(`     - Generic/homepage URLs: ${accuracyMetrics.filteredOut.genericUrl}`);
       console.log(`     - Short path (< 11 chars): ${accuracyMetrics.filteredOut.shortPath}`);
       console.log(`     - Invalid URL format: ${accuracyMetrics.filteredOut.invalidUrl}`);
-      console.log(`     - Outside date range (>${7} days old): ${accuracyMetrics.filteredOut.outsideDateRange}`);
+      console.log(`     - Outside date range (>${daysBack} days old): ${accuracyMetrics.filteredOut.outsideDateRange}`);
       const accuracyRate = accuracyMetrics.totalReturned > 0 
         ? ((accuracyMetrics.validArticles / accuracyMetrics.totalReturned) * 100).toFixed(1)
         : 0;
