@@ -2689,13 +2689,17 @@ Return valid JSON only. If you can't find articles, return [].`;
       }
 
       // Create a test agent - always create fresh to use the instruction
-      // ADK expects `model` to be a model id string (not a Gemini instance).
+      const llm = new adk.Gemini({
+        model: adkScraper.modelName || 'gemini-2.0-flash', // Fixed: use GA model, not deprecated -exp
+        apiKey: apiKey,
+      });
+
       const testAgent = new adk.LlmAgent({
         name: 'article_finder_test',
-        model: adkScraper.modelName || 'gemini-2.0-flash', // Fixed: use GA model, not deprecated -exp
+        model: llm,
         description: 'Agent that finds recent blog posts and articles from websites using Google Search.',
         instruction: agentInstruction,
-        tools: [adk.GOOGLE_SEARCH]
+        tools: [adk.GOOGLE_SEARCH],
       });
       
       testRunner = new adk.InMemoryRunner({
