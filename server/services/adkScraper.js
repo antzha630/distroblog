@@ -101,7 +101,9 @@ class ADKScraper {
       // - Use few-shot examples for format and behavior; keep instructions focused.
       this.agent = new adk.LlmAgent({
         name: 'article_finder',
-        model: llm, // Pass the LLM object directly (not model name string)
+        // ADK expects `model` to be a model identifier string.
+        // Passing a Gemini instance here prevents tool grounding from reliably running.
+        model: modelName,
         description: 'Agent that finds recent blog posts and articles from websites using Google Search.',
         instruction: `You are a research assistant. Your job is to find recent blog posts on a specific website using the Google Search tool.
 
