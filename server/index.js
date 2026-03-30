@@ -2711,6 +2711,8 @@ Return valid JSON only. If you can't find articles, return [].`;
       events: [],
       functionCalls: [],
       functionResponses: [],
+      groundingUsed: false,
+      groundingChunkUris: [],
       rawResponse: '',
       articles: [],
       errors: [],
@@ -2718,6 +2720,8 @@ Return valid JSON only. If you can't find articles, return [].`;
         eventCount: 0,
         functionCallCount: 0,
         functionResponseCount: 0,
+        groundingNonEmptyCount: 0,
+        groundingChunksCount: 0,
         startTime: Date.now(),
         endTime: null,
         duration: null
@@ -2783,8 +2787,29 @@ Return only the JSON array, no other text.`;
           contentRole: event.content?.role,
           partsCount: event.content?.parts?.length || 0,
           errorCode: event.errorCode,
-          errorMessage: event.errorMessage
+          errorMessage: event.errorMessage,
+          hasGroundingMetadata: !!event.groundingMetadata && Object.keys(event.groundingMetadata).length > 0
         };
+
+        const hasGrounding =
+          !!event.groundingMetadata && Object.keys(event.groundingMetadata).length > 0;
+
+        if (hasGrounding) {
+          debugInfo.metrics.groundingNonEmptyCount++;
+          debugInfo.groundingUsed = true;
+
+          const chunks = event.groundingMetadata.groundingChunks;
+          if (Array.isArray(chunks)) {
+            debugInfo.metrics.groundingChunksCount += chunks.length;
+            // Keep a small sample so responses stay small
+            for (const c of chunks.slice(0, 5)) {
+              const uri = c?.web?.uri;
+              if (uri && debugInfo.groundingChunkUris.length < 10) {
+                debugInfo.groundingChunkUris.push(uri);
+              }
+            }
+          }
+        }
         
         // Check for errors
         if (event.errorCode || event.errorMessage) {
