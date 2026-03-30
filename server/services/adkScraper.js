@@ -48,10 +48,15 @@ class ADKScraper {
   async initialize() {
     if (this.initialized) return;
     
-    const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
+    const apiKey =
+      process.env.GOOGLE_GENAI_API_KEY ||
+      process.env.GEMINI_API_KEY ||
+      process.env.GOOGLE_API_KEY;
     
     if (!apiKey) {
-      console.warn('⚠️ Google API key not found. ADK scraping will be disabled. Set GOOGLE_API_KEY or GEMINI_API_KEY in .env');
+      console.warn(
+        '⚠️ ADK API key not found. ADK scraping will be disabled. Set GOOGLE_GENAI_API_KEY or GEMINI_API_KEY in .env'
+      );
       return;
     }
 
@@ -173,7 +178,7 @@ Example (your entire final message must look like this, nothing else):
       }
 
       if (!this.agent || !this.runner) {
-        throw new Error('ADK agent not initialized. Check GOOGLE_API_KEY environment variable.');
+      throw new Error('ADK agent not initialized. Check ADK API key environment variable (GOOGLE_GENAI_API_KEY / GEMINI_API_KEY).');
       }
 
       const maxAttempts = config.mode === 'v2' ? 2 : 1;

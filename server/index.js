@@ -2683,9 +2683,14 @@ Return valid JSON only. If you can't find articles, return [].`;
     
     try {
       const adk = await import('@google/adk');
-      const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
+      const apiKey =
+        process.env.GOOGLE_GENAI_API_KEY ||
+        process.env.GEMINI_API_KEY ||
+        process.env.GOOGLE_API_KEY;
       if (!apiKey) {
-        return res.status(500).json({ error: 'Google API key not found (set GOOGLE_API_KEY or GEMINI_API_KEY).' });
+        return res.status(500).json({
+          error: 'ADK API key not found (set GOOGLE_GENAI_API_KEY or GEMINI_API_KEY).',
+        });
       }
 
       // Create a test agent - always create fresh to use the instruction
