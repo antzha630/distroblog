@@ -1,6 +1,25 @@
  // ADK (Agent Development Kit) implementation using Google Search
 const axios = require('axios');
 const config = require('../config');
+
+/**
+ * Medium hosts multiple publications on the same domain; domain match alone is not enough.
+ * Returns a path prefix like /lumerin-blog or /@handle, or null if we should not apply this rule.
+ */
+function mediumPublicationPathPrefix(sourceUrl) {
+  let u;
+  try {
+    u = new URL(sourceUrl);
+  } catch {
+    return null;
+  }
+  const h = u.hostname.replace(/^www\./, '').toLowerCase();
+  if (h !== 'medium.com' && !h.endsWith('.medium.com')) return null;
+  let p = u.pathname.replace(/\/$/, '');
+  if (p.endsWith('/feed')) p = p.slice(0, -5);
+  if (!p || p === '/') return null;
+  return p;
+}
 // This uses an agent with Google Search tool instead of scraping HTML
 // Based on: https://google.github.io/adk-docs/
 
@@ -91,6 +110,7 @@ Non-negotiable rules:
 2) Your final reply MUST be a single JSON array only — no markdown fences, no headings, no apologies, no "I could not find" paragraphs. If there are zero matches, output exactly: []
 3) Each item must pair title and url from the same search result (never mix title from one result with url from another).
 4) URLs must be direct https links on the requested site (or its subdomains when that site uses them); never use Google redirect or vertexaisearch URLs.
+5) On medium.com, only list articles whose URL path is under the same publication as the user’s source (e.g. medium.com/lumerin-blog/... not medium.com/illumination/...).
 
 Fields per object: title (string), url (string), description (string, short), datePublished (YYYY-MM-DD or null if unknown).
 
@@ -170,8 +190,14 @@ Example (your entire final message must look like this, nothing else):
 
       console.log(`📅 [ADK] Date filter: articles after ${cutoffDateStr} (today is ${todayStr})`);
 
-      const primarySearchQuery = `Task: find up to ${maxItems} blog or news articles on ${baseDomain} published on or after ${cutoffDateStr}. Today is ${todayStr}.
+      const mediumPub = mediumPublicationPathPrefix(source.url);
+      const mediumHint = mediumPub
+        ? `\nMedium publication: only include article URLs whose path starts with "${mediumPub}/" (same publication as ${source.url}). Do not include other Medium authors or publications.\n`
+        : '';
 
+      const primarySearchQuery = `Task: find up to ${maxItems} blog or news articles on ${baseDomain} published on or after ${cutoffDateStr}. Today is ${todayStr}.
+Source URL for scope: ${source.url}
+${mediumHint}
 Step 1 — Use Google Search now with queries such as:
 site:${baseDomain} blog
 site:${baseDomain} news OR post OR article
@@ -192,7 +218,8 @@ Use Google Search again with different queries, e.g.:
 site:${baseDomain} "blog"
 site:${baseDomain} after:${cutoffDateStr}
 Today is ${todayStr}.
-
+Source URL for scope: ${source.url}
+${mediumHint}
 Return ONLY valid JSON: an array of up to ${maxItems} objects {title, url, description, datePublished}. No markdown, no prose. If still nothing: []`;
 
       let lightweightArticles = [];
@@ -415,6 +442,7 @@ Return ONLY valid JSON: an array of up to ${maxItems} objects {title, url, descr
           googleRedirect: 0,
           nullUrl: 0,
           wrongDomain: 0,
+          wrongPublication: 0,
           genericUrl: 0,
           shortPath: 0,
           invalidUrl: 0,
@@ -465,6 +493,22 @@ Return ONLY valid JSON: an array of up to ${maxItems} objects {title, url, descr
             accuracyMetrics.filteredOut.wrongDomain++;
             console.log(`⚠️ [ADK] [ACCURACY] Filtering out wrong domain: ${articleDomain} (expected: ${sourceDomain}) - Title: "${article.title?.substring(0, 50) || 'unknown'}" - URL: ${articleUrl.substring(0, 80)}...`);
             return false;
+          }
+
+          // Medium: same domain is not enough — require same publication path (fixes random Medium posts)
+          const mediumPrefix = mediumPublicationPathPrefix(source.url);
+          if (mediumPrefix) {
+            const ap = articleUrlObj.pathname.replace(/\/$/, '') || '/';
+            const ok =
+              ap === mediumPrefix ||
+              ap.startsWith(mediumPrefix + '/');
+            if (!ok) {
+              accuracyMetrics.filteredOut.wrongPublication++;
+              console.log(
+                `⚠️ [ADK] [ACCURACY] Filtering out wrong Medium publication (need path prefix ${mediumPrefix}): ${articleUrl.substring(0, 100)}...`
+              );
+              return false;
+            }
           }
           
           // Filter out generic URLs (homepage, base blog URL without specific article path)
@@ -579,6 +623,7 @@ Return ONLY valid JSON: an array of up to ${maxItems} objects {title, url, descr
       console.log(`     - Null/empty URL: ${accuracyMetrics.filteredOut.nullUrl}`);
       console.log(`     - Google redirect URLs: ${accuracyMetrics.filteredOut.googleRedirect}`);
       console.log(`     - Wrong domain: ${accuracyMetrics.filteredOut.wrongDomain}`);
+      console.log(`     - Wrong Medium publication / path: ${accuracyMetrics.filteredOut.wrongPublication}`);
       console.log(`     - Generic/homepage URLs: ${accuracyMetrics.filteredOut.genericUrl}`);
       console.log(`     - Short path (< 11 chars): ${accuracyMetrics.filteredOut.shortPath}`);
       console.log(`     - Invalid URL format: ${accuracyMetrics.filteredOut.invalidUrl}`);
@@ -592,7 +637,7 @@ Return ONLY valid JSON: an array of up to ${maxItems} objects {title, url, descr
         const fo = accuracyMetrics.filteredOut;
         console.log(
           `🔬 [ADK][V2][diag] attempt=${qi + 1}/${maxAttempts} rawJson=${articlesBeforeFilter} afterUrlFilters=${filteredArticles.length} afterDateFilter=${dateFilteredArticles.length} responseChars=${fullResponse.length} events=${eventCount} ` +
-            `filteredWrongDomain=${fo.wrongDomain} googleRedirect=${fo.googleRedirect} outsideDate=${fo.outsideDateRange || 0} shortPath=${fo.shortPath} genericUrl=${fo.genericUrl}`
+            `filteredWrongDomain=${fo.wrongDomain} wrongPublication=${fo.wrongPublication || 0} googleRedirect=${fo.googleRedirect} outsideDate=${fo.outsideDateRange || 0} shortPath=${fo.shortPath} genericUrl=${fo.genericUrl}`
         );
       }
       
