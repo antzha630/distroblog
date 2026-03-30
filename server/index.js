@@ -2639,7 +2639,7 @@ app.post('/api/maintenance/backfill-pubdates', async (req, res) => {
 // ADK Web UI - Test agent with custom prompt
 app.post('/api/adk/test', async (req, res) => {
   try {
-    const { url, customInstruction } = req.body;
+    const { url, customInstruction, daysBack } = req.body;
     
     if (!url) {
       return res.status(400).json({ error: 'URL is required' });
@@ -2739,17 +2739,20 @@ Return valid JSON only. If you can't find articles, return [].`;
       const domain = new URL(url).hostname;
       const baseDomain = domain.replace(/^www\./, '');
       
-      // Calculate date cutoff (7 days ago) - same as adkScraper.js
+      const daysBackNum = parseInt(daysBack, 10);
+      const daysBackSafe = Number.isFinite(daysBackNum) && daysBackNum > 0 ? daysBackNum : 7;
+      
+      // Calculate date cutoff (daysBack ago)
       const today = new Date();
       const cutoffDate = new Date(today);
-      cutoffDate.setDate(cutoffDate.getDate() - 7);
+      cutoffDate.setDate(cutoffDate.getDate() - daysBackSafe);
       const cutoffDateStr = cutoffDate.toISOString().split('T')[0];
       const todayStr = today.toISOString().split('T')[0];
       
       // Use natural, conversational prompt - matches improved adkScraper.js style
       const searchQuery = `Find the most recent blog posts or articles from the ${baseDomain} website.
 
-I'm looking for articles published in the last week (after ${cutoffDateStr}). Today is ${todayStr}.
+I'm looking for articles published in the last ${daysBackSafe} days (after ${cutoffDateStr}). Today is ${todayStr}.
 
 Please search and return up to 3 recent articles as a JSON array with these fields:
 - title: the headline
