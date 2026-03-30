@@ -847,7 +847,9 @@ class FeedMonitor {
                   // PLAYWRIGHT FALLBACK: If still no date, try Playwright for JS-rendered dates
                   // Only for manual checks due to memory constraints, or when memory is low
                   const currentMemMBForDate = getMemoryMB();
-                  const canUsePlaywrightForDate = isManual || currentMemMBForDate < 250; // Allow Playwright if memory is low
+                  // V2: do not use Playwright at all (ADK-only + static enrichment).
+                  const canUsePlaywrightForDate =
+                    config.mode !== 'v2' && (isManual || currentMemMBForDate < 250); // Allow Playwright if memory is low
                   if (canUsePlaywrightForDate && (!improvedDate || isNaN(improvedDate.getTime()))) {
                     try {
                       const playwrightDate = await this.extractDatePlaywright(article.link);
@@ -2734,6 +2736,8 @@ class FeedMonitor {
   // Extract article metadata from a URL
   // Tries Playwright first (for JS-rendered sites), then falls back to static scraping
   async extractArticleMetadata(url) {
+    // V2: skip Playwright entirely for speed; static HTML parsing only.
+    if (config.mode !== 'v2') {
     // Try Playwright first for JS-rendered content
     try {
       const { chromium } = require('playwright');
@@ -2990,6 +2994,7 @@ class FeedMonitor {
       }
     } catch (playwrightNotAvailable) {
       // Playwright not available - use static scraping
+    }
     }
     
     // Fallback to static scraping (for non-JS sites or if Playwright fails)

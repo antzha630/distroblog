@@ -1,6 +1,7 @@
  // ADK (Agent Development Kit) implementation using Google Search
 const axios = require('axios');
 const config = require('../config');
+const articleEnrichment = require('./articleEnrichment');
 
 /**
  * Medium hosts multiple publications on the same domain; domain match alone is not enough.
@@ -19,6 +20,48 @@ function mediumPublicationPathPrefix(sourceUrl) {
   if (p.endsWith('/feed')) p = p.slice(0, -5);
   if (!p || p === '/') return null;
   return p;
+}
+
+function tokenizeForSimilarity(text) {
+  if (!text || typeof text !== 'string') return [];
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length >= 3);
+}
+
+function overlapScore(a, b) {
+  const ta = tokenizeForSimilarity(a);
+  const tb = tokenizeForSimilarity(b);
+  if (!ta.length || !tb.length) return 0;
+  const setA = new Set(ta);
+  const setB = new Set(tb);
+  let inter = 0;
+  for (const w of setA) {
+    if (setB.has(w)) inter++;
+  }
+  return inter / Math.max(setA.size, setB.size);
+}
+
+function extractHtmlTitle(html) {
+  if (!html || typeof html !== 'string') return null;
+  const m = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  if (!m || !m[1]) return null;
+  return m[1].replace(/\s+/g, ' ').trim();
+}
+
+function normalizePageTitle(rawTitle, sourceDomain) {
+  if (!rawTitle) return rawTitle;
+  let t = rawTitle.trim();
+  const domainToken = (sourceDomain || '').replace(/^www\./, '').split('.')[0];
+  // Remove common site suffixes while keeping the main article headline.
+  t = t.replace(/\s*\|\s*[^|]+$/, '').trim();
+  if (domainToken) {
+    const re = new RegExp(`\\s*[-|]\\s*${domainToken}\\s*$`, 'i');
+    t = t.replace(re, '').trim();
+  }
+  return t;
 }
 // This uses an agent with Google Search tool instead of scraping HTML
 // Based on: https://google.github.io/adk-docs/
@@ -70,8 +113,8 @@ class ADKScraper {
       // Pick the first available model that supports Google Search
       // Updated January 2026: gemini-2.0-flash-exp was deprecated, using GA models
       const candidateModels = [
-        'gemini-2.0-flash',             // GA version (preferred, replaced -exp)
-        'gemini-2.5-flash',             // Latest stable flash model
+        'gemini-2.5-flash',             // Prefer stronger quality first
+        'gemini-2.0-flash',             // Stable fallback
         'gemini-2.5-flash-lite',        // Lightweight version
         'gemini-1.5-flash-latest',      // common alias
         'gemini-1.5-flash',             // fallback
@@ -165,6 +208,60 @@ Example (your entire final message must look like this, nothing else):
   }
 
   /**
+   * Build source-specific memory from previously stored successful articles.
+   * This acts like lightweight long-term memory: URL shape, recent examples, and
+   * date behavior for each source to steer the agent toward canonical outputs.
+   */
+  async buildSourceMemoryHint(source, maxExamples = 5) {
+    if (!source || !source.id) return '';
+    try {
+      const database = require('../database-postgres');
+      const prev = await database.getArticlesBySourceId(source.id, maxExamples);
+      if (!Array.isArray(prev) || prev.length === 0) return '';
+
+      const examples = prev
+        .map((a) => {
+          const link = (a.link || '').trim();
+          if (!link) return null;
+          const d = a.pub_date ? String(a.pub_date).slice(0, 10) : 'unknown';
+          return `- ${link} (date: ${d})`;
+        })
+        .filter(Boolean)
+        .slice(0, maxExamples);
+
+      if (examples.length === 0) return '';
+
+      // Extract stable path prefixes from past links (e.g. /blog/, /post/, /news/)
+      const pathCounts = new Map();
+      for (const a of prev) {
+        try {
+          const u = new URL(a.link);
+          const p = u.pathname || '/';
+          const seg = p.split('/').filter(Boolean);
+          const prefix = seg.length >= 1 ? `/${seg[0]}/` : '/';
+          pathCounts.set(prefix, (pathCounts.get(prefix) || 0) + 1);
+        } catch {
+          // ignore malformed historical links
+        }
+      }
+      const topPrefixes = Array.from(pathCounts.entries())
+        .sort((x, y) => y[1] - x[1])
+        .slice(0, 3)
+        .map(([p]) => p);
+      const prefixHint = topPrefixes.length ? topPrefixes.join(', ') : 'unknown';
+
+      return `\nMemory from previous successful articles for this source:
+Likely URL path prefixes: ${prefixHint}
+Examples of canonical article URLs:
+${examples.join('\n')}
+Prefer URL structures similar to these examples when selecting results.\n`;
+    } catch (e) {
+      console.log(`⚠️ [ADK][V2][diag] source-memory unavailable for ${source.name}: ${e.message}`);
+      return '';
+    }
+  }
+
+  /**
    * Find articles from a website URL using ADK agent with Google Search
    * Returns articles in RSS-like format for compatibility
    */
@@ -223,10 +320,14 @@ Example (your entire final message must look like this, nothing else):
       const sourcePathHint = sourcePath && sourcePath !== '/'
         ? `\nPath scope hint: prioritize results under "${sourcePath}/" on ${baseDomain}.`
         : '';
+      const sourceMemoryHint = config.mode === 'v2'
+        ? await this.buildSourceMemoryHint(source, 5)
+        : '';
 
       const primarySearchQuery = `Task: find up to ${maxItems} blog or news articles on ${baseDomain} published within the last ${daysBack} days (after ${cutoffDateStr}). Today is ${todayStr}.
 Source URL for scope: ${source.url}
 ${mediumHint}
+${sourceMemoryHint}
 Step 1 — Use Google Search now with queries such as:
 site:${baseDomain} blog
 site:${baseDomain} news OR post OR article
@@ -255,6 +356,7 @@ Today is ${todayStr}.
 Source URL for scope: ${source.url}
 ${mediumHint}
 ${sourcePathHint}
+${sourceMemoryHint}
 Return ONLY valid JSON: an array of up to ${maxItems} objects {title, url, description, datePublished}. No markdown, no prose.
 You MUST call Google Search before final output.
 If still nothing: []`;
@@ -267,6 +369,7 @@ Run at least two searches:
 Source URL for scope: ${source.url}
 ${mediumHint}
 ${sourcePathHint}
+${sourceMemoryHint}
 Return only a valid JSON array with up to ${maxItems} objects: {title,url,description,datePublished}.
 No prose. No markdown fences. If nothing qualifies, output exactly: []`;
 
@@ -780,44 +883,150 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
         }
       });
 
-      // POST-FILTER: Remove articles outside the date range (safety net)
-      // Even if the prompt asks for recent articles, the model may return older ones
-      const articlesBeforeDateFilter = filteredArticles.length;
-      const dateFilteredArticles = filteredArticles.filter(article => {
+      // Date-range filter runs AFTER the quality pass so we can use HTML metadata (JSON-LD, og:, etc.)
+      // instead of trusting ADK-only dates alone.
+      const articlesAfterUrlFilter = filteredArticles;
+
+      // Final quality pass: verify URLs, repair title mismatches, and extract publish dates from HTML
+      // (same response body as verification — no extra HTTP round trip).
+      const validatedArticles = [];
+      for (const article of articlesAfterUrlFilter) {
+        const articleUrl = article.url || article.link;
+        if (!articleUrl || typeof articleUrl !== 'string') continue;
+        try {
+          const resp = await axios.get(articleUrl, {
+            timeout: 10000,
+            maxRedirects: 5,
+            validateStatus: (status) => status < 500,
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (compatible; ScoopstreamBot/1.0)'
+            }
+          });
+
+          // Hard-drop dead links.
+          if (resp.status === 404) {
+            console.log(`⚠️ [ADK][QUALITY] Dropping 404 article URL: ${articleUrl}`);
+            continue;
+          }
+
+          // 403 is common for Medium anti-bot; keep if URL pattern is valid.
+          if (resp.status >= 400 && resp.status !== 403 && resp.status !== 429) {
+            console.log(`⚠️ [ADK][QUALITY] Dropping non-OK article URL (${resp.status}): ${articleUrl}`);
+            continue;
+          }
+
+          let finalUrl = articleUrl;
+          if (resp.request?.res?.responseUrl) {
+            finalUrl = resp.request.res.responseUrl;
+          } else if (resp.request?.responseURL) {
+            finalUrl = resp.request.responseURL;
+          }
+
+          const next = { ...article, url: finalUrl, link: finalUrl };
+          const htmlTitle = normalizePageTitle(
+            extractHtmlTitle(typeof resp.data === 'string' ? resp.data : ''),
+            sourceDomain
+          );
+          if (htmlTitle && next.title) {
+            const score = overlapScore(next.title, htmlTitle);
+            if (score < 0.22) {
+              console.log(
+                `⚠️ [ADK][QUALITY] Title mismatch (score=${score.toFixed(2)}), replacing model title with page title.`
+              );
+              next.title = htmlTitle;
+            }
+          } else if (htmlTitle && !next.title) {
+            next.title = htmlTitle;
+          }
+
+          const rawHtml = typeof resp.data === 'string' ? resp.data : '';
+          if (rawHtml) {
+            const iso = articleEnrichment.extractDateFromHtml(rawHtml);
+            if (iso) {
+              const d = new Date(iso);
+              if (!isNaN(d.getTime())) {
+                const ymd = d.toISOString().slice(0, 10);
+                const prev = next.datePublished;
+                next.datePublished = ymd;
+                if (prev && String(prev).slice(0, 10) !== ymd) {
+                  console.log(`📅 [ADK][DATE] HTML metadata: ${ymd} (ADK had "${prev}")`);
+                } else if (!prev) {
+                  console.log(`📅 [ADK][DATE] Filled missing date from page metadata: ${ymd}`);
+                }
+              }
+            }
+          }
+
+          validatedArticles.push(next);
+        } catch (e) {
+          // Keep article only for transient network issues on valid-looking URLs.
+          // If we cannot verify due to timeout, we prefer recall over silent loss.
+          if (e.code === 'ECONNABORTED' || e.code === 'ETIMEDOUT') {
+            console.log(`⚠️ [ADK][QUALITY] URL verify timeout, keeping candidate: ${articleUrl}`);
+            validatedArticles.push(article);
+          } else {
+            console.log(`⚠️ [ADK][QUALITY] URL verify error, dropping: ${articleUrl} (${e.message})`);
+          }
+        }
+      }
+      if (validatedArticles.length > 0) {
+        const dropped = articlesAfterUrlFilter.length - validatedArticles.length;
+        if (dropped > 0) {
+          console.log(`🧪 [ADK][QUALITY] Dropped ${dropped} low-quality/invalid article candidate(s)`);
+        }
+      }
+
+      const baseForDateFilter =
+        validatedArticles.length > 0 ? validatedArticles : articlesAfterUrlFilter;
+      const articlesBeforeDateFilter = baseForDateFilter.length;
+
+      const dateFilteredArticles = baseForDateFilter.filter((article) => {
         if (!article.datePublished) {
-          // If no date, we can't filter - keep it but log
-          console.log(`⚠️ [ADK] [DATE] Article has no date, keeping: "${article.title?.substring(0, 50) || 'unknown'}"`);
+          console.log(
+            `⚠️ [ADK] [DATE] Article has no date after HTML enrichment, keeping: "${article.title?.substring(0, 50) || 'unknown'}"`
+          );
           return true;
         }
-        
         try {
           const articleDate = new Date(article.datePublished);
           if (isNaN(articleDate.getTime())) {
-            console.log(`⚠️ [ADK] [DATE] Invalid date format "${article.datePublished}", keeping article: "${article.title?.substring(0, 50) || 'unknown'}"`);
+            console.log(
+              `⚠️ [ADK] [DATE] Invalid date format "${article.datePublished}", keeping article: "${article.title?.substring(0, 50) || 'unknown'}"`
+            );
             return true;
           }
-          
-          // Check if article is within the last `daysBack` days
           if (articleDate < cutoffDate) {
-            console.log(`⚠️ [ADK] [DATE] Filtering out old article (${article.datePublished} < ${cutoffDateStr}): "${article.title?.substring(0, 50) || 'unknown'}"`);
+            console.log(
+              `⚠️ [ADK] [DATE] Filtering out old article (${article.datePublished} < ${cutoffDateStr}): "${article.title?.substring(0, 50) || 'unknown'}"`
+            );
             accuracyMetrics.filteredOut.outsideDateRange = (accuracyMetrics.filteredOut.outsideDateRange || 0) + 1;
             return false;
           }
-          
           return true;
         } catch (e) {
           console.log(`⚠️ [ADK] [DATE] Error parsing date "${article.datePublished}": ${e.message}`);
-          return true; // Keep on error
+          return true;
         }
       });
-      
+
       const articlesFilteredByDate = articlesBeforeDateFilter - dateFilteredArticles.length;
       if (articlesFilteredByDate > 0) {
-        console.log(`📅 [ADK] [DATE] Filtered out ${articlesFilteredByDate} articles outside date range (before ${cutoffDateStr})`);
+        console.log(
+          `📅 [ADK] [DATE] Filtered out ${articlesFilteredByDate} articles outside date range (before ${cutoffDateStr})`
+        );
       }
-      
+
       const articlesFiltered = articlesBeforeFilter - dateFilteredArticles.length;
-      
+
+      dateFilteredArticles.sort((a, b) => {
+        const dateA = a.datePublished ? new Date(a.datePublished).getTime() : 0;
+        const dateB = b.datePublished ? new Date(b.datePublished).getTime() : 0;
+        if (dateA && dateB) return dateB - dateA;
+        if (dateA && !dateB) return -1;
+        if (!dateA && dateB) return 1;
+        return 0;
+      });
+
       // Log comprehensive ADK accuracy report
       console.log(`\n📊 [ADK] [ACCURACY REPORT] for ${source.name} (${sourceDomain}):`);
       console.log(`   Total articles returned by ADK: ${accuracyMetrics.totalReturned}`);
@@ -834,7 +1043,7 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
       console.log(`     - Short path (< 11 chars): ${accuracyMetrics.filteredOut.shortPath}`);
       console.log(`     - Invalid URL format: ${accuracyMetrics.filteredOut.invalidUrl}`);
       console.log(`     - Outside date range (>${daysBack} days old): ${accuracyMetrics.filteredOut.outsideDateRange}`);
-      const accuracyRate = accuracyMetrics.totalReturned > 0 
+      const accuracyRate = accuracyMetrics.totalReturned > 0
         ? ((accuracyMetrics.validArticles / accuracyMetrics.totalReturned) * 100).toFixed(1)
         : 0;
       console.log(`   Accuracy rate: ${accuracyRate}% (${accuracyMetrics.validArticles}/${accuracyMetrics.totalReturned} valid)\n`);
@@ -842,28 +1051,29 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
       if (config.mode === 'v2') {
         const fo = accuracyMetrics.filteredOut;
         console.log(
-          `🔬 [ADK][V2][diag] attempt=${qi + 1}/${maxAttempts} rawJson=${articlesBeforeFilter} afterUrlFilters=${filteredArticles.length} afterDateFilter=${dateFilteredArticles.length} responseChars=${fullResponse.length} events=${eventCount} ` +
+          `🔬 [ADK][V2][diag] attempt=${qi + 1}/${maxAttempts} rawJson=${articlesBeforeFilter} afterUrlFilters=${filteredArticles.length} afterQuality=${validatedArticles.length} afterDateFilter=${dateFilteredArticles.length} responseChars=${fullResponse.length} events=${eventCount} ` +
             `filteredWrongDomain=${fo.wrongDomain} wrongPublication=${fo.wrongPublication || 0} googleRedirect=${fo.googleRedirect} outsideDate=${fo.outsideDateRange || 0} shortPath=${fo.shortPath} genericUrl=${fo.genericUrl} ` +
             `toolCalls=${toolCallCount} toolResponses=${toolResponseCount} groundingEvents=${groundingEventCount} groundingChunks=${groundingChunkCount}`
         );
       }
-      
+
       if (dateFilteredArticles.length === 0) {
         if (articlesBeforeFilter > 0) {
-          console.log(`⚠️ [ADK] No articles found from ${sourceDomain} domain. ${articlesBeforeFilter} articles from other domains were filtered out.`);
+          console.log(
+            `⚠️ [ADK] No articles found from ${sourceDomain} domain. ${articlesBeforeFilter} articles from other domains were filtered out.`
+          );
         } else {
           console.log(`⚠️ [ADK] No articles found from ${sourceDomain} domain.`);
         }
       } else {
-        console.log(`✅ [ADK] Found ${dateFilteredArticles.length} articles from ${sourceDomain} domain${articlesFiltered > 0 ? ` (${articlesFiltered} external articles filtered out)` : ''}`);
+        console.log(
+          `✅ [ADK] Found ${dateFilteredArticles.length} articles from ${sourceDomain} domain${articlesFiltered > 0 ? ` (${articlesFiltered} external articles filtered out)` : ''}`
+        );
       }
 
-      // Store scraping result for health tracking (non-blocking)
-      // This is optional - don't let database errors stop scraping
       if (source.id) {
         try {
           const database = require('../database-postgres');
-          // Use a timeout to prevent hanging if database is having issues
           await Promise.race([
             database.updateScrapingResult(source.id, {
               articlesFound: articlesBeforeFilter,
@@ -874,34 +1084,20 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
               domain: sourceDomain,
               method: 'ADK_AGENT'
             }),
-            new Promise((_, reject) => 
-              setTimeout(() => reject(new Error('Database query timeout')), 5000)
-            )
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Database query timeout')), 5000))
           ]);
         } catch (err) {
-          // Silently ignore database errors - scraping was successful, that's what matters
-          // Only log if it's not a timeout/connection error (those are expected with poolers)
           if (err.code !== 'ETIMEDOUT' && err.code !== 'ECONNRESET' && !err.message.includes('timeout')) {
             console.warn(`⚠️  [ADK] Could not store scraping result for ${source.name}:`, err.message);
           }
         }
       }
 
-      // Sort articles by date (most recent first) before limiting
-      // Articles with dates come first, sorted by date (newest first)
-      dateFilteredArticles.sort((a, b) => {
-        const dateA = a.datePublished ? new Date(a.datePublished).getTime() : 0;
-        const dateB = b.datePublished ? new Date(b.datePublished).getTime() : 0;
-        if (dateA && dateB) return dateB - dateA; // Newest first
-        if (dateA && !dateB) return -1; // Articles with dates first
-        if (!dateA && dateB) return 1;
-        return 0; // Both have no date, keep original order
-      });
-
       // Return lightweight articles (limit to 3 most recent articles)
       // This ensures we get the most recent articles from each source
       // Resolve redirects to get canonical URLs (ADK may return long slugs that redirect to shorter ones)
-      const lightweightArticlesPromises = dateFilteredArticles.slice(0, maxItems).map(async (article) => {
+      const finalCandidates = dateFilteredArticles.slice(0, maxItems);
+      const lightweightArticlesPromises = finalCandidates.map(async (article) => {
         let articleUrl = article.url || article.link;
         if (articleUrl && !articleUrl.startsWith('http')) {
           if (articleUrl.startsWith('/')) {

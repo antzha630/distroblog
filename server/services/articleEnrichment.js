@@ -93,6 +93,240 @@ class ArticleEnrichmentService {
   }
 
   /**
+   * True if JSON-LD @type matches Article-like types (string or array).
+   */
+  _isArticleLdType(type) {
+    if (!type) return false;
+    const types = Array.isArray(type) ? type : [type];
+    // Many CMSes use WebPage as the @type for an article-like page.
+    const want = new Set(['Article', 'BlogPosting', 'NewsArticle', 'WebPage']);
+    return types.some((t) => want.has(t));
+  }
+
+  /** JSON-LD often uses datePublished: { start: "YYYY-MM-DD" } (Contentful-style). */
+  _coerceLdDateValue(raw) {
+    if (raw == null) return null;
+    if (typeof raw === 'string') return raw;
+    if (typeof raw === 'object') {
+      if (typeof raw.start === 'string') return raw.start;
+      if (typeof raw.end === 'string') return raw.end;
+    }
+    return null;
+  }
+
+  /**
+   * Walk JSON-LD node(s) for datePublished / dateCreated / dateModified.
+   */
+  _parseDateFromJsonLdNode(obj, depth = 0) {
+    if (!obj || depth > 12) return null;
+    if (Array.isArray(obj)) {
+      for (const item of obj) {
+        const d = this._parseDateFromJsonLdNode(item, depth + 1);
+        if (d) return d;
+      }
+      return null;
+    }
+    if (typeof obj !== 'object') return null;
+
+    if (this._isArticleLdType(obj['@type'])) {
+      const raw =
+        obj.datePublished || obj.dateCreated || obj.dateModified || obj.uploadDate;
+      const coerced = this._coerceLdDateValue(raw) ?? (typeof raw === 'string' ? raw : null);
+      const parsed = coerced ? this.parseDate(coerced) : null;
+      if (parsed) return parsed;
+    }
+
+    if (obj['@graph']) {
+      const d = this._parseDateFromJsonLdNode(obj['@graph'], depth + 1);
+      if (d) return d;
+    }
+    for (const k of Object.keys(obj)) {
+      if (k.startsWith('@')) continue;
+      const v = obj[k];
+      if (v && typeof v === 'object') {
+        const d = this._parseDateFromJsonLdNode(v, depth + 1);
+        if (d) return d;
+      }
+    }
+    return null;
+  }
+
+  /** Prefer paths that look like real publish metadata (not arbitrary "date" fields). */
+  _nextDataPathScore(path) {
+    const p = path.toLowerCase();
+    if (p.includes('datepublished')) return 100;
+    if (p.includes('publishdate') || p.includes('publishedat')) return 95;
+    if (p.includes('pubdate')) return 90;
+    if (p.includes('article:published')) return 98;
+    if (p.includes('publicationdate')) return 93;
+    if (p.includes('.meta.date') || p.endsWith('meta.date')) return 88;
+    if (p.endsWith('.date') && p.includes('meta')) return 85;
+    if (p.endsWith('.date') && !p.includes('update') && !p.includes('modified')) return 65;
+    if (p.includes('createdat') && !p.includes('user') && !p.includes('account')) return 55;
+    if (p.includes('updatedat') || p.includes('datemodified') || p.includes('modified')) return 25;
+    return 0;
+  }
+
+  /**
+   * Parse Next.js __NEXT_DATA__ JSON for embedded publish dates (react.dev, many marketing sites).
+   * Skips when many high-confidence dates appear (typical blog index pages).
+   */
+  _extractDateFromNextData(parsed) {
+    const candidates = [];
+    const walk = (node, path, depth) => {
+      if (depth > 18 || node == null) return;
+      if (typeof node === 'string') {
+        const score = this._nextDataPathScore(path);
+        if (score > 0) {
+          const iso = this.parseDate(node);
+          if (iso) candidates.push({ score, iso, path });
+        }
+        return;
+      }
+      if (typeof node !== 'object') return;
+      if (Array.isArray(node)) {
+        node.forEach((item, i) => walk(item, `${path}[${i}]`, depth + 1));
+        return;
+      }
+      for (const k of Object.keys(node)) {
+        const nextPath = path ? `${path}.${k}` : k;
+        walk(node[k], nextPath, depth + 1);
+      }
+    };
+    walk(parsed, '', 0);
+    const strong = candidates.filter((c) => c.score >= 90);
+    if (strong.length > 2) return null;
+    if (!candidates.length) return null;
+    candidates.sort((a, b) => b.score - a.score || new Date(b.iso).getTime() - new Date(a.iso).getTime());
+    return candidates[0].iso;
+  }
+
+  _extractDateFromNextDataHtml(html) {
+    const m = html.match(/<script\s+id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i);
+    if (!m) return null;
+    try {
+      return this._extractDateFromNextData(JSON.parse(m[1]));
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Extract publication date from raw HTML (no network). Same heuristics as fetch path.
+   * Used by ADK quality pass to avoid a second HTTP request.
+   * @param {string} html
+   * @returns {string|null} ISO date string or null
+   */
+  extractDateFromHtml(html) {
+    if (!html || typeof html !== 'string') return null;
+    try {
+      const $ = cheerio.load(html);
+
+      // Avoid [class*="date"] etc.: listing pages often expose many card dates and we pick the wrong one.
+      const dateSelectors = [
+        'meta[property="article:published_time"]',
+        'meta[name="article:published_time"]',
+        'meta[property="og:published_time"]',
+        'meta[property="og:article:published_time"]',
+        'meta[property="article:published"]',
+        'meta[name="publishdate"]',
+        'meta[name="pubdate"]',
+        'meta[name="date"]',
+        'meta[name="DC.date"]',
+        'meta[property="published_time"]',
+        'time[datetime]',
+        'time[pubdate]',
+        '[datetime]',
+        '[data-date]',
+        '[data-published]',
+      ];
+
+      for (const selector of dateSelectors) {
+        const el = $(selector).first();
+        if (el && el.length) {
+          const val =
+            el.attr('content') ||
+            el.attr('datetime') ||
+            el.attr('date') ||
+            el.attr('data-date') ||
+            el.attr('data-published') ||
+            el.text();
+          if (val) {
+            const parsed = this.parseDate(val.trim());
+            if (parsed) return parsed;
+          }
+        }
+      }
+
+      try {
+        $('script').each((_, script) => {
+          const type = (($(script).attr('type') || '').split(';')[0]).trim().toLowerCase();
+          if (type !== 'application/ld+json') return;
+          const jsonText = $(script).html();
+          if (!jsonText) return;
+          try {
+            const data = JSON.parse(jsonText);
+            const cand = this._parseDateFromJsonLdNode(data);
+            if (cand) throw new Error(`DATE_FOUND:${cand}`);
+          } catch (e) {
+            if (e.message?.startsWith('DATE_FOUND:')) throw e;
+          }
+        });
+      } catch (e) {
+        if (e.message?.startsWith('DATE_FOUND:')) {
+          return e.message.replace('DATE_FOUND:', '');
+        }
+      }
+
+      const fromNext = this._extractDateFromNextDataHtml(html);
+      if (fromNext) return fromNext;
+
+      // Inline JS datePublishedRaw (sites that inject JSON-LD on DOMContentLoaded).
+      // Example: const datePublishedRaw = "Feb 06, 2026"; const datePublished = toISO(datePublishedRaw);
+      try {
+        const inlineJsDatePatterns = [
+          /datePublishedRaw\s*[:=]\s*["']([^"']+)["']/i,
+          /publishedAtRaw\s*[:=]\s*["']([^"']+)["']/i,
+          /pubDateRaw\s*[:=]\s*["']([^"']+)["']/i,
+          /datePublished\s*Raw\s*[:=]\s*["']([^"']+)["']/i,
+          // last resort: direct datePublished assignment (may include ISO already)
+          /datePublished\s*[:=]\s*["']([^"']+)["']/i,
+          /publishedAt\s*[:=]\s*["']([^"']+)["']/i,
+        ];
+
+        for (const re of inlineJsDatePatterns) {
+          const m = html.match(re);
+          if (!m) continue;
+          const val = m[1];
+          const parsed = this.parseDate(val);
+          if (parsed) return parsed;
+        }
+      } catch {
+        // ignore inline JS detection failures
+      }
+
+      // Only scrape visible text when there is exactly one article root — listing pages embed many dates.
+      let singleArticle = $('article');
+      singleArticle = singleArticle.length === 1 ? singleArticle.first() : null;
+      if (!singleArticle || !singleArticle.length) {
+        const ra = $('[role="article"]');
+        if (ra.length === 1) singleArticle = ra.first();
+      }
+      if (singleArticle && singleArticle.length) {
+        const headerText = singleArticle.find('header').first().text();
+        const fromHeader = this.parseDate(headerText);
+        if (fromHeader) return fromHeader;
+        const fromBody = this.parseDate(singleArticle.text().substring(0, 4000));
+        if (fromBody) return fromBody;
+      }
+
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Extract date from article page
    */
   async extractDateFromPage(url) {
@@ -106,95 +340,7 @@ class ArticleEnrichmentService {
       });
 
       const html = response.data;
-      const $ = cheerio.load(html);
-
-      // Try structured selectors first (most reliable)
-      const dateSelectors = [
-        'meta[property="article:published_time"]',
-        'meta[name="article:published_time"]',
-        'meta[property="og:article:published_time"]',
-        'meta[property="article:published"]',
-        'meta[name="publishdate"]',
-        'meta[name="pubdate"]',
-        'meta[name="date"]',
-        'meta[name="DC.date"]',
-        'meta[property="published_time"]',
-        'time[datetime]',
-        'time[pubdate]',
-        'time',
-        '[datetime]',
-        '[data-date]',
-        '[data-published]',
-        '[class*="date"]',
-        '[class*="published"]',
-        '[class*="publish"]',
-        '[class*="pub-date"]',
-        '[class*="post-date"]',
-      ];
-
-      for (const selector of dateSelectors) {
-        const el = $(selector).first();
-        if (el && el.length) {
-          const val = el.attr('content') ||
-                      el.attr('datetime') ||
-                      el.attr('date') ||
-                      el.attr('data-date') ||
-                      el.attr('data-published') ||
-                      el.text();
-          if (val) {
-            const parsed = this.parseDate(val);
-            if (parsed) {
-              return parsed;
-            }
-          }
-        }
-      }
-
-      // Try JSON-LD
-      try {
-        $('script[type="application/ld+json"]').each((_, script) => {
-          const jsonText = $(script).html();
-          if (!jsonText) return;
-          try {
-            const data = JSON.parse(jsonText);
-            const pick = (obj) => {
-              if (!obj) return null;
-              return this.parseDate(obj.datePublished || obj.dateCreated || obj.dateModified);
-            };
-            let cand = pick(data);
-            if (!cand && Array.isArray(data)) {
-              for (const item of data) {
-                cand = pick(item);
-                if (cand) break;
-              }
-            }
-            if (cand) {
-              throw new Error(`DATE_FOUND:${cand}`);
-            }
-          } catch (e) {
-            if (e.message?.startsWith('DATE_FOUND:')) throw e;
-          }
-        });
-      } catch (e) {
-        if (e.message?.startsWith('DATE_FOUND:')) {
-          return e.message.replace('DATE_FOUND:', '');
-        }
-      }
-
-      // Try article header area
-      const articleSelectors = ['article header', '[class*="article-header"]', '[class*="post-header"]', 'main header'];
-      for (const selector of articleSelectors) {
-        const header = $(selector).first();
-        if (header && header.length) {
-          const parsed = this.parseDate(header.text());
-          if (parsed) return parsed;
-        }
-      }
-
-      // Scan first 3000 chars of body text
-      const bodyText = $('article, [role="article"], main').first().text() || $('body').text();
-      return this.parseDate(bodyText.substring(0, 3000));
-
+      return this.extractDateFromHtml(typeof html === 'string' ? html : '');
     } catch (error) {
       if (error.response?.status !== 404) {
         console.log(`⚠️ [ENRICH] Date extraction failed for ${url.substring(0, 60)}...: ${error.message}`);

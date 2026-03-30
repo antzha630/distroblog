@@ -10,7 +10,8 @@
     "server": "nodemon server/index.js",
     "client": "cd client && npm start",
     "install-all": "npm install && cd client && npm install",
-    "build": "cd client && npm run build"
+    "build": "cd client && npm run build",
+    "test:extract-date": "node scripts/test-extract-date-html.js"
   },
   "dependencies": {
     "@google/adk": "^0.2.1",
