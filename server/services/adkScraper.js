@@ -84,16 +84,18 @@ class ADKScraper {
         name: 'article_finder',
         model: llm, // Pass the LLM object directly (not model name string)
         description: 'Agent that finds recent blog posts and articles from websites using Google Search.',
-        instruction: `You are a research assistant that finds recent blog posts and articles from websites using search.
+        instruction: `You are a research assistant. Your job is to find recent blog posts on a specific website using the Google Search tool.
 
-When asked about a website, search for their latest blog posts or news articles. For each search result you use, output one article object: the headline and the link must come from the same result (do not combine a title from one result with a URL from another).
+Non-negotiable rules:
+1) You MUST use the Google Search tool at least once before your final answer. Do not answer from memory alone.
+2) Your final reply MUST be a single JSON array only — no markdown fences, no headings, no apologies, no "I could not find" paragraphs. If there are zero matches, output exactly: []
+3) Each item must pair title and url from the same search result (never mix title from one result with url from another).
+4) URLs must be direct https links on the requested site (or its subdomains when that site uses them); never use Google redirect or vertexaisearch URLs.
 
-Try to include publication date when visible (e.g. "3 days ago", "Jan 15, 2026") as YYYY-MM-DD; use null only if unknown.
+Fields per object: title (string), url (string), description (string, short), datePublished (YYYY-MM-DD or null if unknown).
 
-Return a JSON array only. Example shape:
-[{"title": "Example Post Title from the site", "url": "https://example.com/blog/example-post-title", "description": "Brief summary.", "datePublished": "2026-01-15"}]
-
-Each object must have: title (full headline), url (direct article URL on the target domain), description (short summary), datePublished (YYYY-MM-DD or null). Return [] if no articles found.`,
+Example (your entire final message must look like this, nothing else):
+[{"title":"Example Post","url":"https://example.com/blog/post-slug","description":"One or two sentences.","datePublished":"2026-03-20"}]`,
         tools: [adk.GOOGLE_SEARCH] // Use Google Search tool (equivalent to Python's google_search)
       });
 
@@ -168,29 +170,30 @@ Each object must have: title (full headline), url (direct article URL on the tar
 
       console.log(`📅 [ADK] Date filter: articles after ${cutoffDateStr} (today is ${todayStr})`);
 
-      const primarySearchQuery = `Find the most recent blog posts or articles from the ${baseDomain} website.
+      const primarySearchQuery = `Task: find up to ${maxItems} blog or news articles on ${baseDomain} published on or after ${cutoffDateStr}. Today is ${todayStr}.
 
-I'm looking for articles published in the last week (after ${cutoffDateStr}). Today is ${todayStr}.
+Step 1 — Use Google Search now with queries such as:
+site:${baseDomain} blog
+site:${baseDomain} news OR post OR article
+(adjust if the site uses a subdomain like blog.${baseDomain}.)
 
-Please search and return up to ${maxItems} recent articles as a JSON array with these fields:
-- title: the full article headline
-- url: the direct link to the article on ${baseDomain} (not a Google redirect URL)
-- description: 2-3 sentence summary of the article content
-- datePublished: the publication date in YYYY-MM-DD format (convert "X days ago" to actual dates using today's date ${todayStr})
+Step 2 — From search snippets and result URLs, build the JSON array.
 
-IMPORTANT: 
-- For datePublished, if the search result shows "3 days ago" and today is ${todayStr}, calculate the actual date.
-- I need real article URLs from ${baseDomain}, not Google redirect links starting with "vertexaisearch.cloud.google.com".
+Output rules — reply with JSON only:
+- Array of objects: title, url, description, datePublished (YYYY-MM-DD or null).
+- url must be a normal https URL on ${baseDomain} (or obvious subdomain of that brand). No vertexaisearch / Google redirect URLs.
+- If nothing qualifies, reply with exactly: []
 
-Return only the JSON array, no other text.`;
+Do not write explanations or apologies.`;
 
-      const retrySearchQuery = `RETRY with a different search strategy. Use Google Search with queries like:
-site:${baseDomain} (blog OR news OR post OR article)
-after:${cutoffDateStr}
+      const retrySearchQuery = `Retry: previous answer was empty or not valid JSON.
+
+Use Google Search again with different queries, e.g.:
+site:${baseDomain} "blog"
+site:${baseDomain} after:${cutoffDateStr}
 Today is ${todayStr}.
 
-Return ONLY a JSON array (no markdown, no prose) of up to ${maxItems} objects with: title, url, description, datePublished.
-Each url must be a direct article URL on ${baseDomain} only (not Google redirect / vertexaisearch). If date is unknown use null for datePublished.`;
+Return ONLY valid JSON: an array of up to ${maxItems} objects {title, url, description, datePublished}. No markdown, no prose. If still nothing: []`;
 
       let lightweightArticles = [];
       let lastRawCount = 0;
@@ -234,7 +237,8 @@ Each url must be a direct article URL on ${baseDomain} only (not Google redirect
           parts: [{ text: searchQuery }]
         },
         runConfig: {
-          maxLlmCalls: 5 // Limit to prevent infinite loops
+          // Search + tool result + final JSON may need several turns; cap to control cost
+          maxLlmCalls: 8
         }
       })) {
         eventCount++;
@@ -334,6 +338,15 @@ Each url must be a direct article URL on ${baseDomain} only (not Google redirect
       
       if (fullResponse) {
         console.log(`📝 [ADK] Full agent response (first 1000 chars):\n${fullResponse.substring(0, 1000)}${fullResponse.length > 1000 ? '...' : ''}`);
+        if (
+          config.mode === 'v2' &&
+          /unable to find|could not find|I'm sorry|I cannot|no recent blog/i.test(fullResponse) &&
+          !/\[[\s\S]*"title"[\s\S]*\]/.test(fullResponse)
+        ) {
+          console.log(
+            `⚠️ [ADK][V2][diag] Prose/refusal-style reply with no JSON objects — likely skipped tool use or ignored JSON-only instruction.`
+          );
+        }
       } else {
         console.log(`⚠️ [ADK] No response text received from agent`);
         console.log(`⚠️ [ADK] Last event structure: ${JSON.stringify(lastEvent || {}).substring(0, 1000)}`);
