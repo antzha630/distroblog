@@ -432,12 +432,85 @@ Return ONLY valid JSON: an array of up to ${maxItems} objects {title, url, descr
         console.log(`⚠️ [ADK] [ISSUE] No articles found and no response text. Agent may have failed silently or not executed.`);
       }
       
+      // Helper to resolve redirects and get canonical URL.
+      // We use this before domain filtering so grounding redirect links can be
+      // converted into real article URLs instead of being discarded too early.
+      const resolveCanonicalUrl = async (url) => {
+        try {
+          const response = await axios.get(url, {
+            timeout: 10000,
+            maxRedirects: 5,
+            validateStatus: (status) => status >= 200 && status < 400,
+            maxContentLength: 10000,
+            maxBodyLength: 10000,
+          });
+
+          let finalUrl = url;
+          if (response.request?.res?.responseUrl) {
+            finalUrl = response.request.res.responseUrl;
+          } else if (response.request?.responseURL) {
+            finalUrl = response.request.responseURL;
+          } else if (response.headers?.location) {
+            const location = response.headers.location;
+            finalUrl = location.startsWith('http') ? location : new URL(location, url).toString();
+          } else if (response.config?.url && response.config.url !== url && response.config.url.startsWith('http')) {
+            finalUrl = response.config.url;
+          }
+
+          if (finalUrl && finalUrl !== url && finalUrl.startsWith('http')) {
+            return finalUrl;
+          }
+          return url;
+        } catch (e) {
+          return url;
+        }
+      };
+
       // Filter articles to only include those from the same domain
       // Also filter out generic URLs (homepage, base blog URL without article path)
       // AND filter out Google redirect URLs and invalid URLs
       const sourceDomain = new URL(source.url).hostname.replace(/^www\./, '').toLowerCase();
       const sourceUrlObj = new URL(source.url);
       const basePath = sourceUrlObj.pathname.endsWith('/') ? sourceUrlObj.pathname.slice(0, -1) : sourceUrlObj.pathname;
+
+      // Normalize URLs and resolve known grounding redirect links before filtering.
+      let resolvedGroundingRedirects = 0;
+      articles = await Promise.all(
+        articles.map(async (article) => {
+          let articleUrl = article.url || article.link;
+          if (!articleUrl || typeof articleUrl !== 'string') return article;
+
+          if (!articleUrl.startsWith('http')) {
+            try {
+              if (articleUrl.startsWith('/')) {
+                articleUrl = `${sourceUrlObj.protocol}//${sourceUrlObj.host}${articleUrl}`;
+              } else {
+                const p = sourceUrlObj.pathname.replace(/\/[^\/]*$/, '/');
+                articleUrl = `${sourceUrlObj.protocol}//${sourceUrlObj.host}${p}${articleUrl}`;
+              }
+            } catch (e) {
+              return article;
+            }
+          }
+
+          const isGroundingRedirect =
+            articleUrl.includes('vertexaisearch.cloud.google.com') ||
+            articleUrl.includes('grounding-api-redirect') ||
+            articleUrl.includes('google.com/grounding');
+
+          if (isGroundingRedirect) {
+            const canonicalUrl = await resolveCanonicalUrl(articleUrl);
+            if (canonicalUrl !== articleUrl) {
+              resolvedGroundingRedirects++;
+              return { ...article, url: canonicalUrl, link: canonicalUrl };
+            }
+          }
+          return { ...article, url: articleUrl, link: articleUrl };
+        })
+      );
+      if (resolvedGroundingRedirects > 0) {
+        console.log(`🔗 [ADK] Resolved ${resolvedGroundingRedirects} grounding redirect URL(s) before filtering`);
+      }
       
       // First, filter out articles with null/empty titles
       articles = articles.filter(article => {
@@ -706,57 +779,6 @@ Return ONLY valid JSON: an array of up to ${maxItems} objects {title, url, descr
         if (!dateA && dateB) return 1;
         return 0; // Both have no date, keep original order
       });
-
-      // Helper to resolve redirects and get canonical URL
-      // ADK returns URLs from Google Search which may differ from canonical URLs
-      // This follows redirects to get the final URL
-      const resolveCanonicalUrl = async (url) => {
-        try {
-          // Use GET request with redirect following
-          // Track the redirect chain to get the final canonical URL
-          const response = await axios.get(url, {
-            timeout: 10000,
-            maxRedirects: 5,
-            validateStatus: (status) => status >= 200 && status < 400,
-            // Limit response size - we only need headers for redirect detection
-            maxContentLength: 10000, // 10KB should be enough
-            maxBodyLength: 10000,
-          });
-          
-          // Get final URL after redirects - try multiple methods (axios version differences)
-          let finalUrl = url;
-          
-          // Method 1: response.request.res.responseUrl (most common in Node.js axios)
-          if (response.request?.res?.responseUrl) {
-            finalUrl = response.request.res.responseUrl;
-          }
-          // Method 2: response.request.responseURL (alternative property)
-          else if (response.request?.responseURL) {
-            finalUrl = response.request.responseURL;
-          }
-          // Method 3: Check if response has a Location header (shouldn't happen if redirects followed)
-          else if (response.headers?.location) {
-            const location = response.headers.location;
-            finalUrl = location.startsWith('http') ? location : new URL(location, url).toString();
-          }
-          // Method 4: Check response URL from config (might be updated after redirects)
-          else if (response.config?.url && response.config.url !== url && response.config.url.startsWith('http')) {
-            finalUrl = response.config.url;
-          }
-          
-          // Only return different URL if we actually got a redirect and it's valid
-          if (finalUrl && finalUrl !== url && finalUrl.startsWith('http')) {
-            console.log(`🔗 [ADK] Redirect resolved: ${url.substring(url.lastIndexOf('/') + 1).substring(0, 40)}... -> ${finalUrl.substring(finalUrl.lastIndexOf('/') + 1)}`);
-            return finalUrl;
-          }
-          return url;
-        } catch (e) {
-          // If redirect resolution fails (404, timeout, etc.), return original URL
-          // The original URL might still work even if GET request fails
-          // Silently fail - this is expected for some URLs
-          return url;
-        }
-      };
 
       // Return lightweight articles (limit to 3 most recent articles)
       // This ensures we get the most recent articles from each source
