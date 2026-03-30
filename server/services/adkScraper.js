@@ -185,7 +185,9 @@ Example (your entire final message must look like this, nothing else):
       throw new Error('ADK agent not initialized. Check ADK API key environment variable (GOOGLE_GENAI_API_KEY / GEMINI_API_KEY).');
       }
 
-      const maxAttempts = config.mode === 'v2' ? 2 : 1;
+      // V2 gets an extra self-recovery attempt because ADK can occasionally return
+      // malformed/empty outputs even when grounding is available.
+      const maxAttempts = config.mode === 'v2' ? 3 : 1;
       const maxItems = config.mode === 'v2' ? 8 : 3;
       const v2ObsStart = Date.now();
 
@@ -210,6 +212,17 @@ Example (your entire final message must look like this, nothing else):
       const mediumHint = mediumPub
         ? `\nMedium publication: only include article URLs whose path starts with "${mediumPub}/" (same publication as ${source.url}). Do not include other Medium authors or publications.\n`
         : '';
+      const sourcePath = (() => {
+        try {
+          const p = new URL(source.url).pathname || '/';
+          return p.replace(/\/$/, '') || '/';
+        } catch {
+          return '/';
+        }
+      })();
+      const sourcePathHint = sourcePath && sourcePath !== '/'
+        ? `\nPath scope hint: prioritize results under "${sourcePath}/" on ${baseDomain}.`
+        : '';
 
       const primarySearchQuery = `Task: find up to ${maxItems} blog or news articles on ${baseDomain} published within the last ${daysBack} days (after ${cutoffDateStr}). Today is ${todayStr}.
 Source URL for scope: ${source.url}
@@ -217,6 +230,7 @@ ${mediumHint}
 Step 1 — Use Google Search now with queries such as:
 site:${baseDomain} blog
 site:${baseDomain} news OR post OR article
+site:${baseDomain}${sourcePath === '/' ? '/blog' : sourcePath} 
 (adjust if the site uses a subdomain like blog.${baseDomain}.)
 
 Step 2 — From search snippets and result URLs, build the JSON array.
@@ -225,6 +239,7 @@ Output rules — reply with JSON only:
 - Array of objects: title, url, description, datePublished (YYYY-MM-DD or null).
 - url must be a normal https URL on ${baseDomain} (or obvious subdomain of that brand). No vertexaisearch / Google redirect URLs.
 - If nothing qualifies, reply with exactly: []
+${sourcePathHint}
 
 Do not write explanations or apologies.`;
 
@@ -233,17 +248,41 @@ Do not write explanations or apologies.`;
 Use Google Search again with different queries, e.g.:
 site:${baseDomain} "blog"
 site:${baseDomain} after:${cutoffDateStr}
+site:${baseDomain} inurl:blog after:${cutoffDateStr}
+site:${baseDomain} inurl:news after:${cutoffDateStr}
+site:${baseDomain}${sourcePath === '/' ? '/blog' : sourcePath}
 Today is ${todayStr}.
 Source URL for scope: ${source.url}
 ${mediumHint}
-Return ONLY valid JSON: an array of up to ${maxItems} objects {title, url, description, datePublished}. No markdown, no prose. If still nothing: []`;
+${sourcePathHint}
+Return ONLY valid JSON: an array of up to ${maxItems} objects {title, url, description, datePublished}. No markdown, no prose.
+You MUST call Google Search before final output.
+If still nothing: []`;
+      const strictRetryQuery = `Final retry. Use Google Search now.
+
+Run at least two searches:
+1) site:${baseDomain} after:${cutoffDateStr}
+2) site:${baseDomain} inurl:blog OR inurl:news OR inurl:post after:${cutoffDateStr}
+
+Source URL for scope: ${source.url}
+${mediumHint}
+${sourcePathHint}
+Return only a valid JSON array with up to ${maxItems} objects: {title,url,description,datePublished}.
+No prose. No markdown fences. If nothing qualifies, output exactly: []`;
 
       let lightweightArticles = [];
       let lastRawCount = 0;
       let lastValidCount = 0;
+      let lastToolCalls = 0;
+      let lastToolResponses = 0;
+      let lastGroundingEvents = 0;
 
       for (let qi = 0; qi < maxAttempts; qi++) {
-        const searchQuery = qi === 0 ? primarySearchQuery : retrySearchQuery;
+        const searchQuery = qi === 0
+          ? primarySearchQuery
+          : qi === 1
+            ? retrySearchQuery
+            : strictRetryQuery;
         if (qi > 0) {
           console.log(`🔁 [ADK] Alternate prompt attempt ${qi + 1}/${maxAttempts} for ${source.name}`);
         }
@@ -269,107 +308,149 @@ Return ONLY valid JSON: an array of up to ${maxItems} objects {title, url, descr
       let articles = [];
       let lastEvent = null;
       let fullResponse = '';
+      let toolCallCount = 0;
+      let toolResponseCount = 0;
+      let groundingEventCount = 0;
+      let groundingChunkCount = 0;
+      let groundingFallbackArticles = [];
 
       // Run the agent and collect all events
       let eventCount = 0;
-      for await (const event of this.runner.runAsync({
-        userId: session.userId,
-        sessionId: session.id,
-        newMessage: {
-          role: 'user',
-          parts: [{ text: searchQuery }]
-        },
-        runConfig: {
-          // Search + tool result + final JSON may need several turns; cap to control cost
-          maxLlmCalls: 8
-        }
-      })) {
-        eventCount++;
-        lastEvent = event;
-        
-        // Log the entire event for debugging
-        console.log(`📦 [ADK] Event #${eventCount} - author: ${event.author}, has content: ${!!event.content}, partial: ${event.partial || false}`);
-        if (event.content) {
-          console.log(`📦 [ADK] Content role: ${event.content.role}, has parts: ${!!event.content.parts}, parts count: ${event.content.parts ? event.content.parts.length : 0}`);
-        }
-        
-        // Check for errors in the event
-        if (event.errorCode || event.errorMessage) {
-          console.error(`❌ [ADK] API Error - Code: ${event.errorCode}, Message: ${event.errorMessage}`);
-          if (event.errorCode === '429') {
-            console.error(
-              `⚠️ [ADK] Rate limit/quota exceeded.${config.mode === 'v2' ? ' (V2: no Playwright fallback — empty result).' : ' Will fallback to traditional scraper.'}`
-            );
-            throw new Error(`Rate limit exceeded (429): ${event.errorMessage}`);
-          } else if (event.errorCode === '400' && event.errorMessage && event.errorMessage.includes('Search as tool is not enabled')) {
-            console.error(
-              `⚠️ [ADK] Model does not support Google Search tool.${config.mode === 'v2' ? ' (V2: no Playwright fallback — empty result).' : ' Will fallback to traditional scraper.'}`
-            );
-            throw new Error(`Model does not support Google Search: ${event.errorMessage}`);
+      let attemptError = null;
+      try {
+        for await (const event of this.runner.runAsync({
+          userId: session.userId,
+          sessionId: session.id,
+          newMessage: {
+            role: 'user',
+            parts: [{ text: searchQuery }]
+          },
+          runConfig: {
+            // Search + tool result + final JSON may need several turns; cap to control cost
+            maxLlmCalls: 8
           }
-        }
-        
-        // Check if this is a final response
-        const adk = await import('@google/adk');
-        const isFinal = adk.isFinalResponse ? adk.isFinalResponse(event) : (!event.partial && event.content);
-        console.log(`📦 [ADK] Is final response: ${isFinal}`);
-        
-        // Extract articles from agent response
-        if (event.content && event.content.parts) {
-          console.log(`📦 [ADK] Event has ${event.content.parts.length} parts`);
-          for (let i = 0; i < event.content.parts.length; i++) {
-            const part = event.content.parts[i];
-            console.log(`📦 [ADK] Part ${i}: has text=${!!part.text}, has functionCall=${!!part.functionCall}, has functionResponse=${!!part.functionResponse}`);
-            
-            // Log function calls to see if Google Search is being used
-            if (part.functionCall) {
-              console.log(`🔧 [ADK] Agent called function: ${part.functionCall.name}`);
-              if (part.functionCall.args) {
-                console.log(`   Args: ${JSON.stringify(part.functionCall.args).substring(0, 200)}...`);
+        })) {
+          eventCount++;
+          lastEvent = event;
+          
+          // Log the entire event for debugging
+          console.log(`📦 [ADK] Event #${eventCount} - author: ${event.author}, has content: ${!!event.content}, partial: ${event.partial || false}`);
+          if (event.content) {
+            console.log(`📦 [ADK] Content role: ${event.content.role}, has parts: ${!!event.content.parts}, parts count: ${event.content.parts ? event.content.parts.length : 0}`);
+          }
+          if (event.groundingMetadata && Object.keys(event.groundingMetadata).length > 0) {
+            groundingEventCount++;
+            const chunks = Array.isArray(event.groundingMetadata.groundingChunks)
+              ? event.groundingMetadata.groundingChunks.length
+              : 0;
+            groundingChunkCount += chunks;
+            if (chunks > 0) {
+              const extracted = event.groundingMetadata.groundingChunks
+                .map((chunk) => {
+                  const web = chunk && chunk.web ? chunk.web : null;
+                  const uri = web && typeof web.uri === 'string' ? web.uri : null;
+                  const title = web && typeof web.title === 'string' ? web.title : null;
+                  return uri
+                    ? {
+                        title: title || 'Grounded result',
+                        url: uri,
+                        description: 'Recovered from ADK grounding metadata.',
+                        datePublished: null
+                      }
+                    : null;
+                })
+                .filter(Boolean);
+              if (extracted.length > 0) {
+                groundingFallbackArticles.push(...extracted);
               }
             }
-            if (part.functionResponse) {
-              console.log(`📥 [ADK] Agent received function response: ${part.functionResponse.name}`);
-              if (part.functionResponse.response) {
-                console.log(`   Response preview: ${JSON.stringify(part.functionResponse.response).substring(0, 300)}...`);
-              }
+          }
+          
+          // Check for errors in the event
+          if (event.errorCode || event.errorMessage) {
+            console.error(`❌ [ADK] API Error - Code: ${event.errorCode}, Message: ${event.errorMessage}`);
+            if (event.errorCode === '429') {
+              console.error(
+                `⚠️ [ADK] Rate limit/quota exceeded.${config.mode === 'v2' ? ' (V2: no Playwright fallback — empty result).' : ' Will fallback to traditional scraper.'}`
+              );
+              throw new Error(`Rate limit exceeded (429): ${event.errorMessage}`);
+            } else if (event.errorCode === '400' && event.errorMessage && event.errorMessage.includes('Search as tool is not enabled')) {
+              console.error(
+                `⚠️ [ADK] Model does not support Google Search tool.${config.mode === 'v2' ? ' (V2: no Playwright fallback — empty result).' : ' Will fallback to traditional scraper.'}`
+              );
+              throw new Error(`Model does not support Google Search: ${event.errorMessage}`);
             }
-            if (part.text) {
-              fullResponse += part.text + '\n';
-              console.log(`📝 [ADK] Received text (${part.text.length} chars): ${part.text.substring(0, 200)}...`);
+          }
+          
+          // Check if this is a final response
+          const adk = await import('@google/adk');
+          const isFinal = adk.isFinalResponse ? adk.isFinalResponse(event) : (!event.partial && event.content);
+          console.log(`📦 [ADK] Is final response: ${isFinal}`);
+          
+          // Extract articles from agent response
+          if (event.content && event.content.parts) {
+            console.log(`📦 [ADK] Event has ${event.content.parts.length} parts`);
+            for (let i = 0; i < event.content.parts.length; i++) {
+              const part = event.content.parts[i];
+              console.log(`📦 [ADK] Part ${i}: has text=${!!part.text}, has functionCall=${!!part.functionCall}, has functionResponse=${!!part.functionResponse}`);
               
-              // Try to parse JSON from the response
-              try {
-                // Extract JSON from markdown code blocks if present
-                let text = part.text.trim();
-                if (text.includes('```json')) {
-                  text = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-                } else if (text.includes('```')) {
-                  text = text.replace(/```\n?/g, '').trim();
+              // Log function calls to see if Google Search is being used
+              if (part.functionCall) {
+                toolCallCount++;
+                console.log(`🔧 [ADK] Agent called function: ${part.functionCall.name}`);
+                if (part.functionCall.args) {
+                  console.log(`   Args: ${JSON.stringify(part.functionCall.args).substring(0, 200)}...`);
                 }
+              }
+              if (part.functionResponse) {
+                toolResponseCount++;
+                console.log(`📥 [ADK] Agent received function response: ${part.functionResponse.name}`);
+                if (part.functionResponse.response) {
+                  console.log(`   Response preview: ${JSON.stringify(part.functionResponse.response).substring(0, 300)}...`);
+                }
+              }
+              if (part.text) {
+                fullResponse += part.text + '\n';
+                console.log(`📝 [ADK] Received text (${part.text.length} chars): ${part.text.substring(0, 200)}...`);
                 
-                // Clean up control characters that can break JSON parsing
-                text = text.replace(/[\x00-\x1F\x7F]/g, '');
-                
-                // Try to find JSON array in the text
-                const jsonMatch = text.match(/\[[\s\S]*\]/);
-                if (jsonMatch) {
-                  const parsed = JSON.parse(jsonMatch[0]);
-                  if (Array.isArray(parsed) && parsed.length > 0) {
-                    articles = parsed;
-                    console.log(`✅ [ADK] Found ${articles.length} articles in JSON response`);
-                    break;
+                // Try to parse JSON from the response
+                try {
+                  // Extract JSON from markdown code blocks if present
+                  let text = part.text.trim();
+                  if (text.includes('```json')) {
+                    text = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+                  } else if (text.includes('```')) {
+                    text = text.replace(/```\n?/g, '').trim();
+                  }
+                  
+                  // Clean up control characters that can break JSON parsing
+                  text = text.replace(/[\x00-\x1F\x7F]/g, '');
+                  
+                  // Try to find JSON array in the text
+                  const jsonMatch = text.match(/\[[\s\S]*\]/);
+                  if (jsonMatch) {
+                    const parsed = JSON.parse(jsonMatch[0]);
+                    if (Array.isArray(parsed) && parsed.length > 0) {
+                      articles = parsed;
+                      console.log(`✅ [ADK] Found ${articles.length} articles in JSON response`);
+                      break;
+                    }
+                  }
+                } catch (e) {
+                  // Not JSON, continue
+                  if (e.message.includes('JSON')) {
+                    console.log(`⚠️ [ADK] JSON parse error in part ${i}: ${e.message}`);
                   }
                 }
-              } catch (e) {
-                // Not JSON, continue
-                if (e.message.includes('JSON')) {
-                  console.log(`⚠️ [ADK] JSON parse error in part ${i}: ${e.message}`);
-                }
               }
             }
           }
         }
+      } catch (runErr) {
+        attemptError = runErr;
+        console.warn(
+          `⚠️ [ADK][V2][diag] Attempt ${qi + 1}/${maxAttempts} run error: ${(runErr.message || 'unknown').substring(0, 180)}`
+        );
       }
 
       // Always log the response for debugging
@@ -393,6 +474,42 @@ Return ONLY valid JSON: an array of up to ${maxItems} objects {title, url, descr
       } else {
         console.log(`⚠️ [ADK] No response text received from agent`);
         console.log(`⚠️ [ADK] Last event structure: ${JSON.stringify(lastEvent || {}).substring(0, 1000)}`);
+      }
+      if (config.mode === 'v2' && toolCallCount === 0 && toolResponseCount === 0 && groundingEventCount === 0) {
+        console.log(
+          '⚠️ [ADK][V2][diag] No tool/grounding evidence in events (toolCalls=0, toolResponses=0, groundingEvents=0).'
+        );
+      }
+      // If model output is unusable but grounding metadata has links, use them as a fallback.
+      // This keeps V2 productive when ADK returns prose/empty JSON despite grounding.
+      if (articles.length === 0 && groundingFallbackArticles.length > 0) {
+        const dedup = new Map();
+        for (const a of groundingFallbackArticles) {
+          if (a.url && !dedup.has(a.url)) dedup.set(a.url, a);
+        }
+        articles = Array.from(dedup.values()).slice(0, maxItems);
+        console.log(
+          `🛟 [ADK][V2][diag] Recovered ${articles.length} candidate article(s) from grounding metadata fallback`
+        );
+      }
+      if (attemptError) {
+        // Cleanup current attempt session before moving to next retry.
+        try {
+          if (this.runner && this.runner.sessionService && this.runner.sessionService.deleteSession) {
+            await this.runner.sessionService.deleteSession({
+              appName: 'distroblog',
+              userId: session.userId,
+              sessionId: session.id
+            });
+            console.log(`🧹 [ADK] Cleaned up session ${session.id} after attempt error`);
+          }
+        } catch (cleanupErr) {
+          console.warn(`⚠️ [ADK] Could not clean up session after attempt error: ${cleanupErr.message}`);
+        }
+        session = null;
+        if (qi < maxAttempts - 1) {
+          continue;
+        }
       }
 
       // If no articles found in structured format, try to extract from full response
@@ -726,7 +843,8 @@ Return ONLY valid JSON: an array of up to ${maxItems} objects {title, url, descr
         const fo = accuracyMetrics.filteredOut;
         console.log(
           `🔬 [ADK][V2][diag] attempt=${qi + 1}/${maxAttempts} rawJson=${articlesBeforeFilter} afterUrlFilters=${filteredArticles.length} afterDateFilter=${dateFilteredArticles.length} responseChars=${fullResponse.length} events=${eventCount} ` +
-            `filteredWrongDomain=${fo.wrongDomain} wrongPublication=${fo.wrongPublication || 0} googleRedirect=${fo.googleRedirect} outsideDate=${fo.outsideDateRange || 0} shortPath=${fo.shortPath} genericUrl=${fo.genericUrl}`
+            `filteredWrongDomain=${fo.wrongDomain} wrongPublication=${fo.wrongPublication || 0} googleRedirect=${fo.googleRedirect} outsideDate=${fo.outsideDateRange || 0} shortPath=${fo.shortPath} genericUrl=${fo.genericUrl} ` +
+            `toolCalls=${toolCallCount} toolResponses=${toolResponseCount} groundingEvents=${groundingEventCount} groundingChunks=${groundingChunkCount}`
         );
       }
       
@@ -832,11 +950,14 @@ Return ONLY valid JSON: an array of up to ${maxItems} objects {title, url, descr
 
         lastRawCount = accuracyMetrics.totalReturned;
         lastValidCount = accuracyMetrics.validArticles;
+        lastToolCalls = toolCallCount;
+        lastToolResponses = toolResponseCount;
+        lastGroundingEvents = groundingEventCount;
 
       // MEMORY FIX: Delete the session after use to prevent memory accumulation
       // InMemoryRunner stores all sessions in memory, causing OOM crashes over time
       try {
-        if (this.runner && this.runner.sessionService && this.runner.sessionService.deleteSession) {
+        if (session && this.runner && this.runner.sessionService && this.runner.sessionService.deleteSession) {
           await this.runner.sessionService.deleteSession({
             appName: 'distroblog',
             userId: session.userId,
@@ -857,7 +978,7 @@ Return ONLY valid JSON: an array of up to ${maxItems} objects {title, url, descr
       if (config.mode === 'v2') {
         const ms = Date.now() - v2ObsStart;
         console.log(
-          `📈 [ADK][V2] observability source=${source.name} domain=${new URL(source.url).hostname} ms=${ms} attempts=${maxAttempts} final=${lightweightArticles.length} rawReturned=${lastRawCount} validAfterDomainRules=${lastValidCount}`
+          `📈 [ADK][V2] observability source=${source.name} domain=${new URL(source.url).hostname} ms=${ms} attempts=${maxAttempts} final=${lightweightArticles.length} rawReturned=${lastRawCount} validAfterDomainRules=${lastValidCount} toolCalls=${lastToolCalls} toolResponses=${lastToolResponses} groundingEvents=${lastGroundingEvents}`
         );
       }
 
