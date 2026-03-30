@@ -39,6 +39,9 @@ class ADKScraper {
     this.runner = null;
     this.initialized = false;
     this.modelName = null;
+    // Keep the Gemini model instance so we can reuse it elsewhere (e.g. /api/adk/test)
+    // without relying on ADK's env-var credential resolver.
+    this.llm = null;
     // Rate limiting: gemini-2.0-flash-exp has 10 RPM limit
     // We'll throttle to max 1 request per 7 seconds (8.5 RPM) to stay safe
     this.lastRequestTime = 0;
@@ -85,6 +88,7 @@ class ADKScraper {
             apiKey: apiKey
           });
           modelName = candidate;
+          this.llm = llm; // Store for reuse by other routes
           console.log(`✅ [ADK] Using model: ${candidate} (Google Search tool compatible)`);
           break;
         } catch (e) {
@@ -931,12 +935,14 @@ Return ONLY valid JSON: an array of up to ${maxItems} objects {title, url, descr
       
       this.agent = null;
       this.initialized = false;
+      this.llm = null;
       console.log('🧹 [ADK] Resources cleaned up');
     } catch (error) {
       console.warn(`⚠️ [ADK] Error during cleanup: ${error.message}`);
       // Reset state anyway
       this.runner = null;
       this.agent = null;
+      this.llm = null;
       this.initialized = false;
     }
   }

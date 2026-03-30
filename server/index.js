@@ -2683,21 +2683,12 @@ Return valid JSON only. If you can't find articles, return [].`;
     
     try {
       const adk = await import('@google/adk');
-      const apiKey =
-        process.env.GOOGLE_GENAI_API_KEY ||
-        process.env.GEMINI_API_KEY ||
-        process.env.GOOGLE_API_KEY;
-      if (!apiKey) {
-        return res.status(500).json({
-          error: 'ADK API key not found (set GOOGLE_GENAI_API_KEY or GEMINI_API_KEY).',
-        });
+      // Reuse the initialized Gemini model instance from adkScraper.
+      // This avoids env-var naming mismatches in the Render runtime.
+      const llm = adkScraper.llm;
+      if (!llm) {
+        return res.status(500).json({ error: 'ADK Gemini model not initialized yet.' });
       }
-
-      // Create a test agent - always create fresh to use the instruction
-      const llm = new adk.Gemini({
-        model: adkScraper.modelName || 'gemini-2.0-flash', // Fixed: use GA model, not deprecated -exp
-        apiKey: apiKey,
-      });
 
       const testAgent = new adk.LlmAgent({
         name: 'article_finder_test',
