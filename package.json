@@ -11,7 +11,10 @@
     "client": "cd client && npm start",
     "install-all": "npm install && cd client && npm install",
     "build": "cd client && npm run build",
-    "test:extract-date": "node scripts/test-extract-date-html.js"
+    "test:extract-date": "node scripts/test-extract-date-html.js",
+    "test:url-canonical": "node scripts/test-url-canonical.js",
+    "eval:url-canonical": "node scripts/eval-url-canonical-effectiveness.js",
+    "adk:inspect": "node scripts/adk-inspect.js"
   },
   "dependencies": {
     "@google/adk": "^0.2.1",

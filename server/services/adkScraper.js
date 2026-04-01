@@ -1,7 +1,46 @@
- // ADK (Agent Development Kit) implementation using Google Search
+// ADK (Agent Development Kit) implementation using Google Search
+// Optional env: ADK_MODEL | SCOOPSTREAM_ADK_MODEL (try this Gemini id first), ADK_VERBOSE, GOOGLE_GENAI_API_KEY | GEMINI_API_KEY
 const axios = require('axios');
 const config = require('../config');
 const articleEnrichment = require('./articleEnrichment');
+
+/** ADK_VERBOSE=1 — full per-event / per-filter logs. Default: concise [ADK] start/done + preview (no extra env). */
+function isAdkVerbose() {
+  const v = (process.env.ADK_VERBOSE || process.env.SCOOPSTREAM_ADK_VERBOSE || '').toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes';
+}
+
+function escLogOneLine(s, max = 320) {
+  if (s == null || typeof s !== 'string') return '';
+  const t = s.replace(/\s+/g, ' ').trim();
+  if (t.length <= max) return t;
+  return `${t.slice(0, max)}…`;
+}
+
+/** When errorMessage is missing (e.g. STOP), log something inspectable. */
+function summarizeAdkErrorEvent(event) {
+  try {
+    const parts = event.content && event.content.parts;
+    const partSummary = Array.isArray(parts)
+      ? parts.map((p) => ({
+          textChars: p.text ? p.text.length : 0,
+          fnCall: p.functionCall && p.functionCall.name,
+          fnRes: p.functionResponse && p.functionResponse.name,
+        }))
+      : [];
+    return JSON.stringify({
+      author: event.author,
+      partial: event.partial,
+      errorCode: event.errorCode,
+      errorMessage: event.errorMessage,
+      finishReason: event.finishReason,
+      partSummary,
+      grounding: event.groundingMetadata ? Object.keys(event.groundingMetadata) : [],
+    });
+  } catch {
+    return '(unserializable event)';
+  }
+}
 
 /**
  * Medium hosts multiple publications on the same domain; domain match alone is not enough.
@@ -63,6 +102,258 @@ function normalizePageTitle(rawTitle, sourceDomain) {
   }
   return t;
 }
+
+const QUALITY_UA_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (compatible; ScoopstreamBot/1.0)',
+  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+};
+
+/** After a 404, try slash variant and www / non-www (some CDNs differ). */
+function urlVariantsAfter404(original) {
+  const list = [];
+  try {
+    const parsed = new URL(original);
+    const path = parsed.pathname;
+    if (path.length > 1) {
+      if (path.endsWith('/')) {
+        const np = path.replace(/\/$/, '') || '/';
+        list.push(new URL(np + parsed.search, parsed.origin).href);
+      } else {
+        list.push(new URL(path + '/' + parsed.search, parsed.origin).href);
+      }
+    }
+    const h = parsed.hostname;
+    if (!h.startsWith('www.')) {
+      list.push(new URL(parsed.pathname + parsed.search + parsed.hash, `${parsed.protocol}//www.${h}`).href);
+    } else {
+      list.push(new URL(parsed.pathname + parsed.search + parsed.hash, `${parsed.protocol}//${h.slice(4)}`).href);
+    }
+  } catch {
+    return [];
+  }
+  return [...new Set(list)].filter((x) => x !== original);
+}
+
+/**
+ * GET for quality pass; on 404 only, retry alternate URL forms once each.
+ * @returns {{ resp: import('axios').AxiosResponse, finalUrl: string, used404Fallback: boolean }}
+ */
+/** NEAR blog long slugs often 404; canonical posts use shorter paths (e.g. /blog/legion-city-nodes). */
+function nearOrgBlogSlugRepairVariants(original) {
+  const list = [];
+  try {
+    const parsed = new URL(original);
+    const h = parsed.hostname.replace(/^www\./, '').toLowerCase();
+    if (h !== 'near.org') return [];
+    const m = parsed.pathname.match(/^\/blog\/([^/]+)/i);
+    if (!m) return [];
+    let slug = m[1].replace(/\/$/, '');
+    if (slug.startsWith('near-')) {
+      slug = slug.slice(5);
+      list.push(new URL(`/blog/${slug}`, 'https://www.near.org').href);
+    }
+    const parts = slug.split('-').filter(Boolean);
+    if (parts.length > 3) {
+      list.push(new URL(`/blog/${parts.slice(0, 3).join('-')}`, 'https://www.near.org').href);
+    }
+    if (parts.length > 4) {
+      list.push(new URL(`/blog/${parts.slice(0, 4).join('-')}`, 'https://www.near.org').href);
+    }
+  } catch {
+    return [];
+  }
+  return [...new Set(list)].filter((x) => x !== original);
+}
+
+async function fetchArticleForQuality(initialUrl) {
+  const req = {
+    timeout: 10000,
+    maxRedirects: 5,
+    validateStatus: (status) => status < 500,
+    headers: QUALITY_UA_HEADERS,
+  };
+  let resp = await axios.get(initialUrl, req);
+  let finalUrl = initialUrl;
+  let used404Fallback = false;
+  if (resp.status === 404) {
+    const alts = [
+      ...urlVariantsAfter404(initialUrl),
+      ...nearOrgBlogSlugRepairVariants(initialUrl),
+    ];
+    const seen = new Set([initialUrl]);
+    for (const alt of alts) {
+      if (seen.has(alt)) continue;
+      seen.add(alt);
+      const r2 = await axios.get(alt, req);
+      if (r2.status !== 404 && r2.status < 500) {
+        resp = r2;
+        finalUrl = alt;
+        used404Fallback = true;
+        break;
+      }
+    }
+  }
+  return { resp, finalUrl, used404Fallback };
+}
+
+/** NEAR blog: prefer www host (routing differs from apex). */
+function canonicalizeKnownBlogUrl(url) {
+  try {
+    const u = new URL(url);
+    const h = u.hostname.replace(/^www\./, '').toLowerCase();
+    if (h === 'near.org' && u.pathname.startsWith('/blog')) {
+      return `https://www.near.org${u.pathname}${u.search}${u.hash}`;
+    }
+  } catch {
+    return url;
+  }
+  return url;
+}
+
+function hostnameKey(host) {
+  return String(host || '')
+    .replace(/^www\./i, '')
+    .toLowerCase();
+}
+
+/** Decode a small subset of entities in href/content attributes (canonical URLs). */
+function decodeMinimalHtmlEntities(s) {
+  if (!s || typeof s !== 'string') return s;
+  return s
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>');
+}
+
+/**
+ * Prefer <link rel="canonical">, then og:url (first ~200KB only — enough for <head>).
+ * @returns {string|null}
+ */
+function extractCanonicalUrlFromHtml(html) {
+  if (!html || typeof html !== 'string') return null;
+  const headish = html.length > 200000 ? html.slice(0, 200000) : html;
+  let m = headish.match(/<link[^>]+rel=["']canonical["'][^>]*href=["']([^"']+)["'][^>]*>/i);
+  if (!m) {
+    m = headish.match(/<link[^>]+href=["']([^"']+)["'][^>]*rel=["']canonical["'][^>]*>/i);
+  }
+  if (m && m[1]) {
+    const raw = decodeMinimalHtmlEntities(m[1].trim());
+    return raw || null;
+  }
+  m = headish.match(/property=["']og:url["'][^>]*content=["']([^"']+)["']/i);
+  if (!m) {
+    m = headish.match(/content=["']([^"']+)["'][^>]*property=["']og:url["']/i);
+  }
+  if (m && m[1]) {
+    const raw = decodeMinimalHtmlEntities(m[1].trim());
+    return raw || null;
+  }
+  return null;
+}
+
+function firstPathSegment(pathname) {
+  const parts = String(pathname || '')
+    .split('/')
+    .filter(Boolean);
+  return parts[0] || null;
+}
+
+/** Reject homepages and obvious non-article hubs as canonical targets. */
+function isProbablyArticlePath(pathname) {
+  const p = String(pathname || '').replace(/\/$/, '') || '/';
+  if (p === '/') return false;
+  const parts = p.split('/').filter(Boolean);
+  if (parts.length >= 2) return true;
+  if (parts.length === 1 && parts[0].startsWith('@')) return false;
+  return false;
+}
+
+/**
+ * After redirects, prefer HTML-declared canonical / og:url when same-site and safe.
+ * @param {string} fetchUrl - original request URL
+ * @param {string} redirectFinalUrl - URL after HTTP redirects (from axios)
+ * @param {string} html - response body
+ * @param {string} [sourceBaseUrl] - source homepage / feed URL (Medium publication guard)
+ * @returns {string}
+ */
+function pickPreferredArticleUrl(fetchUrl, redirectFinalUrl, html, sourceBaseUrl) {
+  let base = redirectFinalUrl || fetchUrl;
+  try {
+    const baseU = new URL(base);
+    const fromHtml = extractCanonicalUrlFromHtml(html);
+    if (!fromHtml) return base;
+
+    let candU = new URL(fromHtml, base);
+    if (candU.protocol !== 'http:' && candU.protocol !== 'https:') return base;
+    if (candU.protocol === 'http:') {
+      candU = new URL(candU.href.replace(/^http:/i, 'https:'));
+    }
+
+    if (hostnameKey(candU.hostname) !== hostnameKey(baseU.hostname)) return base;
+
+    if (!isProbablyArticlePath(candU.pathname)) return base;
+
+    const h = hostnameKey(candU.hostname);
+    if (h === 'medium.com' || h.endsWith('.medium.com')) {
+      const srcPrefix = sourceBaseUrl ? mediumPublicationPathPrefix(sourceBaseUrl) : null;
+      if (srcPrefix) {
+        const norm = srcPrefix.replace(/\/$/, '');
+        const cp = candU.pathname.replace(/\/$/, '');
+        if (!cp.startsWith(norm)) return base;
+      } else {
+        const bSeg = firstPathSegment(baseU.pathname);
+        const cSeg = firstPathSegment(candU.pathname);
+        if (bSeg && cSeg && bSeg !== cSeg) return base;
+      }
+    }
+
+    return normalizeHrefPathDoubles(candU.href);
+  } catch {
+    return base;
+  }
+}
+
+/** Some CMS emit https://host//path in canonical; normalize for stable storage. */
+function normalizeHrefPathDoubles(href) {
+  try {
+    const u = new URL(href);
+    u.pathname = u.pathname.replace(/\/{2,}/g, '/');
+    return u.href;
+  } catch {
+    return href;
+  }
+}
+
+/** Axios redirect / final response URL (same logic as quality pass). */
+function getAxiosFinalUrl(response, requestUrl) {
+  let finalUrl = requestUrl;
+  if (response.request?.res?.responseUrl) {
+    finalUrl = response.request.res.responseUrl;
+  } else if (response.request?.responseURL) {
+    finalUrl = response.request.responseURL;
+  } else if (response.headers?.location) {
+    const location = response.headers.location;
+    finalUrl = location.startsWith('http') ? location : new URL(location, requestUrl).toString();
+  } else if (
+    response.config?.url &&
+    response.config.url !== requestUrl &&
+    String(response.config.url).startsWith('http')
+  ) {
+    finalUrl = response.config.url;
+  }
+  return finalUrl;
+}
+
+/** Extra user-prompt lines for domains with known apex/www or slug quirks (v2 discovery). */
+function domainSpecificSiteHint(baseDomain) {
+  const d = (baseDomain || '').replace(/^www\./, '').toLowerCase();
+  if (d === 'near.org') {
+    return `\nNEAR Foundation blog: Use https://www.near.org/blog/... URLs exactly as shown in Google Search snippets. Do not invent long slug paths; apex near.org and www.near.org may resolve different paths — prefer www for blog posts when the snippet shows www.\n`;
+  }
+  return '';
+}
 // This uses an agent with Google Search tool instead of scraping HTML
 // Based on: https://google.github.io/adk-docs/
 
@@ -112,7 +403,7 @@ class ADKScraper {
       
       // Pick the first available model that supports Google Search
       // Updated January 2026: gemini-2.0-flash-exp was deprecated, using GA models
-      const candidateModels = [
+      const defaultCandidates = [
         'gemini-2.5-flash',             // Prefer stronger quality first
         'gemini-2.0-flash',             // Stable fallback
         'gemini-2.5-flash-lite',        // Lightweight version
@@ -120,6 +411,13 @@ class ADKScraper {
         'gemini-1.5-flash',             // fallback
         'gemini-1.5-flash-001',         // legacy fallback
       ];
+      const envModel = (process.env.ADK_MODEL || process.env.SCOOPSTREAM_ADK_MODEL || '').trim();
+      const candidateModels = envModel
+        ? [envModel, ...defaultCandidates.filter((m) => m !== envModel)]
+        : defaultCandidates;
+      if (envModel) {
+        console.log(`[ADK] ADK_MODEL=${JSON.stringify(envModel)} — trying this model first (then defaults if unavailable)`);
+      }
 
       let llm = null;
       let modelName = null;
@@ -163,7 +461,7 @@ Non-negotiable rules:
 1) You MUST use the Google Search tool at least once before your final answer. Do not answer from memory alone.
 2) Your final reply MUST be a single JSON array only — no markdown fences, no headings, no apologies, no "I could not find" paragraphs. If there are zero matches, output exactly: []
 3) Each item must pair title and url from the same search result (never mix title from one result with url from another).
-4) URLs must be direct https links on the requested site (or its subdomains when that site uses them); never use Google redirect or vertexaisearch URLs.
+4) URLs must be direct https links on the requested site (or its subdomains when that site uses them); never use Google redirect or vertexaisearch URLs. Prefer exact URLs as shown in Google Search results (snippets) so slugs match live pages.
 5) On medium.com, only list articles whose URL path is under the same publication as the user’s source (e.g. medium.com/lumerin-blog/... not medium.com/illumination/...).
 
 Fields per object: title (string), url (string), description (string, short), datePublished (YYYY-MM-DD or null if unknown).
@@ -263,19 +561,34 @@ Prefer URL structures similar to these examples when selecting results.\n`;
 
   /**
    * Find articles from a website URL using ADK agent with Google Search
-   * Returns articles in RSS-like format for compatibility
+   * Returns Article[] or, with { inspect: true }, { articles, inspection } for local debugging.
    */
-  async scrapeArticles(source) {
+  async scrapeArticles(source, options = {}) {
     // MEMORY FIX: Track session outside try block so we can clean it up in catch
     let session = null;
     const scrapeStartedAt = Date.now();
+    const verbose = isAdkVerbose();
+    const concise = !verbose;
+    const inspect = options && options.inspect === true;
+    const inspection = inspect
+      ? { source: { name: source.name, url: source.url }, model: null, attempts: [] }
+      : null;
 
     try {
-      console.log(`🤖 [ADK] Finding articles from: ${source.url} using Google Search agent`);
+      if (verbose) {
+        console.log(`🤖 [ADK] Finding articles from: ${source.url} using Google Search agent`);
+      }
+      if (verbose) {
+        console.log('📣 [ADK] ADK_VERBOSE=1 — detailed per-event and per-filter logging enabled');
+      }
 
       // Initialize if not already done
       if (!this.initialized) {
         await this.initialize();
+      }
+
+      if (inspection) {
+        inspection.model = this.modelName || null;
       }
 
       if (!this.agent || !this.runner) {
@@ -301,9 +614,16 @@ Prefer URL structures similar to these examples when selecting results.\n`;
       const cutoffDateStr = cutoffDate.toISOString().split('T')[0]; // YYYY-MM-DD format
       const todayStr = today.toISOString().split('T')[0];
 
-      console.log(
-        `📅 [ADK] Date filter: articles after ${cutoffDateStr} (today is ${todayStr}, daysBack=${daysBack})`
-      );
+      if (verbose) {
+        console.log(
+          `📅 [ADK] Date filter: articles after ${cutoffDateStr} (today is ${todayStr}, daysBack=${daysBack})`
+        );
+      }
+      if (concise) {
+        console.log(
+          `[ADK] start source=${JSON.stringify(source.name)} url=${source.url} cutoff=${cutoffDateStr} daysBack=${daysBack} model=${this.modelName || '?'}`
+        );
+      }
 
       const mediumPub = mediumPublicationPathPrefix(source.url);
       const mediumHint = mediumPub
@@ -324,7 +644,14 @@ Prefer URL structures similar to these examples when selecting results.\n`;
         ? await this.buildSourceMemoryHint(source, 5)
         : '';
 
-      const primarySearchQuery = `Task: find up to ${maxItems} blog or news articles on ${baseDomain} published within the last ${daysBack} days (after ${cutoffDateStr}). Today is ${todayStr}.
+      const curatorPreamble = `Role: You are the feed curator for this source only — "${source.name}" (${baseDomain}).
+You track official posts on this site’s blog/news in the date window below — not generic Web3 news, not other domains, and not invented URLs.
+Every url in your JSON must be a real https page on ${baseDomain} that you can tie to Google Search results or clear snippets for this site; copy link paths from search results when possible so slugs match live pages; if search shows nothing in range, output exactly [].
+Your entire reply must be one JSON array — no prose before or after, no "I am…" self-introduction, no apologies.`;
+
+      const primarySearchQuery = `${curatorPreamble}
+
+Task: find up to ${maxItems} blog or news articles on ${baseDomain} published within the last ${daysBack} days (after ${cutoffDateStr}). Today is ${todayStr}.
 Source URL for scope: ${source.url}
 ${mediumHint}
 ${sourceMemoryHint}
@@ -334,17 +661,16 @@ site:${baseDomain} news OR post OR article
 site:${baseDomain}${sourcePath === '/' ? '/blog' : sourcePath} 
 (adjust if the site uses a subdomain like blog.${baseDomain}.)
 
-Step 2 — From search snippets and result URLs, build the JSON array.
+Step 2 — From search snippets and result URLs, build the JSON array for this source only.
 
 Output rules — reply with JSON only:
 - Array of objects: title, url, description, datePublished (YYYY-MM-DD or null).
 - url must be a normal https URL on ${baseDomain} (or obvious subdomain of that brand). No vertexaisearch / Google redirect URLs.
 - If nothing qualifies, reply with exactly: []
-${sourcePathHint}
+${sourcePathHint}${domainSpecificSiteHint(baseDomain)}`;
 
-Do not write explanations or apologies.`;
-
-      const retrySearchQuery = `Retry: previous answer was empty or not valid JSON.
+      const retrySearchQuery = `Same role: curator for "${source.name}" (${baseDomain}) only — JSON array only, no other text.
+Retry: previous answer was empty or not valid JSON.
 
 Use Google Search again with different queries, e.g.:
 site:${baseDomain} "blog"
@@ -359,8 +685,9 @@ ${sourcePathHint}
 ${sourceMemoryHint}
 Return ONLY valid JSON: an array of up to ${maxItems} objects {title, url, description, datePublished}. No markdown, no prose.
 You MUST call Google Search before final output.
-If still nothing: []`;
-      const strictRetryQuery = `Final retry. Use Google Search now.
+If still nothing: []${domainSpecificSiteHint(baseDomain)}`;
+      const strictRetryQuery = `Same role: curator for "${source.name}" (${baseDomain}) only — JSON array only.
+Final retry. Use Google Search now.
 
 Run at least two searches:
 1) site:${baseDomain} after:${cutoffDateStr}
@@ -371,7 +698,7 @@ ${mediumHint}
 ${sourcePathHint}
 ${sourceMemoryHint}
 Return only a valid JSON array with up to ${maxItems} objects: {title,url,description,datePublished}.
-No prose. No markdown fences. If nothing qualifies, output exactly: []`;
+No prose. No markdown fences. If nothing qualifies, output exactly: []${domainSpecificSiteHint(baseDomain)}`;
 
       let lightweightArticles = [];
       let lastRawCount = 0;
@@ -379,6 +706,7 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
       let lastToolCalls = 0;
       let lastToolResponses = 0;
       let lastGroundingEvents = 0;
+      let conciseLastAttempt = null;
 
       for (let qi = 0; qi < maxAttempts; qi++) {
         const searchQuery = qi === 0
@@ -387,7 +715,11 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
             ? retrySearchQuery
             : strictRetryQuery;
         if (qi > 0) {
-          console.log(`🔁 [ADK] Alternate prompt attempt ${qi + 1}/${maxAttempts} for ${source.name}`);
+          if (concise) {
+            console.log(`[ADK] retry ${qi + 1}/${maxAttempts} ${JSON.stringify(source.name)}`);
+          } else {
+            console.log(`🔁 [ADK] Alternate prompt attempt ${qi + 1}/${maxAttempts} for ${source.name}`);
+          }
         }
 
         // Rate limiting: Ensure we don't exceed 10 RPM limit
@@ -395,7 +727,11 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
         const timeSinceLastRequest = now - this.lastRequestTime;
         if (timeSinceLastRequest < this.minRequestInterval) {
           const waitTime = this.minRequestInterval - timeSinceLastRequest;
-          console.log(`⏳ [ADK] Rate limiting: waiting ${waitTime}ms to stay under 10 RPM limit...`);
+          if (concise) {
+            console.log(`[ADK] wait ${waitTime}ms rpm`);
+          } else {
+            console.log(`⏳ [ADK] Rate limiting: waiting ${waitTime}ms to stay under 10 RPM limit...`);
+          }
           await new Promise(resolve => setTimeout(resolve, waitTime));
         }
         this.lastRequestTime = Date.now();
@@ -436,10 +772,11 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
           eventCount++;
           lastEvent = event;
           
-          // Log the entire event for debugging
-          console.log(`📦 [ADK] Event #${eventCount} - author: ${event.author}, has content: ${!!event.content}, partial: ${event.partial || false}`);
-          if (event.content) {
-            console.log(`📦 [ADK] Content role: ${event.content.role}, has parts: ${!!event.content.parts}, parts count: ${event.content.parts ? event.content.parts.length : 0}`);
+          if (verbose) {
+            console.log(`📦 [ADK] Event #${eventCount} - author: ${event.author}, has content: ${!!event.content}, partial: ${event.partial || false}`);
+            if (event.content) {
+              console.log(`📦 [ADK] Content role: ${event.content.role}, has parts: ${!!event.content.parts}, parts count: ${event.content.parts ? event.content.parts.length : 0}`);
+            }
           }
           if (event.groundingMetadata && Object.keys(event.groundingMetadata).length > 0) {
             groundingEventCount++;
@@ -471,7 +808,13 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
           
           // Check for errors in the event
           if (event.errorCode || event.errorMessage) {
-            console.error(`❌ [ADK] API Error - Code: ${event.errorCode}, Message: ${event.errorMessage}`);
+            const msg = event.errorMessage != null && event.errorMessage !== ''
+              ? event.errorMessage
+              : '(no message)';
+            console.error(`❌ [ADK] API Error - Code: ${event.errorCode}, Message: ${msg}`);
+            if (!event.errorMessage && event.errorCode) {
+              console.error(`❌ [ADK] API Error detail: ${escLogOneLine(summarizeAdkErrorEvent(event), 900)}`);
+            }
             if (event.errorCode === '429') {
               console.error(
                 `⚠️ [ADK] Rate limit/quota exceeded.${config.mode === 'v2' ? ' (V2: no Playwright fallback — empty result).' : ' Will fallback to traditional scraper.'}`
@@ -488,33 +831,45 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
           // Check if this is a final response
           const adk = await import('@google/adk');
           const isFinal = adk.isFinalResponse ? adk.isFinalResponse(event) : (!event.partial && event.content);
-          console.log(`📦 [ADK] Is final response: ${isFinal}`);
+          if (verbose) {
+            console.log(`📦 [ADK] Is final response: ${isFinal}`);
+          }
           
           // Extract articles from agent response
           if (event.content && event.content.parts) {
-            console.log(`📦 [ADK] Event has ${event.content.parts.length} parts`);
+            if (verbose) {
+              console.log(`📦 [ADK] Event has ${event.content.parts.length} parts`);
+            }
             for (let i = 0; i < event.content.parts.length; i++) {
               const part = event.content.parts[i];
-              console.log(`📦 [ADK] Part ${i}: has text=${!!part.text}, has functionCall=${!!part.functionCall}, has functionResponse=${!!part.functionResponse}`);
+              if (verbose) {
+                console.log(`📦 [ADK] Part ${i}: has text=${!!part.text}, has functionCall=${!!part.functionCall}, has functionResponse=${!!part.functionResponse}`);
+              }
               
               // Log function calls to see if Google Search is being used
               if (part.functionCall) {
                 toolCallCount++;
-                console.log(`🔧 [ADK] Agent called function: ${part.functionCall.name}`);
-                if (part.functionCall.args) {
-                  console.log(`   Args: ${JSON.stringify(part.functionCall.args).substring(0, 200)}...`);
+                if (verbose) {
+                  console.log(`🔧 [ADK] Agent called function: ${part.functionCall.name}`);
+                  if (part.functionCall.args) {
+                    console.log(`   Args: ${JSON.stringify(part.functionCall.args).substring(0, 200)}...`);
+                  }
                 }
               }
               if (part.functionResponse) {
                 toolResponseCount++;
-                console.log(`📥 [ADK] Agent received function response: ${part.functionResponse.name}`);
-                if (part.functionResponse.response) {
-                  console.log(`   Response preview: ${JSON.stringify(part.functionResponse.response).substring(0, 300)}...`);
+                if (verbose) {
+                  console.log(`📥 [ADK] Agent received function response: ${part.functionResponse.name}`);
+                  if (part.functionResponse.response) {
+                    console.log(`   Response preview: ${JSON.stringify(part.functionResponse.response).substring(0, 300)}...`);
+                  }
                 }
               }
               if (part.text) {
                 fullResponse += part.text + '\n';
-                console.log(`📝 [ADK] Received text (${part.text.length} chars): ${part.text.substring(0, 200)}...`);
+                if (verbose) {
+                  console.log(`📝 [ADK] Received text (${part.text.length} chars): ${part.text.substring(0, 200)}...`);
+                }
                 
                 // Try to parse JSON from the response
                 try {
@@ -535,13 +890,15 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
                     const parsed = JSON.parse(jsonMatch[0]);
                     if (Array.isArray(parsed) && parsed.length > 0) {
                       articles = parsed;
-                      console.log(`✅ [ADK] Found ${articles.length} articles in JSON response`);
+                      if (verbose) {
+                        console.log(`✅ [ADK] Found ${articles.length} articles in JSON response`);
+                      }
                       break;
                     }
                   }
                 } catch (e) {
                   // Not JSON, continue
-                  if (e.message.includes('JSON')) {
+                  if (verbose && e.message.includes('JSON')) {
                     console.log(`⚠️ [ADK] JSON parse error in part ${i}: ${e.message}`);
                   }
                 }
@@ -556,33 +913,6 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
         );
       }
 
-      // Always log the response for debugging
-      console.log(`📊 [ADK] Total events received: ${eventCount}`);
-      if (lastEvent) {
-        console.log(`📊 [ADK] Last event author: ${lastEvent.author}, partial: ${lastEvent.partial || false}`);
-        console.log(`📊 [ADK] Last event content: ${JSON.stringify(lastEvent.content || {}).substring(0, 500)}`);
-      }
-      
-      if (fullResponse) {
-        console.log(`📝 [ADK] Full agent response (first 1000 chars):\n${fullResponse.substring(0, 1000)}${fullResponse.length > 1000 ? '...' : ''}`);
-        if (
-          config.mode === 'v2' &&
-          /unable to find|could not find|I'm sorry|I cannot|no recent blog/i.test(fullResponse) &&
-          !/\[[\s\S]*"title"[\s\S]*\]/.test(fullResponse)
-        ) {
-          console.log(
-            `⚠️ [ADK][V2][diag] Prose/refusal-style reply with no JSON objects — likely skipped tool use or ignored JSON-only instruction.`
-          );
-        }
-      } else {
-        console.log(`⚠️ [ADK] No response text received from agent`);
-        console.log(`⚠️ [ADK] Last event structure: ${JSON.stringify(lastEvent || {}).substring(0, 1000)}`);
-      }
-      if (config.mode === 'v2' && toolCallCount === 0 && toolResponseCount === 0 && groundingEventCount === 0) {
-        console.log(
-          '⚠️ [ADK][V2][diag] No tool/grounding evidence in events (toolCalls=0, toolResponses=0, groundingEvents=0).'
-        );
-      }
       // If model output is unusable but grounding metadata has links, use them as a fallback.
       // This keeps V2 productive when ADK returns prose/empty JSON despite grounding.
       if (articles.length === 0 && groundingFallbackArticles.length > 0) {
@@ -591,9 +921,11 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
           if (a.url && !dedup.has(a.url)) dedup.set(a.url, a);
         }
         articles = Array.from(dedup.values()).slice(0, maxItems);
-        console.log(
-          `🛟 [ADK][V2][diag] Recovered ${articles.length} candidate article(s) from grounding metadata fallback`
-        );
+        if (verbose) {
+          console.log(
+            `🛟 [ADK][V2][diag] Recovered ${articles.length} candidate article(s) from grounding metadata fallback`
+          );
+        }
       }
       if (attemptError) {
         // Cleanup current attempt session before moving to next retry.
@@ -604,13 +936,20 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
               userId: session.userId,
               sessionId: session.id
             });
-            console.log(`🧹 [ADK] Cleaned up session ${session.id} after attempt error`);
+            if (verbose) {
+              console.log(`🧹 [ADK] Cleaned up session ${session.id} after attempt error`);
+            }
           }
         } catch (cleanupErr) {
           console.warn(`⚠️ [ADK] Could not clean up session after attempt error: ${cleanupErr.message}`);
         }
         session = null;
         if (qi < maxAttempts - 1) {
+          if (!verbose) {
+            console.log(
+              `[ADK] run_error attempt=${qi + 1}/${maxAttempts} ${(attemptError.message || 'unknown').substring(0, 160)}`
+            );
+          }
           continue;
         }
       }
@@ -620,8 +959,10 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
         // Check if response is just empty markdown code blocks (e.g., just "```")
         const trimmedResponse = fullResponse.trim();
         if (trimmedResponse === '```' || trimmedResponse === '```json' || trimmedResponse.length < 10) {
-          console.log(`⚠️ [ADK] [ISSUE] Response is empty or minimal (${trimmedResponse.length} chars). Agent may not have completed the request.`);
-          console.log(`⚠️ [ADK] [ISSUE] This could indicate: 1) Agent didn't use Google Search tool, 2) Search returned no results, 3) Agent response was truncated`);
+          if (verbose) {
+            console.log(`⚠️ [ADK] [ISSUE] Response is empty or minimal (${trimmedResponse.length} chars). Agent may not have completed the request.`);
+            console.log(`⚠️ [ADK] [ISSUE] This could indicate: 1) Agent didn't use Google Search tool, 2) Search returned no results, 3) Agent response was truncated`);
+          }
         } else {
           try {
             // Clean up control characters that can break JSON parsing
@@ -633,25 +974,61 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
               const parsed = JSON.parse(jsonMatch[0]);
               if (Array.isArray(parsed) && parsed.length > 0) {
                 articles = parsed;
-                console.log(`✅ [ADK] Found ${articles.length} articles in full response JSON`);
-              } else {
+                if (verbose) {
+                  console.log(`✅ [ADK] Found ${articles.length} articles in full response JSON`);
+                }
+              } else if (verbose) {
                 console.log(`⚠️ [ADK] [ISSUE] Found JSON array but it's empty. Agent may not have found any articles.`);
               }
-            } else {
+            } else if (verbose) {
               console.log(`⚠️ [ADK] [ISSUE] No JSON array found in response. Response might be text-only or agent didn't follow format.`);
               console.log(`⚠️ [ADK] [ISSUE] Full response preview: ${fullResponse.substring(0, 500)}...`);
             }
           } catch (e) {
-            console.log(`⚠️ [ADK] [ISSUE] Could not parse JSON from agent response: ${e.message}`);
-            console.log(`⚠️ [ADK] [ISSUE] Response preview: ${fullResponse.substring(0, 500)}...`);
+            if (verbose) {
+              console.log(`⚠️ [ADK] [ISSUE] Could not parse JSON from agent response: ${e.message}`);
+              console.log(`⚠️ [ADK] [ISSUE] Response preview: ${fullResponse.substring(0, 500)}...`);
+            }
           }
         }
       } else if (articles.length > 0) {
-        console.log(`✅ [ADK] Successfully extracted ${articles.length} articles from agent response`);
+        if (verbose) {
+          console.log(`✅ [ADK] Successfully extracted ${articles.length} articles from agent response`);
+        }
       } else if (articles.length === 0 && !fullResponse) {
-        console.log(`⚠️ [ADK] [ISSUE] No articles found and no response text. Agent may have failed silently or not executed.`);
+        if (verbose) {
+          console.log(`⚠️ [ADK] [ISSUE] No articles found and no response text. Agent may have failed silently or not executed.`);
+        }
       }
-      
+
+      if (verbose) {
+        console.log(`📊 [ADK] Total events received: ${eventCount}`);
+        if (lastEvent) {
+          console.log(`📊 [ADK] Last event author: ${lastEvent.author}, partial: ${lastEvent.partial || false}`);
+          console.log(`📊 [ADK] Last event content: ${JSON.stringify(lastEvent.content || {}).substring(0, 500)}`);
+        }
+        if (fullResponse) {
+          console.log(`📝 [ADK] Full agent response (first 1000 chars):\n${fullResponse.substring(0, 1000)}${fullResponse.length > 1000 ? '...' : ''}`);
+          if (
+            config.mode === 'v2' &&
+            /unable to find|could not find|I'm sorry|I cannot|no recent blog/i.test(fullResponse) &&
+            !/\[[\s\S]*"title"[\s\S]*\]/.test(fullResponse)
+          ) {
+            console.log(
+              `⚠️ [ADK][V2][diag] Prose/refusal-style reply with no JSON objects — likely skipped tool use or ignored JSON-only instruction.`
+            );
+          }
+        } else {
+          console.log(`⚠️ [ADK] No response text received from agent`);
+          console.log(`⚠️ [ADK] Last event structure: ${JSON.stringify(lastEvent || {}).substring(0, 1000)}`);
+        }
+        if (config.mode === 'v2' && toolCallCount === 0 && toolResponseCount === 0 && groundingEventCount === 0) {
+          console.log(
+            '⚠️ [ADK][V2][diag] No tool/grounding evidence in events (toolCalls=0, toolResponses=0, groundingEvents=0).'
+          );
+        }
+      }
+
       // Helper to resolve redirects and get canonical URL.
       // We use this before domain filtering so grounding redirect links can be
       // converted into real article URLs instead of being discarded too early.
@@ -661,24 +1038,20 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
             timeout: 10000,
             maxRedirects: 5,
             validateStatus: (status) => status >= 200 && status < 400,
-            maxContentLength: 10000,
-            maxBodyLength: 10000,
+            maxContentLength: 120000,
+            maxBodyLength: 120000,
+            headers: QUALITY_UA_HEADERS,
           });
 
-          let finalUrl = url;
-          if (response.request?.res?.responseUrl) {
-            finalUrl = response.request.res.responseUrl;
-          } else if (response.request?.responseURL) {
-            finalUrl = response.request.responseURL;
-          } else if (response.headers?.location) {
-            const location = response.headers.location;
-            finalUrl = location.startsWith('http') ? location : new URL(location, url).toString();
-          } else if (response.config?.url && response.config.url !== url && response.config.url.startsWith('http')) {
-            finalUrl = response.config.url;
-          }
+          const afterRedirect = getAxiosFinalUrl(response, url);
+          const htmlStr = typeof response.data === 'string' ? response.data : '';
+          const best = pickPreferredArticleUrl(url, afterRedirect, htmlStr, source.url);
 
-          if (finalUrl && finalUrl !== url && finalUrl.startsWith('http')) {
-            return finalUrl;
+          if (best && best.startsWith('http') && best !== url) {
+            return best;
+          }
+          if (afterRedirect && afterRedirect.startsWith('http') && afterRedirect !== url) {
+            return afterRedirect;
           }
           return url;
         } catch (e) {
@@ -728,7 +1101,7 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
           return { ...article, url: articleUrl, link: articleUrl };
         })
       );
-      if (resolvedGroundingRedirects > 0) {
+      if (resolvedGroundingRedirects > 0 && verbose) {
         console.log(`🔗 [ADK] Resolved ${resolvedGroundingRedirects} grounding redirect URL(s) before filtering`);
       }
       
@@ -736,7 +1109,9 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
       articles = articles.filter(article => {
         const title = article.title;
         if (!title || title === null || title === 'null' || title.trim() === '') {
-          console.log(`⚠️ [ADK] Filtering out article with null/empty title: ${article.url || article.link || 'unknown'}`);
+          if (verbose) {
+            console.log(`⚠️ [ADK] Filtering out article with null/empty title: ${article.url || article.link || 'unknown'}`);
+          }
           return false;
         }
         return true;
@@ -768,7 +1143,9 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
           const articleUrl = article.url || article.link;
           if (!articleUrl) {
             accuracyMetrics.filteredOut.missingUrl++;
-            console.log(`⚠️ [ADK] [ACCURACY] Filtering out article with missing URL (title: ${article.title || 'unknown'})`);
+            if (verbose) {
+              console.log(`⚠️ [ADK] [ACCURACY] Filtering out article with missing URL (title: ${article.title || 'unknown'})`);
+            }
             return false;
           }
           
@@ -777,20 +1154,26 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
               articleUrl.includes('grounding-api-redirect') ||
               articleUrl.includes('google.com/grounding')) {
             accuracyMetrics.filteredOut.googleRedirect++;
-            console.log(`⚠️ [ADK] [ACCURACY] Filtering out Google redirect URL: ${articleUrl.substring(0, 80)}...`);
+            if (verbose) {
+              console.log(`⚠️ [ADK] [ACCURACY] Filtering out Google redirect URL: ${articleUrl.substring(0, 80)}...`);
+            }
             return false;
           }
           
           // Filter out null URLs or placeholder URLs
           if (articleUrl === 'null' || articleUrl === null || articleUrl.trim() === '') {
             accuracyMetrics.filteredOut.nullUrl++;
-            console.log(`⚠️ [ADK] [ACCURACY] Filtering out null/empty URL (title: ${article.title || 'unknown'})`);
+            if (verbose) {
+              console.log(`⚠️ [ADK] [ACCURACY] Filtering out null/empty URL (title: ${article.title || 'unknown'})`);
+            }
             return false;
           }
           // Filter out literal placeholder paths (e.g. /post/placeholder)
           if (articleUrl.toLowerCase().includes('/placeholder')) {
             accuracyMetrics.filteredOut.genericUrl++;
-            console.log(`⚠️ [ADK] [ACCURACY] Filtering out placeholder URL: ${articleUrl}`);
+            if (verbose) {
+              console.log(`⚠️ [ADK] [ACCURACY] Filtering out placeholder URL: ${articleUrl}`);
+            }
             return false;
           }
           
@@ -800,7 +1183,9 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
           // Must match domain
           if (articleDomain !== sourceDomain) {
             accuracyMetrics.filteredOut.wrongDomain++;
-            console.log(`⚠️ [ADK] [ACCURACY] Filtering out wrong domain: ${articleDomain} (expected: ${sourceDomain}) - Title: "${article.title?.substring(0, 50) || 'unknown'}" - URL: ${articleUrl.substring(0, 80)}...`);
+            if (verbose) {
+              console.log(`⚠️ [ADK] [ACCURACY] Filtering out wrong domain: ${articleDomain} (expected: ${sourceDomain}) - Title: "${article.title?.substring(0, 50) || 'unknown'}" - URL: ${articleUrl.substring(0, 80)}...`);
+            }
             return false;
           }
 
@@ -813,9 +1198,11 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
               ap.startsWith(mediumPrefix + '/');
             if (!ok) {
               accuracyMetrics.filteredOut.wrongPublication++;
-              console.log(
-                `⚠️ [ADK] [ACCURACY] Filtering out wrong Medium publication (need path prefix ${mediumPrefix}): ${articleUrl.substring(0, 100)}...`
-              );
+              if (verbose) {
+                console.log(
+                  `⚠️ [ADK] [ACCURACY] Filtering out wrong Medium publication (need path prefix ${mediumPrefix}): ${articleUrl.substring(0, 100)}...`
+                );
+              }
               return false;
             }
           }
@@ -825,7 +1212,9 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
           // If URL is just the base blog URL or homepage, skip it
           if (articlePath === '/' || articlePath === basePath || articlePath === basePath + '/') {
             accuracyMetrics.filteredOut.genericUrl++;
-            console.log(`⚠️ [ADK] [ACCURACY] Filtering out generic URL (homepage/base): ${articleUrl}`);
+            if (verbose) {
+              console.log(`⚠️ [ADK] [ACCURACY] Filtering out generic URL (homepage/base): ${articleUrl}`);
+            }
             return false;
           }
           
@@ -841,14 +1230,18 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
               normalizedPath.startsWith('/privacy') ||
               normalizedPath.startsWith('/terms')) {
             accuracyMetrics.filteredOut.genericUrl++;
-            console.log(`⚠️ [ADK] [ACCURACY] Filtering out non-article page (${normalizedPath}): ${articleUrl}`);
+            if (verbose) {
+              console.log(`⚠️ [ADK] [ACCURACY] Filtering out non-article page (${normalizedPath}): ${articleUrl}`);
+            }
             return false;
           }
           // Filter out section/landing paths that are not single-article pages
           if (normalizedPath.includes('/eco-system') || normalizedPath.includes('/build/') ||
               normalizedPath.endsWith('/developers') || normalizedPath.includes('/blog/events')) {
             accuracyMetrics.filteredOut.genericUrl++;
-            console.log(`⚠️ [ADK] [ACCURACY] Filtering out non-article path (${normalizedPath}): ${articleUrl}`);
+            if (verbose) {
+              console.log(`⚠️ [ADK] [ACCURACY] Filtering out non-article path (${normalizedPath}): ${articleUrl}`);
+            }
             return false;
           }
           
@@ -863,7 +1256,9 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
           // This ensures we have a meaningful article path like "/blog/article-name" or "/article-slug"
           if (pathAfterDomain.length < 11) { // At least "/" + 10 chars = 11 total
             accuracyMetrics.filteredOut.shortPath++;
-            console.log(`⚠️ [ADK] [ACCURACY] Filtering out URL with insufficient path length (${pathAfterDomain.length} chars, need at least 11): ${articleUrl}`);
+            if (verbose) {
+              console.log(`⚠️ [ADK] [ACCURACY] Filtering out URL with insufficient path length (${pathAfterDomain.length} chars, need at least 11): ${articleUrl}`);
+            }
             return false;
           }
           
@@ -878,7 +1273,9 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
         } catch (e) {
           // Invalid URL format
           accuracyMetrics.filteredOut.invalidUrl++;
-          console.log(`⚠️ [ADK] [ACCURACY] Filtering out invalid URL: ${article.url || article.link || 'unknown'} - ${e.message}`);
+          if (verbose) {
+            console.log(`⚠️ [ADK] [ACCURACY] Filtering out invalid URL: ${article.url || article.link || 'unknown'} - ${e.message}`);
+          }
           return false;
         }
       });
@@ -894,52 +1291,60 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
         const articleUrl = article.url || article.link;
         if (!articleUrl || typeof articleUrl !== 'string') continue;
         try {
-          const resp = await axios.get(articleUrl, {
-            timeout: 10000,
-            maxRedirects: 5,
-            validateStatus: (status) => status < 500,
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (compatible; ScoopstreamBot/1.0)'
-            }
-          });
+          let resolvedForFetch = canonicalizeKnownBlogUrl(articleUrl);
+          let { resp, finalUrl: fetchedAfter404Retry, used404Fallback } = await fetchArticleForQuality(resolvedForFetch);
+          if (used404Fallback && resp.status !== 404 && concise) {
+            console.log(
+              `[ADK] quality_url_retry ok ${resolvedForFetch.substring(0, 90)}${resolvedForFetch.length > 90 ? '…' : ''} → ${fetchedAfter404Retry.substring(0, 90)}${fetchedAfter404Retry.length > 90 ? '…' : ''}`
+            );
+          }
 
           // Hard-drop dead links.
           if (resp.status === 404) {
-            console.log(`⚠️ [ADK][QUALITY] Dropping 404 article URL: ${articleUrl}`);
+            if (concise) {
+              console.log(`[ADK] quality_404 ${articleUrl.substring(0, 120)}${articleUrl.length > 120 ? '…' : ''}`);
+            } else {
+              console.log(`⚠️ [ADK][QUALITY] Dropping 404 article URL: ${articleUrl}`);
+            }
             continue;
           }
 
           // 403 is common for Medium anti-bot; keep if URL pattern is valid.
           if (resp.status >= 400 && resp.status !== 403 && resp.status !== 429) {
-            console.log(`⚠️ [ADK][QUALITY] Dropping non-OK article URL (${resp.status}): ${articleUrl}`);
+            if (concise) {
+              console.log(`[ADK] quality_http${resp.status} ${articleUrl.substring(0, 100)}…`);
+            } else {
+              console.log(`⚠️ [ADK][QUALITY] Dropping non-OK article URL (${resp.status}): ${articleUrl}`);
+            }
             continue;
           }
 
-          let finalUrl = articleUrl;
-          if (resp.request?.res?.responseUrl) {
-            finalUrl = resp.request.res.responseUrl;
-          } else if (resp.request?.responseURL) {
-            finalUrl = resp.request.responseURL;
+          let finalUrl = getAxiosFinalUrl(resp, fetchedAfter404Retry);
+          const rawHtml = typeof resp.data === 'string' ? resp.data : '';
+          const beforeCanonical = finalUrl;
+          finalUrl = pickPreferredArticleUrl(resolvedForFetch, finalUrl, rawHtml, source.url);
+          if (verbose && finalUrl !== beforeCanonical) {
+            console.log(
+              `🔗 [ADK][QUALITY] HTML canonical: ${escLogOneLine(beforeCanonical, 140)} → ${escLogOneLine(finalUrl, 140)}`
+            );
           }
 
           const next = { ...article, url: finalUrl, link: finalUrl };
-          const htmlTitle = normalizePageTitle(
-            extractHtmlTitle(typeof resp.data === 'string' ? resp.data : ''),
-            sourceDomain
-          );
+          const htmlTitle = normalizePageTitle(extractHtmlTitle(rawHtml), sourceDomain);
           if (htmlTitle && next.title) {
             const score = overlapScore(next.title, htmlTitle);
             if (score < 0.22) {
-              console.log(
-                `⚠️ [ADK][QUALITY] Title mismatch (score=${score.toFixed(2)}), replacing model title with page title.`
-              );
+              if (verbose) {
+                console.log(
+                  `⚠️ [ADK][QUALITY] Title mismatch (score=${score.toFixed(2)}), replacing model title with page title.`
+                );
+              }
               next.title = htmlTitle;
             }
           } else if (htmlTitle && !next.title) {
             next.title = htmlTitle;
           }
 
-          const rawHtml = typeof resp.data === 'string' ? resp.data : '';
           if (rawHtml) {
             const iso = articleEnrichment.extractDateFromHtml(rawHtml);
             if (iso) {
@@ -948,10 +1353,12 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
                 const ymd = d.toISOString().slice(0, 10);
                 const prev = next.datePublished;
                 next.datePublished = ymd;
-                if (prev && String(prev).slice(0, 10) !== ymd) {
-                  console.log(`📅 [ADK][DATE] HTML metadata: ${ymd} (ADK had "${prev}")`);
-                } else if (!prev) {
-                  console.log(`📅 [ADK][DATE] Filled missing date from page metadata: ${ymd}`);
+                if (verbose) {
+                  if (prev && String(prev).slice(0, 10) !== ymd) {
+                    console.log(`📅 [ADK][DATE] HTML metadata: ${ymd} (ADK had "${prev}")`);
+                  } else if (!prev) {
+                    console.log(`📅 [ADK][DATE] Filled missing date from page metadata: ${ymd}`);
+                  }
                 }
               }
             }
@@ -962,10 +1369,14 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
           // Keep article only for transient network issues on valid-looking URLs.
           // If we cannot verify due to timeout, we prefer recall over silent loss.
           if (e.code === 'ECONNABORTED' || e.code === 'ETIMEDOUT') {
-            console.log(`⚠️ [ADK][QUALITY] URL verify timeout, keeping candidate: ${articleUrl}`);
+            if (verbose) {
+              console.log(`⚠️ [ADK][QUALITY] URL verify timeout, keeping candidate: ${articleUrl}`);
+            }
             validatedArticles.push(article);
           } else {
-            console.log(`⚠️ [ADK][QUALITY] URL verify error, dropping: ${articleUrl} (${e.message})`);
+            if (verbose) {
+              console.log(`⚠️ [ADK][QUALITY] URL verify error, dropping: ${articleUrl} (${e.message})`);
+            }
           }
         }
       }
@@ -982,29 +1393,37 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
 
       const dateFilteredArticles = baseForDateFilter.filter((article) => {
         if (!article.datePublished) {
-          console.log(
-            `⚠️ [ADK] [DATE] Article has no date after HTML enrichment, keeping: "${article.title?.substring(0, 50) || 'unknown'}"`
-          );
+          if (verbose) {
+            console.log(
+              `⚠️ [ADK] [DATE] Article has no date after HTML enrichment, keeping: "${article.title?.substring(0, 50) || 'unknown'}"`
+            );
+          }
           return true;
         }
         try {
           const articleDate = new Date(article.datePublished);
           if (isNaN(articleDate.getTime())) {
-            console.log(
-              `⚠️ [ADK] [DATE] Invalid date format "${article.datePublished}", keeping article: "${article.title?.substring(0, 50) || 'unknown'}"`
-            );
+            if (verbose) {
+              console.log(
+                `⚠️ [ADK] [DATE] Invalid date format "${article.datePublished}", keeping article: "${article.title?.substring(0, 50) || 'unknown'}"`
+              );
+            }
             return true;
           }
           if (articleDate < cutoffDate) {
-            console.log(
-              `⚠️ [ADK] [DATE] Filtering out old article (${article.datePublished} < ${cutoffDateStr}): "${article.title?.substring(0, 50) || 'unknown'}"`
-            );
+            if (verbose) {
+              console.log(
+                `⚠️ [ADK] [DATE] Filtering out old article (${article.datePublished} < ${cutoffDateStr}): "${article.title?.substring(0, 50) || 'unknown'}"`
+              );
+            }
             accuracyMetrics.filteredOut.outsideDateRange = (accuracyMetrics.filteredOut.outsideDateRange || 0) + 1;
             return false;
           }
           return true;
         } catch (e) {
-          console.log(`⚠️ [ADK] [DATE] Error parsing date "${article.datePublished}": ${e.message}`);
+          if (verbose) {
+            console.log(`⚠️ [ADK] [DATE] Error parsing date "${article.datePublished}": ${e.message}`);
+          }
           return true;
         }
       });
@@ -1027,28 +1446,34 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
         return 0;
       });
 
-      // Log comprehensive ADK accuracy report
-      console.log(`\n📊 [ADK] [ACCURACY REPORT] for ${source.name} (${sourceDomain}):`);
-      console.log(`   Total articles returned by ADK: ${accuracyMetrics.totalReturned}`);
-      console.log(`   Valid articles after filtering: ${accuracyMetrics.validArticles}`);
-      console.log(`   Articles with dates: ${accuracyMetrics.articlesWithDates}`);
-      console.log(`   Articles without dates: ${accuracyMetrics.articlesWithoutDates}`);
-      console.log(`   Filtered out:`);
-      console.log(`     - Missing URL: ${accuracyMetrics.filteredOut.missingUrl}`);
-      console.log(`     - Null/empty URL: ${accuracyMetrics.filteredOut.nullUrl}`);
-      console.log(`     - Google redirect URLs: ${accuracyMetrics.filteredOut.googleRedirect}`);
-      console.log(`     - Wrong domain: ${accuracyMetrics.filteredOut.wrongDomain}`);
-      console.log(`     - Wrong Medium publication / path: ${accuracyMetrics.filteredOut.wrongPublication}`);
-      console.log(`     - Generic/homepage URLs: ${accuracyMetrics.filteredOut.genericUrl}`);
-      console.log(`     - Short path (< 11 chars): ${accuracyMetrics.filteredOut.shortPath}`);
-      console.log(`     - Invalid URL format: ${accuracyMetrics.filteredOut.invalidUrl}`);
-      console.log(`     - Outside date range (>${daysBack} days old): ${accuracyMetrics.filteredOut.outsideDateRange}`);
       const accuracyRate = accuracyMetrics.totalReturned > 0
         ? ((accuracyMetrics.validArticles / accuracyMetrics.totalReturned) * 100).toFixed(1)
         : 0;
-      console.log(`   Accuracy rate: ${accuracyRate}% (${accuracyMetrics.validArticles}/${accuracyMetrics.totalReturned} valid)\n`);
+      if (verbose) {
+        console.log(`\n📊 [ADK] [ACCURACY REPORT] for ${source.name} (${sourceDomain}):`);
+        console.log(`   Total articles returned by ADK: ${accuracyMetrics.totalReturned}`);
+        console.log(`   Valid articles after filtering: ${accuracyMetrics.validArticles}`);
+        console.log(`   Articles with dates: ${accuracyMetrics.articlesWithDates}`);
+        console.log(`   Articles without dates: ${accuracyMetrics.articlesWithoutDates}`);
+        console.log(`   Filtered out:`);
+        console.log(`     - Missing URL: ${accuracyMetrics.filteredOut.missingUrl}`);
+        console.log(`     - Null/empty URL: ${accuracyMetrics.filteredOut.nullUrl}`);
+        console.log(`     - Google redirect URLs: ${accuracyMetrics.filteredOut.googleRedirect}`);
+        console.log(`     - Wrong domain: ${accuracyMetrics.filteredOut.wrongDomain}`);
+        console.log(`     - Wrong Medium publication / path: ${accuracyMetrics.filteredOut.wrongPublication}`);
+        console.log(`     - Generic/homepage URLs: ${accuracyMetrics.filteredOut.genericUrl}`);
+        console.log(`     - Short path (< 11 chars): ${accuracyMetrics.filteredOut.shortPath}`);
+        console.log(`     - Invalid URL format: ${accuracyMetrics.filteredOut.invalidUrl}`);
+        console.log(`     - Outside date range (>${daysBack} days old): ${accuracyMetrics.filteredOut.outsideDateRange}`);
+        console.log(`   Accuracy rate: ${accuracyRate}% (${accuracyMetrics.validArticles}/${accuracyMetrics.totalReturned} valid)\n`);
+      } else if (config.mode !== 'v2' && verbose) {
+        const fo = accuracyMetrics.filteredOut;
+        console.log(
+          `📊 [ADK] ${source.name}: raw=${accuracyMetrics.totalReturned} domain_ok=${accuracyMetrics.validArticles} rate=${accuracyRate}% | dropped: wrongDomain=${fo.wrongDomain} pub=${fo.wrongPublication || 0} google=${fo.googleRedirect} generic=${fo.genericUrl} short=${fo.shortPath} invalid=${fo.invalidUrl} oldDate=${fo.outsideDateRange || 0}`
+        );
+      }
 
-      if (config.mode === 'v2') {
+      if (config.mode === 'v2' && verbose) {
         const fo = accuracyMetrics.filteredOut;
         console.log(
           `🔬 [ADK][V2][diag] attempt=${qi + 1}/${maxAttempts} rawJson=${articlesBeforeFilter} afterUrlFilters=${filteredArticles.length} afterQuality=${validatedArticles.length} afterDateFilter=${dateFilteredArticles.length} responseChars=${fullResponse.length} events=${eventCount} ` +
@@ -1057,18 +1482,20 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
         );
       }
 
-      if (dateFilteredArticles.length === 0) {
-        if (articlesBeforeFilter > 0) {
-          console.log(
-            `⚠️ [ADK] No articles found from ${sourceDomain} domain. ${articlesBeforeFilter} articles from other domains were filtered out.`
-          );
+      if (verbose) {
+        if (dateFilteredArticles.length === 0) {
+          if (articlesBeforeFilter > 0) {
+            console.log(
+              `⚠️ [ADK] No articles found from ${sourceDomain} domain. ${articlesBeforeFilter} articles from other domains were filtered out.`
+            );
+          } else {
+            console.log(`⚠️ [ADK] No articles found from ${sourceDomain} domain.`);
+          }
         } else {
-          console.log(`⚠️ [ADK] No articles found from ${sourceDomain} domain.`);
+          console.log(
+            `✅ [ADK] Found ${dateFilteredArticles.length} articles from ${sourceDomain} domain${articlesFiltered > 0 ? ` (${articlesFiltered} external articles filtered out)` : ''}`
+          );
         }
-      } else {
-        console.log(
-          `✅ [ADK] Found ${dateFilteredArticles.length} articles from ${sourceDomain} domain${articlesFiltered > 0 ? ` (${articlesFiltered} external articles filtered out)` : ''}`
-        );
       }
 
       if (source.id) {
@@ -1112,7 +1539,7 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
 
         // Resolve redirects to get canonical URL (e.g., long slug -> short canonical URL)
         const canonicalUrl = await resolveCanonicalUrl(articleUrl);
-        if (canonicalUrl !== articleUrl) {
+        if (canonicalUrl !== articleUrl && verbose) {
           console.log(`🔗 [ADK] Resolved redirect: ${articleUrl.substring(articleUrl.lastIndexOf('/') + 1).substring(0, 50)}... -> ${canonicalUrl.substring(canonicalUrl.lastIndexOf('/') + 1)}`);
         }
 
@@ -1131,24 +1558,63 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
       // Wait for all redirect resolutions
         lightweightArticles = await Promise.all(lightweightArticlesPromises);
 
-      console.log(`✅ [ADK] [${source.url}] Agent found ${lightweightArticles.length} articles`);
-      if (lightweightArticles.length > 0) {
+      const dateCoverage = lightweightArticles.length > 0
+        ? ((lightweightArticles.filter(a => a.datePublished).length / lightweightArticles.length) * 100).toFixed(1)
+        : 0;
+
+      if (verbose) {
+        console.log(`✅ [ADK] [${source.url}] Agent found ${lightweightArticles.length} articles`);
+      }
+      if (lightweightArticles.length > 0 && verbose) {
         lightweightArticles.forEach((article, i) => {
           console.log(`   ${i + 1}. "${article.title.substring(0, 50)}..." (date: ${article.datePublished || 'none'})`);
         });
       }
       
-      // Log final ADK summary
-      const dateCoverage = lightweightArticles.length > 0
-        ? ((lightweightArticles.filter(a => a.datePublished).length / lightweightArticles.length) * 100).toFixed(1)
-        : 0;
-      console.log(`📊 [ADK] [SUMMARY] ${source.name}: ${lightweightArticles.length} valid articles, ${dateCoverage}% have dates`);
+      if (verbose) {
+        console.log(`📊 [ADK] [SUMMARY] ${source.name}: ${lightweightArticles.length} valid articles, ${dateCoverage}% have dates`);
+      }
 
         lastRawCount = accuracyMetrics.totalReturned;
         lastValidCount = accuracyMetrics.validArticles;
         lastToolCalls = toolCallCount;
         lastToolResponses = toolResponseCount;
         lastGroundingEvents = groundingEventCount;
+
+      conciseLastAttempt = {
+        attempt: qi + 1,
+        fullResponse,
+        eventCount,
+        toolCallCount,
+        toolResponseCount,
+        groundingEventCount,
+        groundingChunkCount,
+        rawParsed: articlesBeforeFilter,
+        afterDomain: filteredArticles.length,
+        afterQuality: validatedArticles.length,
+        afterDate: dateFilteredArticles.length,
+        finalOut: lightweightArticles.length,
+        dateCoverage,
+      };
+
+      if (inspection) {
+        inspection.attempts.push({
+          attempt: qi + 1,
+          prompt: searchQuery,
+          fullResponse,
+          eventCount,
+          toolCallCount,
+          toolResponseCount,
+          groundingEventCount,
+          groundingChunkCount,
+          articlesBeforeFilter,
+          afterDomain: filteredArticles.length,
+          afterQuality: validatedArticles.length,
+          afterDateFilter: dateFilteredArticles.length,
+          finalOut: lightweightArticles.length,
+          filteredOut: { ...accuracyMetrics.filteredOut },
+        });
+      }
 
       // MEMORY FIX: Delete the session after use to prevent memory accumulation
       // InMemoryRunner stores all sessions in memory, causing OOM crashes over time
@@ -1159,7 +1625,9 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
             userId: session.userId,
             sessionId: session.id
           });
-          console.log(`🧹 [ADK] Cleaned up session ${session.id}`);
+          if (verbose) {
+            console.log(`🧹 [ADK] Cleaned up session ${session.id}`);
+          }
         }
       } catch (cleanupErr) {
         // Don't fail if cleanup fails, just log it
@@ -1169,23 +1637,73 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
         if (lightweightArticles.length > 0) {
           break;
         }
+        if (config.mode === 'v2' && qi < maxAttempts - 1) {
+          const base = 1500;
+          const cap = 12000;
+          const exp = Math.min(base * 2 ** qi + Math.floor(Math.random() * 1000), cap);
+          if (concise) {
+            console.log(`[ADK] backoff ${exp}ms before attempt ${qi + 2}/${maxAttempts}`);
+          } else {
+            console.log(`⏳ [ADK] Backing off ${exp}ms before attempt ${qi + 2}/${maxAttempts}`);
+          }
+          await new Promise((r) => setTimeout(r, exp));
+        }
       } // end for qi (retry attempts)
 
-      if (config.mode === 'v2') {
+      if (config.mode === 'v2' && verbose) {
         const ms = Date.now() - v2ObsStart;
         console.log(
           `📈 [ADK][V2] observability source=${source.name} domain=${new URL(source.url).hostname} ms=${ms} attempts=${maxAttempts} final=${lightweightArticles.length} rawReturned=${lastRawCount} validAfterDomainRules=${lastValidCount} toolCalls=${lastToolCalls} toolResponses=${lastToolResponses} groundingEvents=${lastGroundingEvents}`
         );
       }
 
+      if (verbose && config.mode === 'v2' && conciseLastAttempt) {
+        const s = conciseLastAttempt;
+        const outcomeTag = lightweightArticles.length > 0 ? 'ok' : 'empty';
+        console.log(
+          `[ADK] outcome=${outcomeTag} attempts_used=${s.attempt} final_out=${lightweightArticles.length} raw_json=${s.rawParsed} response_chars=${(s.fullResponse || '').length}`
+        );
+      }
+
+      if (concise && conciseLastAttempt) {
+        const s = conciseLastAttempt;
+        const preview = escLogOneLine(s.fullResponse, 400);
+        console.log(
+          `[ADK] done source=${JSON.stringify(source.name)} domain=${new URL(source.url).hostname} ` +
+            `ms=${Date.now() - scrapeStartedAt} lastAttempt=${s.attempt}/${maxAttempts} ` +
+            `final=${lightweightArticles.length} raw=${s.rawParsed} domainOk=${s.afterDomain} httpOk=${s.afterQuality} dateOk=${s.afterDate} out=${s.finalOut} ` +
+            `dates=${s.dateCoverage}% tools=${lastToolCalls}/${lastToolResponses} ground=${lastGroundingEvents} ` +
+            `ev=${s.eventCount} chars=${(s.fullResponse || '').length} preview=${JSON.stringify(preview)}`
+        );
+        const outcomeTag = lightweightArticles.length > 0 ? 'ok' : 'empty';
+        console.log(
+          `[ADK] outcome=${outcomeTag} attempts_used=${s.attempt} final_out=${s.finalOut} raw_json=${s.rawParsed} response_chars=${(s.fullResponse || '').length}`
+        );
+      }
+
+      if (inspect) {
+        inspection.finalArticles = lightweightArticles;
+        inspection.msTotal = Date.now() - scrapeStartedAt;
+        inspection.conciseSnapshot = conciseLastAttempt;
+      }
+
       // If no valid articles found: V2 returns [] (ADK-only, no implicit fallback); V1 throws for scraper fallback
       if (lightweightArticles.length === 0) {
         if (config.mode === 'v2') {
+          if (inspect) {
+            return { articles: [], inspection };
+          }
           return [];
+        }
+        if (inspect) {
+          return { articles: [], inspection };
         }
         throw new Error(`ADK agent found 0 valid articles from ${source.url} (may need fallback to traditional scraper)`);
       }
 
+      if (inspect) {
+        return { articles: lightweightArticles, inspection };
+      }
       return lightweightArticles;
     } catch (error) {
       // MEMORY FIX: Clean up session even on error
@@ -1225,10 +1743,36 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
       if (config.mode === 'v2') {
         const ms = Date.now() - scrapeStartedAt;
         console.warn(`⚠️ [ADK][V2] Returning empty result after error for ${source.name} (no scraper fallback)`);
-        console.log(
-          `📈 [ADK][V2] observability source=${source.name} domain=${source.url ? new URL(source.url).hostname : '?'} ms=${ms} attempts=error final=0 rawReturned=0 validAfterDomainRules=0 error=${(error.message || 'unknown').substring(0, 120)}`
-        );
+        if (verbose) {
+          console.log(
+            `📈 [ADK][V2] observability source=${source.name} domain=${source.url ? new URL(source.url).hostname : '?'} ms=${ms} attempts=error final=0 rawReturned=0 validAfterDomainRules=0 error=${(error.message || 'unknown').substring(0, 120)}`
+          );
+        } else {
+          console.log(
+            `[ADK] error source=${JSON.stringify(source.name)} ms=${ms} ${(error.message || 'unknown').substring(0, 200)}`
+          );
+        }
+        if (inspect) {
+          return {
+            articles: [],
+            inspection: {
+              ...(inspection || { source: { name: source.name, url: source.url } }),
+              error: error.message,
+              msTotal: ms,
+            },
+          };
+        }
         return [];
+      }
+
+      if (inspect) {
+        return {
+          articles: [],
+          inspection: {
+            ...(inspection || { source: { name: source.name, url: source.url } }),
+            error: error.message,
+          },
+        };
       }
 
       throw error;
@@ -1288,3 +1832,9 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []`;
 }
 
 module.exports = ADKScraper;
+module.exports.extractCanonicalUrlFromHtml = extractCanonicalUrlFromHtml;
+module.exports.pickPreferredArticleUrl = pickPreferredArticleUrl;
+module.exports.getAxiosFinalUrl = getAxiosFinalUrl;
+/** For scripts/eval-url-canonical-effectiveness.js — mirrors ADK quality pass HTTP behavior. */
+module.exports.fetchArticleForQuality = fetchArticleForQuality;
+module.exports.canonicalizeKnownBlogUrl = canonicalizeKnownBlogUrl;

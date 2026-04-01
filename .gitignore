@@ -6,3 +6,4 @@ client/build/
 data/
 *.db
 server.out
+tmp-adk-inspect-output.txt
