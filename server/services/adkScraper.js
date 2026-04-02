@@ -354,6 +354,44 @@ function domainSpecificSiteHint(baseDomain) {
   }
   return '';
 }
+
+/**
+ * Phase 4: Domain-specific blocklist for known bad URL patterns.
+ * Returns { blocked: boolean, reason?: string } for a given URL.
+ * Use this to reject URLs that Google Search returns but are clearly wrong
+ * (e.g., Cambrian national news site, Merit NATO pages).
+ */
+function domainBlocklist(articleUrl, sourceName) {
+  if (!articleUrl) return { blocked: false };
+  try {
+    const u = new URL(articleUrl);
+    const h = u.hostname.replace(/^www\./, '').toLowerCase();
+    const p = u.pathname.toLowerCase();
+
+    // Cambrian: block cambrian.org national/local news pages (wrong site)
+    if (sourceName && sourceName.toLowerCase().includes('cambrian')) {
+      if (h === 'cambrian.org' && (p.includes('/news/national') || p.includes('/news/local'))) {
+        return { blocked: true, reason: 'cambrian_news_wrong_site' };
+      }
+    }
+
+    // Merit: block NATO/DIANA pages (wrong entity)
+    if (sourceName && sourceName.toLowerCase().includes('merit')) {
+      if (p.includes('/diana') || p.includes('/nato') || p.includes('defence')) {
+        return { blocked: true, reason: 'merit_nato_wrong_entity' };
+      }
+    }
+
+    // Generic: block obvious non-blog paths on any domain
+    if (p.includes('/careers') || p.includes('/jobs/') || p.includes('/login') || p.includes('/signup')) {
+      return { blocked: true, reason: 'generic_non_article' };
+    }
+
+    return { blocked: false };
+  } catch {
+    return { blocked: false };
+  }
+}
 // This uses an agent with Google Search tool instead of scraping HTML
 // Based on: https://google.github.io/adk-docs/
 
@@ -595,10 +633,12 @@ Prefer URL structures similar to these examples when selecting results.\n`;
       throw new Error('ADK agent not initialized. Check ADK API key environment variable (GOOGLE_GENAI_API_KEY / GEMINI_API_KEY).');
       }
 
-      // V2 gets an extra self-recovery attempt because ADK can occasionally return
-      // malformed/empty outputs even when grounding is available.
-      const maxAttempts = config.mode === 'v2' ? 3 : 1;
+      // V2 smart retry: start with up to 3 attempts but short-circuit if toolCalls=0
+      // suggests a systemic issue (quota, model config) rather than transient bad luck.
+      const MAX_ATTEMPTS_CAP = config.mode === 'v2' ? 3 : 1;
+      let maxAttempts = MAX_ATTEMPTS_CAP;
       const maxItems = config.mode === 'v2' ? 8 : 3;
+      let consecutiveNoToolUse = 0; // Track attempts where model didn't use search
       const v2ObsStart = Date.now();
 
       const domain = new URL(source.url).hostname;
@@ -1130,7 +1170,9 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []${domainSp
           genericUrl: 0,
           shortPath: 0,
           invalidUrl: 0,
-          outsideDateRange: 0
+          outsideDateRange: 0,
+          blocklist: 0,
+          titleUrlMismatch: 0
         },
         validArticles: 0,
         articlesWithDates: 0,
@@ -1198,13 +1240,21 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []${domainSp
               ap.startsWith(mediumPrefix + '/');
             if (!ok) {
               accuracyMetrics.filteredOut.wrongPublication++;
-              if (verbose) {
-                console.log(
-                  `⚠️ [ADK] [ACCURACY] Filtering out wrong Medium publication (need path prefix ${mediumPrefix}): ${articleUrl.substring(0, 100)}...`
-                );
-              }
+              console.log(
+                `[ADK] medium_wrong_pub drop=${articleUrl.substring(0, 100)} need=${mediumPrefix} source=${source.name}`
+              );
               return false;
             }
+          }
+
+          // Phase 4: Domain-specific blocklist (Cambrian news, Merit NATO, etc.)
+          const blockCheck = domainBlocklist(articleUrl, source.name);
+          if (blockCheck.blocked) {
+            accuracyMetrics.filteredOut.blocklist = (accuracyMetrics.filteredOut.blocklist || 0) + 1;
+            console.log(
+              `[ADK] blocklist_drop reason=${blockCheck.reason} url=${articleUrl.substring(0, 100)} source=${source.name}`
+            );
+            return false;
           }
           
           // Filter out generic URLs (homepage, base blog URL without specific article path)
@@ -1333,6 +1383,15 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []${domainSp
           const htmlTitle = normalizePageTitle(extractHtmlTitle(rawHtml), sourceDomain);
           if (htmlTitle && next.title) {
             const score = overlapScore(next.title, htmlTitle);
+            // Phase 2: Title-URL agreement gate
+            // - score < 0.10: severe mismatch → DROP (likely wrong article paired with URL)
+            // - score < 0.22: mild mismatch → replace title with HTML title (trust URL)
+            if (score < 0.10) {
+              console.log(
+                `[ADK] title_url_drop score=${score.toFixed(2)} model="${(next.title || '').substring(0, 50)}" page="${(htmlTitle || '').substring(0, 50)}" url=${finalUrl.substring(0, 80)}`
+              );
+              continue; // DROP this article
+            }
             if (score < 0.22) {
               if (verbose) {
                 console.log(
@@ -1581,6 +1640,15 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []${domainSp
         lastToolResponses = toolResponseCount;
         lastGroundingEvents = groundingEventCount;
 
+      // Phase 0/3: Track tool usage for smart retry decisions
+      // Only explicit tool calls count for skip-retry (logs often show tools=0/0 ground=1 — grounding alone is not search)
+      const attemptUsedSearch = toolCallCount > 0 || toolResponseCount > 0;
+      if (!attemptUsedSearch) {
+        consecutiveNoToolUse++;
+      } else {
+        consecutiveNoToolUse = 0;
+      }
+
       conciseLastAttempt = {
         attempt: qi + 1,
         fullResponse,
@@ -1595,6 +1663,7 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []${domainSp
         afterDate: dateFilteredArticles.length,
         finalOut: lightweightArticles.length,
         dateCoverage,
+        usedSearch: attemptUsedSearch,
       };
 
       if (inspection) {
@@ -1637,6 +1706,16 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []${domainSp
         if (lightweightArticles.length > 0) {
           break;
         }
+
+        // Phase 3: Smart retry skip — if 2 consecutive attempts had no tool use,
+        // retrying is likely pointless (quota/config issue, not bad luck).
+        if (config.mode === 'v2' && consecutiveNoToolUse >= 2) {
+          console.log(
+            `[ADK] skip_retry reason=consecutive_no_tool_use count=${consecutiveNoToolUse} source=${JSON.stringify(source.name)} — likely systemic (quota/model config), not transient`
+          );
+          break;
+        }
+
         if (config.mode === 'v2' && qi < maxAttempts - 1) {
           const base = 1500;
           const cap = 12000;
