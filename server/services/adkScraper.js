@@ -772,70 +772,27 @@ Prefer URL structures similar to these examples when selecting results.\n`;
         ? await this.buildSourceMemoryHint(source, 5)
         : '';
 
-      // Preamble embeds critical rules - using web_search tool (our custom FunctionTool)
-      const curatorPreamble = `You are the feed curator for this source only — "${source.name}" (${baseDomain}).
+      // SIMPLIFIED: Just search and return results as JSON
+      // No complex filtering - Gemini processes Tavily results into clean JSON
+      const curatorPreamble = '';
 
-CRITICAL: You MUST call the web_search tool with site:${baseDomain} queries BEFORE giving your final answer. Do not answer from memory.
+      const primarySearchQuery = `Find articles on ${baseDomain}.
 
-Rules:
-1) You MUST call the web_search tool at least once. Search for recent articles on ${baseDomain}.
-2) Your final reply MUST be a single JSON array only — no markdown, no prose, no apologies. If nothing found: []
-3) URLs must be direct https links on ${baseDomain}; never use Google redirect or vertexaisearch URLs.
-4) Copy exact URL paths from search results so slugs match live pages.`;
+1. Call web_search with: site:${baseDomain} blog OR news
+2. Return the results as JSON
 
-      const primarySearchQuery = `${curatorPreamble}
+Output format (JSON array only, no other text):
+[{"title": "Article Title", "url": "https://...", "description": "Brief description"}, ...]
 
-Task: find up to ${maxItems} blog or news articles on ${baseDomain} published within the last ${daysBack} days (after ${cutoffDateStr}). Today is ${todayStr}.
-Source URL for scope: ${source.url}
-${mediumHint}
-${sourceMemoryHint}
-Step 1 — Call web_search now with queries such as:
-site:${baseDomain} blog
-site:${baseDomain} news OR post OR article
-site:${baseDomain}${sourcePath === '/' ? '/blog' : sourcePath} 
-(adjust if the site uses a subdomain like blog.${baseDomain}.)
+If no results found, return: []`;
 
-Step 2 — From search snippets and result URLs, build the JSON array for this source only.
+      const retrySearchQuery = `Search ${baseDomain} for articles.
 
-Output rules — reply with JSON only:
-- Array of objects: title, url, description, datePublished (YYYY-MM-DD or null).
-- url must be a normal https URL on ${baseDomain} (or obvious subdomain of that brand). No vertexaisearch / Google redirect URLs.
-- If nothing qualifies, reply with exactly: []
-${sourcePathHint}${domainSpecificSiteHint(baseDomain)}`;
+Call web_search: site:${baseDomain}
+Return JSON: [{"title": "...", "url": "...", "description": "..."}, ...]
+If nothing: []`;
 
-      const retrySearchQuery = `${curatorPreamble}
-
-Retry: previous answer was empty or not valid JSON.
-CRITICAL: You MUST call web_search tool now before responding.
-
-Use web_search with different queries, e.g.:
-site:${baseDomain} "blog"
-site:${baseDomain} after:${cutoffDateStr}
-site:${baseDomain} inurl:blog after:${cutoffDateStr}
-site:${baseDomain} inurl:news after:${cutoffDateStr}
-site:${baseDomain}${sourcePath === '/' ? '/blog' : sourcePath}
-Today is ${todayStr}.
-Source URL for scope: ${source.url}
-${mediumHint}
-${sourcePathHint}
-${sourceMemoryHint}
-Return ONLY valid JSON: an array of up to ${maxItems} objects {title, url, description, datePublished}. No markdown, no prose.
-You MUST call web_search before final output.
-If still nothing: []${domainSpecificSiteHint(baseDomain)}`;
-      const strictRetryQuery = `${curatorPreamble}
-
-Final retry. You MUST call web_search tool NOW before responding.
-
-Run at least two searches:
-1) site:${baseDomain} after:${cutoffDateStr}
-2) site:${baseDomain} inurl:blog OR inurl:news OR inurl:post after:${cutoffDateStr}
-
-Source URL for scope: ${source.url}
-${mediumHint}
-${sourcePathHint}
-${sourceMemoryHint}
-Return only a valid JSON array with up to ${maxItems} objects: {title,url,description,datePublished}.
-No prose. No markdown fences. If nothing qualifies, output exactly: []${domainSpecificSiteHint(baseDomain)}`;
+      const strictRetryQuery = retrySearchQuery;
 
       let lightweightArticles = [];
       let lastRawCount = 0;
@@ -1427,13 +1384,37 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []${domainSp
         }
       });
 
+      // SIMPLIFIED MODE: Skip all post-processing, just return what Gemini gives us
+      // Set ADK_SKIP_POST_PROCESSING=true to enable (for testing)
+      const skipPostProcessing = process.env.ADK_SKIP_POST_PROCESSING === 'true';
+      
+      // Declare these outside so they're available regardless of skipPostProcessing
+      let validatedArticles = [];
+      let articlesAfterUrlFilter = filteredArticles;
+      let dateFilteredArticles = [];
+      
+      if (skipPostProcessing) {
+        console.log(`[ADK] SKIP_POST_PROCESSING=true — returning raw results without filtering`);
+        // Just pass through what we got
+        validatedArticles = filteredArticles;
+        dateFilteredArticles = filteredArticles;
+        lightweightArticles = filteredArticles.map(a => ({
+          title: a.title || 'Untitled',
+          link: a.url || a.link,
+          url: a.url || a.link,
+          description: a.description || a.snippet || '',
+          content: a.description || a.snippet || '',
+          datePublished: a.datePublished || null,
+          sourceName: source.name,
+          category: source.category || 'General',
+        }));
+      } else {
       // Date-range filter runs AFTER the quality pass so we can use HTML metadata (JSON-LD, og:, etc.)
       // instead of trusting ADK-only dates alone.
-      const articlesAfterUrlFilter = filteredArticles;
+      articlesAfterUrlFilter = filteredArticles;
 
       // Final quality pass: verify URLs, repair title mismatches, and extract publish dates from HTML
       // (same response body as verification — no extra HTTP round trip).
-      const validatedArticles = [];
       for (const article of articlesAfterUrlFilter) {
         const articleUrl = article.url || article.link;
         if (!articleUrl || typeof articleUrl !== 'string') continue;
@@ -1548,7 +1529,7 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []${domainSp
         validatedArticles.length > 0 ? validatedArticles : articlesAfterUrlFilter;
       const articlesBeforeDateFilter = baseForDateFilter.length;
 
-      const dateFilteredArticles = baseForDateFilter.filter((article) => {
+      dateFilteredArticles = baseForDateFilter.filter((article) => {
         if (!article.datePublished) {
           if (verbose) {
             console.log(
@@ -1717,6 +1698,7 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []${domainSp
 
       // Wait for all redirect resolutions
         lightweightArticles = await Promise.all(lightweightArticlesPromises);
+      } // END of else block for post-processing (when skipPostProcessing is false)
 
       const dateCoverage = lightweightArticles.length > 0
         ? ((lightweightArticles.filter(a => a.datePublished).length / lightweightArticles.length) * 100).toFixed(1)
