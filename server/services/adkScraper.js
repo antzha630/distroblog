@@ -19,10 +19,22 @@ async function tavilySearch(query, apiKey, numResults = 10) {
     return [];
   }
   
+  // Clean up Google-specific search operators that Tavily doesn't support
+  let cleanQuery = query
+    .replace(/\bafter:\d{4}-\d{2}-\d{2}\b/gi, '')  // Remove after:YYYY-MM-DD
+    .replace(/\binurl:\w+/gi, '')                   // Remove inurl:xxx
+    .replace(/\s+/g, ' ')                           // Collapse multiple spaces
+    .trim();
+  
+  // If query is just "site:domain.com" with nothing else, add a generic term
+  if (/^site:\S+\s*$/.test(cleanQuery)) {
+    cleanQuery += ' blog OR news OR article';
+  }
+  
   try {
     const response = await axios.post(TAVILY_API_URL, {
       api_key: apiKey,
-      query: query,
+      query: cleanQuery,
       search_depth: 'basic',
       include_answer: false,
       include_raw_content: false,
@@ -33,7 +45,7 @@ async function tavilySearch(query, apiKey, numResults = 10) {
     });
     
     const results = response.data.results || [];
-    console.log(`[TAVILY] Search "${query.substring(0, 50)}..." returned ${results.length} results`);
+    console.log(`[TAVILY] Search "${cleanQuery.substring(0, 50)}..." returned ${results.length} results`);
     
     return results.map(item => ({
       title: item.title || '',
@@ -43,7 +55,9 @@ async function tavilySearch(query, apiKey, numResults = 10) {
     }));
   } catch (error) {
     if (error.response) {
-      console.error(`[TAVILY] API error ${error.response.status}: ${error.response.data?.message || error.response.data?.detail || 'Unknown error'}`);
+      const errData = error.response.data;
+      const errMsg = typeof errData === 'string' ? errData : (errData?.message || errData?.detail || JSON.stringify(errData));
+      console.error(`[TAVILY] API error ${error.response.status}: ${errMsg}`);
     } else {
       console.error(`[TAVILY] Request error: ${error.message}`);
     }
