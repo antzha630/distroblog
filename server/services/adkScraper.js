@@ -1,48 +1,51 @@
-// ADK (Agent Development Kit) implementation using Google Custom Search API
-// Required env: GOOGLE_GENAI_API_KEY or GEMINI_API_KEY, GOOGLE_CSE_ID (Custom Search Engine ID)
+// ADK (Agent Development Kit) implementation using Tavily Search API
+// Required env: GOOGLE_GENAI_API_KEY or GEMINI_API_KEY
+// Optional env: TAVILY_API_KEY (for web search)
 // Optional env: ADK_MODEL | SCOOPSTREAM_ADK_MODEL (try this Gemini id first), ADK_VERBOSE
 const axios = require('axios');
 const config = require('../config');
 const articleEnrichment = require('./articleEnrichment');
 
-// Google Custom Search API endpoint
-const GOOGLE_CSE_API_URL = 'https://www.googleapis.com/customsearch/v1';
+// Tavily Search API endpoint (replaces Google Custom Search which is closed to new customers)
+const TAVILY_API_URL = 'https://api.tavily.com/search';
 
 /**
- * Call Google Custom Search API to get real search results.
- * This replaces the fake ADK grounding with actual search results.
+ * Call Tavily Search API to get real search results.
+ * Tavily is designed for AI agents and provides clean, relevant results.
  */
-async function googleCustomSearch(query, apiKey, cseId, numResults = 10) {
-  if (!apiKey || !cseId) {
-    console.warn('[CSE] Missing API key or CSE ID, cannot perform search');
+async function tavilySearch(query, apiKey, numResults = 10) {
+  if (!apiKey) {
+    console.warn('[TAVILY] Missing API key, cannot perform search');
     return [];
   }
   
   try {
-    const response = await axios.get(GOOGLE_CSE_API_URL, {
-      params: {
-        key: apiKey,
-        cx: cseId,
-        q: query,
-        num: Math.min(numResults, 10), // API max is 10 per request
-      },
+    const response = await axios.post(TAVILY_API_URL, {
+      api_key: apiKey,
+      query: query,
+      search_depth: 'basic',
+      include_answer: false,
+      include_raw_content: false,
+      max_results: Math.min(numResults, 10),
+    }, {
       timeout: 15000,
+      headers: { 'Content-Type': 'application/json' }
     });
     
-    const items = response.data.items || [];
-    console.log(`[CSE] Search "${query.substring(0, 50)}..." returned ${items.length} results`);
+    const results = response.data.results || [];
+    console.log(`[TAVILY] Search "${query.substring(0, 50)}..." returned ${results.length} results`);
     
-    return items.map(item => ({
+    return results.map(item => ({
       title: item.title || '',
-      url: item.link || '',
-      snippet: item.snippet || '',
-      displayLink: item.displayLink || '',
+      url: item.url || '',
+      snippet: item.content || '',
+      displayLink: item.url ? new URL(item.url).hostname : '',
     }));
   } catch (error) {
     if (error.response) {
-      console.error(`[CSE] API error ${error.response.status}: ${error.response.data?.error?.message || 'Unknown error'}`);
+      console.error(`[TAVILY] API error ${error.response.status}: ${error.response.data?.message || error.response.data?.detail || 'Unknown error'}`);
     } else {
-      console.error(`[CSE] Request error: ${error.message}`);
+      console.error(`[TAVILY] Request error: ${error.message}`);
     }
     return [];
   }
@@ -436,7 +439,7 @@ function domainBlocklist(articleUrl, sourceName) {
     return { blocked: false };
   }
 }
-// This uses an agent with web_search tool (Custom Search API) instead of scraping HTML
+// This uses an agent with web_search tool (Tavily Search API) instead of scraping HTML
 // Based on: https://google.github.io/adk-docs/
 
 /**
@@ -467,12 +470,14 @@ class ADKScraper {
   async initialize() {
     if (this.initialized) return;
     
+    // Gemini/ADK API key (for the LLM)
     this.apiKey =
       process.env.GOOGLE_GENAI_API_KEY ||
       process.env.GEMINI_API_KEY ||
       process.env.GOOGLE_API_KEY;
     
-    this.cseId = process.env.GOOGLE_CSE_ID;
+    // Tavily API key for web search (replaces Google CSE which is closed to new customers)
+    this.tavilyApiKey = process.env.TAVILY_API_KEY;
     
     if (!this.apiKey) {
       console.warn(
@@ -481,13 +486,13 @@ class ADKScraper {
       return;
     }
     
-    if (!this.cseId) {
+    if (!this.tavilyApiKey) {
       console.warn(
-        '⚠️ Google Custom Search Engine ID not found. Set GOOGLE_CSE_ID in .env for real search results.'
+        '⚠️ Tavily API key not found. Set TAVILY_API_KEY in .env for web search results.'
       );
-      console.warn('   Without GOOGLE_CSE_ID, ADK will use grounding only (less accurate).');
+      console.warn('   Without TAVILY_API_KEY, ADK will use grounding only (less accurate).');
     } else {
-      console.log(`✅ [ADK] Custom Search Engine configured (CSE ID: ${this.cseId.substring(0, 8)}...)`);
+      console.log(`✅ [ADK] Tavily Search configured (key: ${this.tavilyApiKey.substring(0, 8)}...)`);
     }
 
     try {
@@ -535,12 +540,12 @@ class ADKScraper {
       }
       this.modelName = modelName;
 
-      // Create a custom FunctionTool that calls the real Google Custom Search API
-      // Use a unique name 'web_search' to avoid any conflict with ADK's internal 'google_search'
+      // Create a custom FunctionTool that calls Tavily Search API
+      // Tavily is designed for AI agents and provides clean, relevant results
       const self = this;
       const webSearchTool = new adk.FunctionTool({
         name: 'web_search',
-        description: 'Search the web using Custom Search API. Returns real search results with titles, URLs, and snippets. You MUST call this tool before answering. Use site:domain.com in the query to limit to a specific site.',
+        description: 'Search the web using Tavily Search API. Returns real search results with titles, URLs, and snippets. You MUST call this tool before answering. Use site:domain.com in the query to limit to a specific site.',
         parameters: {
           type: 'object',
           properties: {
@@ -554,8 +559,8 @@ class ADKScraper {
         execute: async ({ query }) => {
           console.log(`[ADK] Tool EXECUTE: web_search("${query.substring(0, 80)}${query.length > 80 ? '...' : ''}")`);
           try {
-            const results = await googleCustomSearch(query, self.apiKey, self.cseId, 10);
-            console.log(`[ADK] Tool returned ${results.length} results from Custom Search API`);
+            const results = await tavilySearch(query, self.tavilyApiKey, 10);
+            console.log(`[ADK] Tool returned ${results.length} results from Tavily`);
             if (results.length === 0) {
               return { results: [], message: 'No results found for this query. Try a different search.' };
             }
@@ -601,7 +606,7 @@ class ADKScraper {
       }
 
       this.initialized = true;
-      const searchMode = this.cseId ? 'web_search tool (Custom Search API)' : 'Grounding only (fallback)';
+      const searchMode = this.tavilyApiKey ? 'web_search tool (Tavily API)' : 'Grounding only (fallback)';
       console.log(`✅ ADK agent initialized successfully with ${searchMode}`);
     } catch (error) {
       console.error('❌ Error initializing ADK agent:', error.message);
