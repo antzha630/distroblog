@@ -483,29 +483,21 @@ class ADKScraper {
 
       // Create LlmAgent with Google Search tool
       // The agent will use Google Search to find articles from websites
-      // Based on Python ADK pattern: tools=[google_search] with simple instruction
-      // ADK/Gemini prompt best practices (see ai.google.dev/gemini-api/docs/prompting-strategies, google.github.io/adk-docs/agents/llm-agents):
-      // - Be clear and specific; avoid long lists of "don't" (positive patterns beat anti-patterns).
-      // - Use few-shot examples for format and behavior; keep instructions focused.
+      //
+      // CRITICAL WORKAROUND: Due to Gemini API bug (googleapis/js-genai#1321),
+      // combining systemInstruction with googleSearch tool returns empty responses
+      // with finishReason=STOP and tools=0/0. The LlmAgent 'instruction' field becomes
+      // a systemInstruction internally. The fix is to NOT use the 'instruction' field
+      // and instead embed all instructions in each user message. This is a known P2
+      // bug as of April 2026 with no ETA for fix.
       this.agent = new adk.LlmAgent({
         name: 'article_finder',
         // Pass Gemini instance so credentials are available in environments where
         // ADK doesn't pick up the right API key env var names automatically.
         model: llm,
         description: 'Agent that finds recent blog posts and articles from websites using Google Search.',
-        instruction: `You are a research assistant. Your job is to find recent blog posts on a specific website using the Google Search tool.
-
-Non-negotiable rules:
-1) You MUST use the Google Search tool at least once before your final answer. Do not answer from memory alone.
-2) Your final reply MUST be a single JSON array only — no markdown fences, no headings, no apologies, no "I could not find" paragraphs. If there are zero matches, output exactly: []
-3) Each item must pair title and url from the same search result (never mix title from one result with url from another).
-4) URLs must be direct https links on the requested site (or its subdomains when that site uses them); never use Google redirect or vertexaisearch URLs. Prefer exact URLs as shown in Google Search results (snippets) so slugs match live pages.
-5) On medium.com, only list articles whose URL path is under the same publication as the user’s source (e.g. medium.com/lumerin-blog/... not medium.com/illumination/...).
-
-Fields per object: title (string), url (string), description (string, short), datePublished (YYYY-MM-DD or null if unknown).
-
-Example (your entire final message must look like this, nothing else):
-[{"title":"Example Post","url":"https://example.com/blog/post-slug","description":"One or two sentences.","datePublished":"2026-03-20"}]`,
+        // NO 'instruction' field — embedding in user messages to work around Gemini systemInstruction + googleSearch bug
+        // (googleapis/js-genai#1321). The old instruction content is now embedded in user messages.
         tools: [adk.GOOGLE_SEARCH] // Use Google Search tool (equivalent to Python's google_search)
       });
 
@@ -684,10 +676,16 @@ Prefer URL structures similar to these examples when selecting results.\n`;
         ? await this.buildSourceMemoryHint(source, 5)
         : '';
 
-      const curatorPreamble = `Role: You are the feed curator for this source only — "${source.name}" (${baseDomain}).
-You track official posts on this site’s blog/news in the date window below — not generic Web3 news, not other domains, and not invented URLs.
-Every url in your JSON must be a real https page on ${baseDomain} that you can tie to Google Search results or clear snippets for this site; copy link paths from search results when possible so slugs match live pages; if search shows nothing in range, output exactly [].
-Your entire reply must be one JSON array — no prose before or after, no "I am…" self-introduction, no apologies.`;
+      // Preamble embeds critical rules since we cannot use systemInstruction with Google Search tool (Gemini bug)
+      const curatorPreamble = `You are the feed curator for this source only — "${source.name}" (${baseDomain}).
+
+CRITICAL: You MUST call the Google Search tool with site:${baseDomain} queries BEFORE giving your final answer. Do not answer from memory.
+
+Rules:
+1) You MUST use Google Search at least once. Search for recent articles on ${baseDomain}.
+2) Your final reply MUST be a single JSON array only — no markdown, no prose, no apologies. If nothing found: []
+3) URLs must be direct https links on ${baseDomain}; never use Google redirect or vertexaisearch URLs.
+4) Copy exact URL paths from search results so slugs match live pages.`;
 
       const primarySearchQuery = `${curatorPreamble}
 
@@ -709,10 +707,12 @@ Output rules — reply with JSON only:
 - If nothing qualifies, reply with exactly: []
 ${sourcePathHint}${domainSpecificSiteHint(baseDomain)}`;
 
-      const retrySearchQuery = `Same role: curator for "${source.name}" (${baseDomain}) only — JSON array only, no other text.
-Retry: previous answer was empty or not valid JSON.
+      const retrySearchQuery = `${curatorPreamble}
 
-Use Google Search again with different queries, e.g.:
+Retry: previous answer was empty or not valid JSON.
+CRITICAL: You MUST call Google Search tool now before responding.
+
+Use Google Search with different queries, e.g.:
 site:${baseDomain} "blog"
 site:${baseDomain} after:${cutoffDateStr}
 site:${baseDomain} inurl:blog after:${cutoffDateStr}
@@ -726,8 +726,9 @@ ${sourceMemoryHint}
 Return ONLY valid JSON: an array of up to ${maxItems} objects {title, url, description, datePublished}. No markdown, no prose.
 You MUST call Google Search before final output.
 If still nothing: []${domainSpecificSiteHint(baseDomain)}`;
-      const strictRetryQuery = `Same role: curator for "${source.name}" (${baseDomain}) only — JSON array only.
-Final retry. Use Google Search now.
+      const strictRetryQuery = `${curatorPreamble}
+
+Final retry. You MUST call Google Search tool NOW before responding.
 
 Run at least two searches:
 1) site:${baseDomain} after:${cutoffDateStr}
