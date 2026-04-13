@@ -1454,16 +1454,17 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []${domainSp
           const htmlTitle = normalizePageTitle(extractHtmlTitle(rawHtml), sourceDomain);
           if (htmlTitle && next.title) {
             const score = overlapScore(next.title, htmlTitle);
-            // Phase 2: Title-URL agreement gate
-            // - score < 0.10: severe mismatch → DROP (likely wrong article paired with URL)
-            // - score < 0.22: mild mismatch → replace title with HTML title (trust URL)
-            if (score < 0.10) {
+            // Title-URL agreement gate (relaxed for real Custom Search results)
+            // - score < 0.05: extreme mismatch → DROP (completely wrong page)
+            // - score < 0.20: mild mismatch → replace title with HTML title (trust URL)
+            // Previously was 0.10/0.22 but that was too strict for real search results
+            if (score < 0.05) {
               console.log(
                 `[ADK] title_url_drop score=${score.toFixed(2)} model="${(next.title || '').substring(0, 50)}" page="${(htmlTitle || '').substring(0, 50)}" url=${finalUrl.substring(0, 80)}`
               );
               continue; // DROP this article
             }
-            if (score < 0.22) {
+            if (score < 0.20) {
               if (verbose) {
                 console.log(
                   `⚠️ [ADK][QUALITY] Title mismatch (score=${score.toFixed(2)}), replacing model title with page title.`
@@ -1540,7 +1541,10 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []${domainSp
             }
             return true;
           }
-          if (articleDate < cutoffDate) {
+          // Add 7-day grace period to cutoff (dates can be slightly inaccurate)
+          const gracePeriodMs = 7 * 24 * 60 * 60 * 1000;
+          const relaxedCutoff = new Date(cutoffDate.getTime() - gracePeriodMs);
+          if (articleDate < relaxedCutoff) {
             if (verbose) {
               console.log(
                 `⚠️ [ADK] [DATE] Filtering out old article (${article.datePublished} < ${cutoffDateStr}): "${article.title?.substring(0, 50) || 'unknown'}"`
