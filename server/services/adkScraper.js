@@ -436,7 +436,7 @@ function domainBlocklist(articleUrl, sourceName) {
     return { blocked: false };
   }
 }
-// This uses an agent with Google Search tool instead of scraping HTML
+// This uses an agent with web_search tool (Custom Search API) instead of scraping HTML
 // Based on: https://google.github.io/adk-docs/
 
 /**
@@ -536,10 +536,11 @@ class ADKScraper {
       this.modelName = modelName;
 
       // Create a custom FunctionTool that calls the real Google Custom Search API
+      // Use a unique name 'web_search' to avoid any conflict with ADK's internal 'google_search'
       const self = this;
-      const googleSearchTool = new adk.FunctionTool({
-        name: 'google_search',
-        description: 'Search the web using Google Custom Search API. Returns real search results with titles, URLs, and snippets.',
+      const webSearchTool = new adk.FunctionTool({
+        name: 'web_search',
+        description: 'Search the web using Custom Search API. Returns real search results with titles, URLs, and snippets. You MUST call this tool before answering. Use site:domain.com in the query to limit to a specific site.',
         parameters: {
           type: 'object',
           properties: {
@@ -550,19 +551,25 @@ class ADKScraper {
           },
           required: ['query']
         },
-        func: async ({ query }) => {
-          console.log(`[ADK] Tool called: google_search("${query.substring(0, 60)}${query.length > 60 ? '...' : ''}")`);
-          const results = await googleCustomSearch(query, self.apiKey, self.cseId, 10);
-          if (results.length === 0) {
-            return JSON.stringify({ results: [], message: 'No results found' });
+        execute: async ({ query }) => {
+          console.log(`[ADK] Tool EXECUTE: web_search("${query.substring(0, 80)}${query.length > 80 ? '...' : ''}")`);
+          try {
+            const results = await googleCustomSearch(query, self.apiKey, self.cseId, 10);
+            console.log(`[ADK] Tool returned ${results.length} results from Custom Search API`);
+            if (results.length === 0) {
+              return { results: [], message: 'No results found for this query. Try a different search.' };
+            }
+            return {
+              results: results.map(r => ({
+                title: r.title,
+                url: r.url,
+                snippet: r.snippet
+              }))
+            };
+          } catch (err) {
+            console.error(`[ADK] Tool ERROR: ${err.message}`);
+            return { error: err.message, results: [] };
           }
-          return JSON.stringify({
-            results: results.map(r => ({
-              title: r.title,
-              url: r.url,
-              snippet: r.snippet
-            }))
-          });
         }
       });
 
@@ -570,8 +577,8 @@ class ADKScraper {
       this.agent = new adk.LlmAgent({
         name: 'article_finder',
         model: llm,
-        description: 'Agent that finds recent blog posts and articles from websites using Google Search.',
-        tools: [googleSearchTool]
+        description: 'Agent that finds recent blog posts and articles from websites using web search.',
+        tools: [webSearchTool]
       });
 
       // Create in-memory runner to execute the agent
@@ -594,7 +601,7 @@ class ADKScraper {
       }
 
       this.initialized = true;
-      const searchMode = this.cseId ? 'Custom Search API (real results)' : 'Grounding only (fallback)';
+      const searchMode = this.cseId ? 'web_search tool (Custom Search API)' : 'Grounding only (fallback)';
       console.log(`✅ ADK agent initialized successfully with ${searchMode}`);
     } catch (error) {
       console.error('❌ Error initializing ADK agent:', error.message);
@@ -746,13 +753,13 @@ Prefer URL structures similar to these examples when selecting results.\n`;
         ? await this.buildSourceMemoryHint(source, 5)
         : '';
 
-      // Preamble embeds critical rules since we cannot use systemInstruction with Google Search tool (Gemini bug)
+      // Preamble embeds critical rules - using web_search tool (our custom FunctionTool)
       const curatorPreamble = `You are the feed curator for this source only — "${source.name}" (${baseDomain}).
 
-CRITICAL: You MUST call the Google Search tool with site:${baseDomain} queries BEFORE giving your final answer. Do not answer from memory.
+CRITICAL: You MUST call the web_search tool with site:${baseDomain} queries BEFORE giving your final answer. Do not answer from memory.
 
 Rules:
-1) You MUST use Google Search at least once. Search for recent articles on ${baseDomain}.
+1) You MUST call the web_search tool at least once. Search for recent articles on ${baseDomain}.
 2) Your final reply MUST be a single JSON array only — no markdown, no prose, no apologies. If nothing found: []
 3) URLs must be direct https links on ${baseDomain}; never use Google redirect or vertexaisearch URLs.
 4) Copy exact URL paths from search results so slugs match live pages.`;
@@ -763,7 +770,7 @@ Task: find up to ${maxItems} blog or news articles on ${baseDomain} published wi
 Source URL for scope: ${source.url}
 ${mediumHint}
 ${sourceMemoryHint}
-Step 1 — Use Google Search now with queries such as:
+Step 1 — Call web_search now with queries such as:
 site:${baseDomain} blog
 site:${baseDomain} news OR post OR article
 site:${baseDomain}${sourcePath === '/' ? '/blog' : sourcePath} 
@@ -780,9 +787,9 @@ ${sourcePathHint}${domainSpecificSiteHint(baseDomain)}`;
       const retrySearchQuery = `${curatorPreamble}
 
 Retry: previous answer was empty or not valid JSON.
-CRITICAL: You MUST call Google Search tool now before responding.
+CRITICAL: You MUST call web_search tool now before responding.
 
-Use Google Search with different queries, e.g.:
+Use web_search with different queries, e.g.:
 site:${baseDomain} "blog"
 site:${baseDomain} after:${cutoffDateStr}
 site:${baseDomain} inurl:blog after:${cutoffDateStr}
@@ -794,11 +801,11 @@ ${mediumHint}
 ${sourcePathHint}
 ${sourceMemoryHint}
 Return ONLY valid JSON: an array of up to ${maxItems} objects {title, url, description, datePublished}. No markdown, no prose.
-You MUST call Google Search before final output.
+You MUST call web_search before final output.
 If still nothing: []${domainSpecificSiteHint(baseDomain)}`;
       const strictRetryQuery = `${curatorPreamble}
 
-Final retry. You MUST call Google Search tool NOW before responding.
+Final retry. You MUST call web_search tool NOW before responding.
 
 Run at least two searches:
 1) site:${baseDomain} after:${cutoffDateStr}
@@ -933,7 +940,7 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []${domainSp
               throw new Error(`Rate limit exceeded (429): ${event.errorMessage}`);
             } else if (event.errorCode === '400' && event.errorMessage && event.errorMessage.includes('Search as tool is not enabled')) {
               console.error(
-                `⚠️ [ADK] Model does not support Google Search tool.${config.mode === 'v2' ? ' (V2: no Playwright fallback — empty result).' : ' Will fallback to traditional scraper.'}`
+                `⚠️ [ADK] Model does not support web_search tool.${config.mode === 'v2' ? ' (V2: no Playwright fallback — empty result).' : ' Will fallback to traditional scraper.'}`
               );
               throw new Error(`Model does not support Google Search: ${event.errorMessage}`);
             }
@@ -1072,7 +1079,7 @@ No prose. No markdown fences. If nothing qualifies, output exactly: []${domainSp
         if (trimmedResponse === '```' || trimmedResponse === '```json' || trimmedResponse.length < 10) {
           if (verbose) {
             console.log(`⚠️ [ADK] [ISSUE] Response is empty or minimal (${trimmedResponse.length} chars). Agent may not have completed the request.`);
-            console.log(`⚠️ [ADK] [ISSUE] This could indicate: 1) Agent didn't use Google Search tool, 2) Search returned no results, 3) Agent response was truncated`);
+            console.log(`⚠️ [ADK] [ISSUE] This could indicate: 1) Agent didn't use web_search tool, 2) Search returned no results, 3) Agent response was truncated`);
           }
         } else {
           try {

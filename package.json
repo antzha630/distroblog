@@ -17,7 +17,7 @@
     "adk:inspect": "node scripts/adk-inspect.js"
   },
   "dependencies": {
-    "@google/adk": "^0.2.1",
+    "@google/adk": "^0.6.1",
     "@google/generative-ai": "^0.24.1",
     "axios": "^1.6.0",
     "cheerio": "^1.1.2",
