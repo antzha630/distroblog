@@ -1,8 +1,52 @@
-// ADK (Agent Development Kit) implementation using Google Search
-// Optional env: ADK_MODEL | SCOOPSTREAM_ADK_MODEL (try this Gemini id first), ADK_VERBOSE, GOOGLE_GENAI_API_KEY | GEMINI_API_KEY
+// ADK (Agent Development Kit) implementation using Google Custom Search API
+// Required env: GOOGLE_GENAI_API_KEY or GEMINI_API_KEY, GOOGLE_CSE_ID (Custom Search Engine ID)
+// Optional env: ADK_MODEL | SCOOPSTREAM_ADK_MODEL (try this Gemini id first), ADK_VERBOSE
 const axios = require('axios');
 const config = require('../config');
 const articleEnrichment = require('./articleEnrichment');
+
+// Google Custom Search API endpoint
+const GOOGLE_CSE_API_URL = 'https://www.googleapis.com/customsearch/v1';
+
+/**
+ * Call Google Custom Search API to get real search results.
+ * This replaces the fake ADK grounding with actual search results.
+ */
+async function googleCustomSearch(query, apiKey, cseId, numResults = 10) {
+  if (!apiKey || !cseId) {
+    console.warn('[CSE] Missing API key or CSE ID, cannot perform search');
+    return [];
+  }
+  
+  try {
+    const response = await axios.get(GOOGLE_CSE_API_URL, {
+      params: {
+        key: apiKey,
+        cx: cseId,
+        q: query,
+        num: Math.min(numResults, 10), // API max is 10 per request
+      },
+      timeout: 15000,
+    });
+    
+    const items = response.data.items || [];
+    console.log(`[CSE] Search "${query.substring(0, 50)}..." returned ${items.length} results`);
+    
+    return items.map(item => ({
+      title: item.title || '',
+      url: item.link || '',
+      snippet: item.snippet || '',
+      displayLink: item.displayLink || '',
+    }));
+  } catch (error) {
+    if (error.response) {
+      console.error(`[CSE] API error ${error.response.status}: ${error.response.data?.error?.message || 'Unknown error'}`);
+    } else {
+      console.error(`[CSE] Request error: ${error.message}`);
+    }
+    return [];
+  }
+}
 
 /** ADK_VERBOSE=1 — full per-event / per-filter logs. Default: concise [ADK] start/done + preview (no extra env). */
 function isAdkVerbose() {
@@ -423,31 +467,41 @@ class ADKScraper {
   async initialize() {
     if (this.initialized) return;
     
-    const apiKey =
+    this.apiKey =
       process.env.GOOGLE_GENAI_API_KEY ||
       process.env.GEMINI_API_KEY ||
       process.env.GOOGLE_API_KEY;
     
-    if (!apiKey) {
+    this.cseId = process.env.GOOGLE_CSE_ID;
+    
+    if (!this.apiKey) {
       console.warn(
         '⚠️ ADK API key not found. ADK scraping will be disabled. Set GOOGLE_GENAI_API_KEY or GEMINI_API_KEY in .env'
       );
       return;
+    }
+    
+    if (!this.cseId) {
+      console.warn(
+        '⚠️ Google Custom Search Engine ID not found. Set GOOGLE_CSE_ID in .env for real search results.'
+      );
+      console.warn('   Without GOOGLE_CSE_ID, ADK will use grounding only (less accurate).');
+    } else {
+      console.log(`✅ [ADK] Custom Search Engine configured (CSE ID: ${this.cseId.substring(0, 8)}...)`);
     }
 
     try {
       // Dynamic import since ADK is ES module and we're in CommonJS
       const adk = await import('@google/adk');
       
-      // Pick the first available model that supports Google Search
-      // Updated January 2026: gemini-2.0-flash-exp was deprecated, using GA models
+      // Pick the first available model
       const defaultCandidates = [
-        'gemini-2.5-flash',             // Prefer stronger quality first
-        'gemini-2.0-flash',             // Stable fallback
-        'gemini-2.5-flash-lite',        // Lightweight version
-        'gemini-1.5-flash-latest',      // common alias
-        'gemini-1.5-flash',             // fallback
-        'gemini-1.5-flash-001',         // legacy fallback
+        'gemini-2.5-flash',
+        'gemini-2.0-flash',
+        'gemini-2.5-flash-lite',
+        'gemini-1.5-flash-latest',
+        'gemini-1.5-flash',
+        'gemini-1.5-flash-001',
       ];
       const envModel = (process.env.ADK_MODEL || process.env.SCOOPSTREAM_ADK_MODEL || '').trim();
       const candidateModels = envModel
@@ -464,11 +518,11 @@ class ADKScraper {
         try {
           llm = new adk.Gemini({
             model: candidate,
-            apiKey: apiKey
+            apiKey: this.apiKey
           });
           modelName = candidate;
-          this.llm = llm; // Store for reuse by other routes
-          console.log(`✅ [ADK] Using model: ${candidate} (Google Search tool compatible)`);
+          this.llm = llm;
+          console.log(`✅ [ADK] Using model: ${candidate}`);
           break;
         } catch (e) {
           console.warn(`⚠️ [ADK] Model ${candidate} unavailable: ${e.message}`);
@@ -477,28 +531,47 @@ class ADKScraper {
       }
 
       if (!llm || !modelName) {
-        throw new Error('No Gemini model available for ADK with Google Search');
+        throw new Error('No Gemini model available for ADK');
       }
       this.modelName = modelName;
 
-      // Create LlmAgent with Google Search tool
-      // The agent will use Google Search to find articles from websites
-      //
-      // CRITICAL WORKAROUND: Due to Gemini API bug (googleapis/js-genai#1321),
-      // combining systemInstruction with googleSearch tool returns empty responses
-      // with finishReason=STOP and tools=0/0. The LlmAgent 'instruction' field becomes
-      // a systemInstruction internally. The fix is to NOT use the 'instruction' field
-      // and instead embed all instructions in each user message. This is a known P2
-      // bug as of April 2026 with no ETA for fix.
+      // Create a custom FunctionTool that calls the real Google Custom Search API
+      const self = this;
+      const googleSearchTool = new adk.FunctionTool({
+        name: 'google_search',
+        description: 'Search the web using Google Custom Search API. Returns real search results with titles, URLs, and snippets.',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: {
+              type: 'string',
+              description: 'The search query. Use site:domain.com to limit to a specific site.'
+            }
+          },
+          required: ['query']
+        },
+        func: async ({ query }) => {
+          console.log(`[ADK] Tool called: google_search("${query.substring(0, 60)}${query.length > 60 ? '...' : ''}")`);
+          const results = await googleCustomSearch(query, self.apiKey, self.cseId, 10);
+          if (results.length === 0) {
+            return JSON.stringify({ results: [], message: 'No results found' });
+          }
+          return JSON.stringify({
+            results: results.map(r => ({
+              title: r.title,
+              url: r.url,
+              snippet: r.snippet
+            }))
+          });
+        }
+      });
+
+      // Create LlmAgent with our custom search tool
       this.agent = new adk.LlmAgent({
         name: 'article_finder',
-        // Pass Gemini instance so credentials are available in environments where
-        // ADK doesn't pick up the right API key env var names automatically.
         model: llm,
         description: 'Agent that finds recent blog posts and articles from websites using Google Search.',
-        // NO 'instruction' field — embedding in user messages to work around Gemini systemInstruction + googleSearch bug
-        // (googleapis/js-genai#1321). The old instruction content is now embedded in user messages.
-        tools: [adk.GOOGLE_SEARCH] // Use Google Search tool (equivalent to Python's google_search)
+        tools: [googleSearchTool]
       });
 
       // Create in-memory runner to execute the agent
@@ -507,25 +580,22 @@ class ADKScraper {
         appName: 'distroblog'
       });
 
-      // Verify the agent was created correctly
       if (!this.agent) {
         throw new Error('Failed to create ADK agent');
       }
       
-      // Verify the canonical model is available
       try {
         const canonicalModel = this.agent.canonicalModel;
-        if (!canonicalModel) {
-          throw new Error('Agent created but canonical model is not available');
+        if (canonicalModel) {
+          console.log(`✅ [ADK] Agent canonical model: ${canonicalModel.model || 'unknown'}`);
         }
-        console.log(`✅ [ADK] Agent canonical model: ${canonicalModel.model || 'unknown'}`);
       } catch (modelError) {
         console.error('⚠️ [ADK] Warning: Could not verify canonical model:', modelError.message);
-        // Continue anyway - might work at runtime
       }
 
       this.initialized = true;
-      console.log('✅ ADK agent initialized successfully with Google Search tool');
+      const searchMode = this.cseId ? 'Custom Search API (real results)' : 'Grounding only (fallback)';
+      console.log(`✅ ADK agent initialized successfully with ${searchMode}`);
     } catch (error) {
       console.error('❌ Error initializing ADK agent:', error.message);
       if (error.message.includes('Cannot find module')) {
