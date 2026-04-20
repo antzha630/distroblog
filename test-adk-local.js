@@ -38,12 +38,14 @@ async function testADK() {
     process.exit(1);
   }
   
-  // Test with a simple source - The Graph (one from your list)
-  const testSource = {
-    name: 'The Graph',
-    url: 'https://thegraph.com/blog/',
-    type: 'scraping'
-  };
+  // Test with multiple sources
+  const testSources = [
+    { name: 'The Graph', url: 'https://thegraph.com/blog/', type: 'scraping' },
+    { name: 'Near Protocol', url: 'https://near.org/blog', type: 'scraping' },
+    { name: 'Nous Research', url: 'https://nousresearch.com/blog/', type: 'scraping' },
+  ];
+  
+  const testSource = testSources[0]; // Test first one, can change index
   
   console.log(`--- Testing source: ${testSource.name} ---`);
   console.log(`URL: ${testSource.url}\n`);
