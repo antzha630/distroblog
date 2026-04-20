@@ -105,8 +105,10 @@ function DistroScoutLanding({ onArticlesSelected, onCheckNow, onStopChecking, is
     filtered.sort((a, b) => {
       // Feed order should be based on discovery time (added/first_seen),
       // not grouped by source or biased by potentially missing pub_date.
-      const dateA = new Date(a.first_seen_at || a.created_at || a.pub_date);
-      const dateB = new Date(b.first_seen_at || b.created_at || b.pub_date);
+      // Prefer first_seen_at when present (V2), otherwise fall back to pub_date (V1),
+      // then created_at as final fallback.
+      const dateA = new Date(a.first_seen_at || a.pub_date || a.created_at);
+      const dateB = new Date(b.first_seen_at || b.pub_date || b.created_at);
       
       if (sortOrder === 'newest') {
         return dateB - dateA; // Newest first

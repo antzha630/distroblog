@@ -1428,11 +1428,18 @@ app.get('/api/articles/recent/:days', async (req, res) => {
       return res.status(400).json({ error: 'Invalid days parameter' });
     }
     
-    const articles = database.getRecentFeedArticles
+    // IMPORTANT: V2 uses first-seen rolling window logic.
+    // V1 should remain pub_date/created_at based (legacy behavior).
+    const useV2SeenWindow = config.mode === 'v2' && typeof database.getRecentFeedArticles === 'function';
+    const articles = useV2SeenWindow
       ? await database.getRecentFeedArticles(days)
       : await database.getArticlesByDateRange(days);
     
-    console.log(`📊 Found ${articles.length} feed articles from last ${days} days (first-seen window)`);
+    if (useV2SeenWindow) {
+      console.log(`📊 Found ${articles.length} feed articles from last ${days} days (V2 first-seen window)`);
+    } else {
+      console.log(`📊 Found ${articles.length} articles from last ${days} days (V1 pub_date/created_at window)`);
+    }
     
     // Format articles for professional display
     const formattedArticles = articles.map(article => {
@@ -1471,8 +1478,8 @@ app.get('/api/articles/recent/:days', async (req, res) => {
         content: article.content || "Content will be generated when summaries are created",
         source_name: article.source_name || "Unknown Source",
         created_at: article.created_at,
-        first_seen_at: article.first_seen_at || article.created_at,
-        last_seen_at: article.last_seen_at || article.created_at,
+        first_seen_at: useV2SeenWindow ? (article.first_seen_at || article.created_at) : null,
+        last_seen_at: useV2SeenWindow ? (article.last_seen_at || article.created_at) : null,
         pub_date: article.pub_date, // Only use publication date for display
         category: article.category,
         publisher_description: article.publisher_description || actualPreview,
