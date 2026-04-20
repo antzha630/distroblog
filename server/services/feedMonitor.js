@@ -580,27 +580,27 @@ class FeedMonitor {
                 articles = [];
               }
               
-              // MEMORY FIX: Clean up ADK session BEFORE Playwright fallback to free memory
-              // This prevents memory accumulation when ADK fails and we fall back to Playwright
-              if (articles.length === 0) {
-                try {
-                  if (this.adkScraper && typeof this.adkScraper.close === 'function') {
-                    await this.adkScraper.close();
-                    console.log(
-                      config.mode === 'v2'
-                        ? `🧹 [CHECK NOW] [${source.name}] Cleaned up ADK session (V2: no Playwright fallback)`
-                        : `🧹 [CHECK NOW] [${source.name}] Cleaned up ADK session before Playwright fallback`
-                    );
-                  }
-                  // Force GC after ADK cleanup to reclaim memory
-                  if (global.gc) {
-                    global.gc();
-                    const memAfterGC = getMemoryMB();
-                    console.log(`🧹 [CHECK NOW] [${source.name}] Forced GC after ADK cleanup, memory: ${memAfterGC}MB`);
-                  }
-                } catch (cleanupErr) {
-                  // Ignore cleanup errors
+              // MEMORY FIX: ALWAYS clean up ADK session after EVERY source to prevent OOM
+              // V2 mode processes many ADK sources - sessions accumulate and crash the server
+              // Previously only cleaned up when articles.length === 0, causing OOM at source ~17/39
+              try {
+                if (this.adkScraper && typeof this.adkScraper.close === 'function') {
+                  await this.adkScraper.close();
+                  const memAfterCleanup = getMemoryMB();
+                  console.log(
+                    `🧹 [CHECK NOW] [${source.name}] Cleaned up ADK session, memory: ${memAfterCleanup}MB`
+                  );
                 }
+                // Force GC after EVERY ADK source to prevent memory buildup
+                if (global.gc) {
+                  global.gc();
+                  const memAfterGC = getMemoryMB();
+                  if (memAfterGC > HIGH_MEMORY_MB) {
+                    console.warn(`⚠️ [CHECK NOW] [${source.name}] Memory still high after GC: ${memAfterGC}MB`);
+                  }
+                }
+              } catch (cleanupErr) {
+                // Ignore cleanup errors
               }
             } else {
               if (config.mode === 'v2') {
@@ -1065,6 +1065,20 @@ class FeedMonitor {
                       continue;
                     }
                   }
+
+                  // V2 seen-cache dedupe:
+                  // if this URL (canonicalized) has already been surfaced before, skip inserting.
+                  // This keeps "date unavailable" items from resurfacing forever.
+                  if (database.getSeenArticleByLink && database.markArticleSeen) {
+                    const seen = await database.getSeenArticleByLink(articleObj.link);
+                    if (seen) {
+                      await database.markArticleSeen(articleObj.link, articleObj.sourceId || null, seen.last_article_id || null);
+                      console.log(
+                        `ℹ️  [CHECK NOW] [${source.name}] Already seen before (first seen ${new Date(seen.first_seen_at).toISOString().slice(0, 10)}), skipping: ${articleObj.link.substring(0, 80)}...`
+                      );
+                      continue;
+                    }
+                  }
                   
                   if (articleObj.title && articleObj.title.trim() !== '' && articleObj.link) {
                     try {
@@ -1092,6 +1106,14 @@ class FeedMonitor {
                     } catch (addErr) {
                       // Handle duplicate key error gracefully (might happen due to race conditions or duplicate links)
                       if (addErr.code === '23505' || addErr.message?.includes('duplicate key')) {
+                        // Even if insert is duplicate, refresh seen-cache last_seen_at
+                        if (database.markArticleSeen) {
+                          try {
+                            await database.markArticleSeen(articleObj.link, articleObj.sourceId || null, null);
+                          } catch (_) {
+                            // Non-blocking
+                          }
+                        }
                         console.log(`ℹ️  [CHECK NOW] [${source.name}] Article already exists (duplicate link): ${articleObj.link.substring(0, 60)}...`);
                         continue; // Skip this article, it was already added
                       }
@@ -1137,13 +1159,19 @@ class FeedMonitor {
             monitoring_type: monitoringType
           });
           
-          // MEMORY OPTIMIZATION: Small delay between sources to allow GC
-          // Especially important after scraping sources that use Playwright or ADK
-          // If Playwright was used, add extra delay to ensure browser cleanup completes
+          // MEMORY OPTIMIZATION: Delay between sources to allow memory to settle
+          // V2 mode: ADK creates new sessions for each source - need delay to let GC work
           if ((monitoringType === 'SCRAPING' || monitoringType === 'ADK') && i < activeSources.length - 1) {
-            const delayMs = source._playwrightUsed ? 2000 : 500; // Extra delay if Playwright was used
+            // V2 ADK needs longer delay (1.5s) to prevent OOM - sessions/models accumulate
+            const delayMs = source._playwrightUsed ? 2000 : (config.mode === 'v2' ? 1500 : 500);
             if (source._playwrightUsed) {
               console.log(`⏳ [CHECK NOW] Extra delay (2s) before next source due to Playwright usage`);
+            } else if (config.mode === 'v2' && monitoringType === 'ADK') {
+              // Log memory before delay to track OOM risk
+              const memBefore = getMemoryMB();
+              if (memBefore > 300) {
+                console.log(`⏳ [CHECK NOW] ADK delay (1.5s), memory: ${memBefore}MB`);
+              }
             }
             await new Promise(resolve => setTimeout(resolve, delayMs));
           }

@@ -337,6 +337,48 @@ class Database {
       await client.query(`
         CREATE INDEX IF NOT EXISTS idx_articles_source_id ON articles(source_id);
       `);
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_articles_created_at ON articles(created_at);
+      `);
+
+      // Track seen article URLs so V2 can treat "date unavailable" with a rolling first-seen window
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS seen_articles (
+          id SERIAL PRIMARY KEY,
+          canonical_key VARCHAR(1000) NOT NULL UNIQUE,
+          source_id INTEGER REFERENCES sources(id),
+          first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          last_article_id INTEGER REFERENCES articles(id),
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_seen_articles_source_id ON seen_articles(source_id);
+      `);
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_seen_articles_first_seen_at ON seen_articles(first_seen_at DESC);
+      `);
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_seen_articles_last_seen_at ON seen_articles(last_seen_at DESC);
+      `);
+      // One-time/backfill-safe seed so historical articles participate in seen-cache immediately.
+      await client.query(`
+        INSERT INTO seen_articles (canonical_key, source_id, first_seen_at, last_seen_at, last_article_id, created_at, updated_at)
+        SELECT
+          REGEXP_REPLACE(LOWER(split_part(a.link, '?', 1)), '/+$', '') AS canonical_key,
+          MAX(a.source_id) AS source_id,
+          MIN(a.created_at) AS first_seen_at,
+          MAX(a.created_at) AS last_seen_at,
+          MAX(a.id) AS last_article_id,
+          MIN(a.created_at) AS created_at,
+          CURRENT_TIMESTAMP AS updated_at
+        FROM articles a
+        WHERE a.link IS NOT NULL AND TRIM(a.link) <> ''
+        GROUP BY REGEXP_REPLACE(LOWER(split_part(a.link, '?', 1)), '/+$', '')
+        ON CONFLICT (canonical_key) DO NOTHING
+      `);
 
     } finally {
       client.release();
@@ -472,6 +514,30 @@ class Database {
     
     return result.rows;
   }
+
+  // V2 feed behavior:
+  // - Show items based on when we first discovered them (rolling window),
+  //   not grouped by source and not strictly tied to pub_date availability.
+  // - This keeps "date unavailable" items only if they were first surfaced recently.
+  async getRecentFeedArticles(days) {
+    const safeDays = Number.isFinite(days) && days > 0 ? days : 7;
+    const result = await this.pool.query(`
+      SELECT
+        a.*,
+        s.name as source_name,
+        COALESCE(sa.first_seen_at, a.created_at) as first_seen_at,
+        COALESCE(sa.last_seen_at, a.created_at) as last_seen_at
+      FROM articles a
+      LEFT JOIN sources s ON a.source_id = s.id
+      LEFT JOIN seen_articles sa
+        ON sa.canonical_key = REGEXP_REPLACE(LOWER(split_part(a.link, '?', 1)), '/+$', '')
+      WHERE COALESCE(sa.first_seen_at, a.created_at) >= NOW() - ($1::text || ' days')::interval
+      ORDER BY COALESCE(sa.first_seen_at, a.created_at) DESC, a.created_at DESC
+    `, [safeDays]);
+
+    console.log(`📊 Recent feed query: Found ${result.rows.length} articles first-seen within ${safeDays} days`);
+    return result.rows;
+  }
   
   // Get all articles (for verification/debugging)
   async getAllArticles(limit = 100) {
@@ -531,7 +597,18 @@ class Database {
       article.publisher_description || article.publisherDescription || null,
       article.article_hook || article.articleHook || null
     ]);
-    return result.rows[0].id;
+    const inserted = result.rows[0];
+    try {
+      await this.markArticleSeen(
+        article.link,
+        article.source_id || article.sourceId || null,
+        inserted.id
+      );
+    } catch (seenErr) {
+      // Seen-cache failure should never block article insertion
+      console.warn(`⚠️ [SEEN] Failed to update seen cache for inserted article ${inserted.id}: ${seenErr.message}`);
+    }
+    return inserted.id;
   }
 
   async getArticleById(id) {
@@ -554,6 +631,48 @@ class Database {
     if (!link || typeof link !== 'string') return '';
     const withoutQuery = link.split('?')[0].trim();
     return withoutQuery.replace(/\/+$/, '') || withoutQuery;
+  }
+
+  // Canonical key for persistent seen-cache dedupe.
+  // Keeps host+path only and normalizes case/trailing slash/query noise.
+  _canonicalSeenKey(link) {
+    if (!link || typeof link !== 'string') return '';
+    try {
+      const u = new URL(link.trim());
+      const host = (u.hostname || '').toLowerCase();
+      const path = (u.pathname || '/').replace(/\/+$/, '') || '/';
+      return `${host}${path}`.toLowerCase();
+    } catch {
+      // Fallback for malformed URLs
+      return this._normalizedLink(link).toLowerCase();
+    }
+  }
+
+  async getSeenArticleByLink(link) {
+    const key = this._canonicalSeenKey(link);
+    if (!key) return null;
+    const result = await this.pool.query(
+      `SELECT * FROM seen_articles WHERE canonical_key = $1 LIMIT 1`,
+      [key]
+    );
+    return result.rows[0] || null;
+  }
+
+  async markArticleSeen(link, sourceId = null, articleId = null) {
+    const key = this._canonicalSeenKey(link);
+    if (!key) return null;
+    const result = await this.pool.query(`
+      INSERT INTO seen_articles (canonical_key, source_id, first_seen_at, last_seen_at, last_article_id, updated_at)
+      VALUES ($1, $2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, $3, CURRENT_TIMESTAMP)
+      ON CONFLICT (canonical_key)
+      DO UPDATE SET
+        source_id = COALESCE(EXCLUDED.source_id, seen_articles.source_id),
+        last_seen_at = CURRENT_TIMESTAMP,
+        last_article_id = COALESCE(EXCLUDED.last_article_id, seen_articles.last_article_id),
+        updated_at = CURRENT_TIMESTAMP
+      RETURNING *
+    `, [key, sourceId, articleId]);
+    return result.rows[0];
   }
 
   async articleExistsByNormalizedLink(link) {

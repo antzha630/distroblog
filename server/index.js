@@ -1428,9 +1428,11 @@ app.get('/api/articles/recent/:days', async (req, res) => {
       return res.status(400).json({ error: 'Invalid days parameter' });
     }
     
-    const articles = await database.getArticlesByDateRange(days);
+    const articles = database.getRecentFeedArticles
+      ? await database.getRecentFeedArticles(days)
+      : await database.getArticlesByDateRange(days);
     
-    console.log(`📊 Found ${articles.length} articles from last ${days} days (using pub_date when available, otherwise created_at)`);
+    console.log(`📊 Found ${articles.length} feed articles from last ${days} days (first-seen window)`);
     
     // Format articles for professional display
     const formattedArticles = articles.map(article => {
@@ -1469,6 +1471,8 @@ app.get('/api/articles/recent/:days', async (req, res) => {
         content: article.content || "Content will be generated when summaries are created",
         source_name: article.source_name || "Unknown Source",
         created_at: article.created_at,
+        first_seen_at: article.first_seen_at || article.created_at,
+        last_seen_at: article.last_seen_at || article.created_at,
         pub_date: article.pub_date, // Only use publication date for display
         category: article.category,
         publisher_description: article.publisher_description || actualPreview,
