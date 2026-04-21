@@ -515,10 +515,11 @@ class Database {
     return result.rows;
   }
 
-  // V2 feed behavior:
-  // - Show items based on when we first discovered them (rolling window),
-  //   not grouped by source and not strictly tied to pub_date availability.
-  // - This keeps "date unavailable" items only if they were first surfaced recently.
+  // V2 feed behavior (hybrid recency):
+  // - If pub_date exists, it must be within the selected window.
+  // - If pub_date is missing, fallback to first-seen/created_at window.
+  // This prevents clearly old dated posts from surfacing as "recent" while still
+  // supporting date-unavailable items discovered recently.
   async getRecentFeedArticles(days) {
     const safeDays = Number.isFinite(days) && days > 0 ? days : 7;
     const result = await this.pool.query(`
@@ -531,11 +532,17 @@ class Database {
       LEFT JOIN sources s ON a.source_id = s.id
       LEFT JOIN seen_articles sa
         ON sa.canonical_key = REGEXP_REPLACE(LOWER(split_part(a.link, '?', 1)), '/+$', '')
-      WHERE COALESCE(sa.first_seen_at, a.created_at) >= NOW() - ($1::text || ' days')::interval
-      ORDER BY COALESCE(sa.first_seen_at, a.created_at) DESC, a.created_at DESC
+      WHERE (
+        (a.pub_date IS NOT NULL AND a.pub_date >= NOW() - ($1::text || ' days')::interval)
+        OR
+        (a.pub_date IS NULL AND COALESCE(sa.first_seen_at, a.created_at) >= NOW() - ($1::text || ' days')::interval)
+      )
+      ORDER BY COALESCE(a.pub_date, sa.first_seen_at, a.created_at) DESC, a.created_at DESC
     `, [safeDays]);
 
-    console.log(`📊 Recent feed query: Found ${result.rows.length} articles first-seen within ${safeDays} days`);
+    const withDates = result.rows.filter(r => !!r.pub_date).length;
+    const withoutDates = result.rows.length - withDates;
+    console.log(`📊 Recent feed query: Found ${result.rows.length} articles within ${safeDays} days (with_date=${withDates}, no_date=${withoutDates})`);
     return result.rows;
   }
   
