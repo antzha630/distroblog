@@ -349,7 +349,7 @@ class Database {
           source_id INTEGER REFERENCES sources(id),
           first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          last_article_id INTEGER REFERENCES articles(id),
+          last_article_id INTEGER REFERENCES articles(id) ON DELETE SET NULL,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -362,6 +362,17 @@ class Database {
       `);
       await client.query(`
         CREATE INDEX IF NOT EXISTS idx_seen_articles_last_seen_at ON seen_articles(last_seen_at DESC);
+      `);
+      // Ensure FK behavior is cleanup-safe for existing databases as well.
+      // Old constraint (without ON DELETE SET NULL) can block article cleanup.
+      await client.query(`
+        ALTER TABLE seen_articles
+        DROP CONSTRAINT IF EXISTS seen_articles_last_article_id_fkey
+      `);
+      await client.query(`
+        ALTER TABLE seen_articles
+        ADD CONSTRAINT seen_articles_last_article_id_fkey
+        FOREIGN KEY (last_article_id) REFERENCES articles(id) ON DELETE SET NULL
       `);
       // One-time/backfill-safe seed so historical articles participate in seen-cache immediately.
       await client.query(`
@@ -1180,17 +1191,52 @@ class Database {
     try {
       const cutoffDate = new Date();
       cutoffDate.setDate(cutoffDate.getDate() - daysOld);
-      
-      const result = await this.pool.query(`
-        DELETE FROM articles 
-        WHERE (pub_date IS NOT NULL AND pub_date < $1)
-           OR (pub_date IS NULL AND created_at < $1)
-        AND status != 'sent'
-        RETURNING id, title
-      `, [cutoffDate]);
-      
-      console.log(`🧹 Cleaned up ${result.rowCount} old articles (older than ${daysOld} days, excluding 'sent' status)`);
-      return result.rowCount;
+
+      const client = await this.pool.connect();
+      try {
+        await client.query('BEGIN');
+
+        // Pick explicit IDs first so we can null out seen references safely.
+        const oldRows = await client.query(`
+          SELECT id
+          FROM articles
+          WHERE (
+            (pub_date IS NOT NULL AND pub_date < $1)
+            OR
+            (pub_date IS NULL AND created_at < $1)
+          )
+          AND status != 'sent'
+        `, [cutoffDate]);
+
+        if (oldRows.rows.length === 0) {
+          await client.query('COMMIT');
+          console.log(`🧹 Cleaned up 0 old articles (older than ${daysOld} days, excluding 'sent' status)`);
+          return 0;
+        }
+
+        const ids = oldRows.rows.map(r => r.id);
+
+        // Defensive update for old DBs that still have restrictive FK semantics.
+        await client.query(
+          `UPDATE seen_articles SET last_article_id = NULL WHERE last_article_id = ANY($1::int[])`,
+          [ids]
+        );
+
+        const result = await client.query(`
+          DELETE FROM articles
+          WHERE id = ANY($1::int[])
+          RETURNING id, title
+        `, [ids]);
+
+        await client.query('COMMIT');
+        console.log(`🧹 Cleaned up ${result.rowCount} old articles (older than ${daysOld} days, excluding 'sent' status)`);
+        return result.rowCount;
+      } catch (txErr) {
+        await client.query('ROLLBACK');
+        throw txErr;
+      } finally {
+        client.release();
+      }
     } catch (error) {
       console.error('Error cleaning up old articles:', error);
       throw error;
