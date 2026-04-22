@@ -124,7 +124,7 @@ function MainApp() {
       }
 
       const result = await response.json();
-      alert(`Successfully sent ${result.successCount} articles to Distro!`);
+      alert(result.message || `Successfully sent ${result.successCount} articles to Distro!`);
     } catch (error) {
       console.error('Error sending articles:', error);
       alert('Failed to send articles. Please try again.');
