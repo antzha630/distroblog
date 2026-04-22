@@ -33,6 +33,36 @@ const database = require('./database-postgres');
 const webScraper = new WebScraper();
 const adkScraper = new ADKScraper(); // ADK scraper for AI-powered extraction
 
+// Helper: Send to Distro API with retry on timeout/network errors
+async function sendToDistroWithRetry(endpoint, payload, headers, maxRetries = 2) {
+  let lastError;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await axios.post(endpoint, payload, {
+        headers,
+        timeout: 30000
+      });
+      return response;
+    } catch (error) {
+      lastError = error;
+      const isRetryable = error.code === 'ECONNABORTED' || 
+                          error.code === 'ETIMEDOUT' || 
+                          error.code === 'ECONNRESET' ||
+                          error.message?.includes('timeout') ||
+                          (error.response?.status >= 500);
+      
+      if (!isRetryable || attempt === maxRetries) {
+        throw error;
+      }
+      
+      const delay = 2000 * attempt; // 2s, 4s
+      console.log(`⏳ [DISTRO] Retry ${attempt}/${maxRetries} after ${delay}ms (${error.message})`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  throw lastError;
+}
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 
@@ -738,13 +768,14 @@ app.post('/api/articles/send', async (req, res) => {
       };
       
       try {
-        const response = await axios.post(config.distro.apiEndpoint, payload, {
-          headers: {
+        const response = await sendToDistroWithRetry(
+          config.distro.apiEndpoint, 
+          payload,
+          {
             'Content-Type': 'application/json',
             'x-api-key': config.distro.apiKey
-          },
-          timeout: 10000
-        });
+          }
+        );
         
         console.log(`External API response for "${article.title}":`, response.data);
         results.push({ success: true, article: article.title, response: response.data });
@@ -1115,14 +1146,15 @@ app.post('/api/articles/send-telegram', async (req, res) => {
         content_length: externalPayload.content.length
       });
 
-      const externalResponse = await axios.post(config.distro.apiEndpoint, externalPayload, {
-        headers: {
+      const externalResponse = await sendToDistroWithRetry(
+        config.distro.apiEndpoint, 
+        externalPayload,
+        {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${config.distro.apiKey}`,
           'X-API-Key': config.distro.apiKey
-        },
-        timeout: 10000
-      });
+        }
+      );
 
       const externalDuration = Date.now() - externalStartTime;
       console.log(`✅ [TELEGRAM] Article "${article.title}" sent to external API successfully in ${externalDuration}ms`);
