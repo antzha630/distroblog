@@ -783,10 +783,11 @@ Prefer URL structures similar to these examples when selecting results.\n`;
         : '';
 
       // Improved prompt with date filtering instructions
-      // Cutoff date is passed to help Gemini filter old articles
+      // NOTE: Do NOT pass explicit cutoff dates to Gemini - it misinterprets them as "future dates"
+      // Tavily's time_range:'month' already pre-filters to 30 days, and post-processing filters by date
       const curatorPreamble = '';
 
-      const primarySearchQuery = `Find RECENT articles on ${baseDomain} published after ${cutoffDateStr}.
+      const primarySearchQuery = `Find RECENT articles on ${baseDomain}.
 
 1. Call web_search with: site:${baseDomain} blog OR news
 2. From the results, ONLY include articles that appear to be recent (published within the last 30 days)
@@ -801,9 +802,10 @@ IMPORTANT:
 - If an article has a visible date, include it in datePublished (format: YYYY-MM-DD)
 - If no date is visible, set datePublished to null
 - Prefer articles with dates over undated ones
+- If the search returns published_date, use it for datePublished
 - If no recent articles found, return: []`;
 
-      const retrySearchQuery = `Search ${baseDomain} for RECENT articles (after ${cutoffDateStr}).
+      const retrySearchQuery = `Search ${baseDomain} for RECENT articles.
 
 Call web_search: site:${baseDomain}
 Return JSON with datePublished: [{"title": "...", "url": "...", "description": "...", "datePublished": "YYYY-MM-DD or null"}, ...]

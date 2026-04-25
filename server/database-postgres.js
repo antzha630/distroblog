@@ -533,6 +533,8 @@ class Database {
   // supporting date-unavailable items discovered recently.
   async getRecentFeedArticles(days) {
     const safeDays = Number.isFinite(days) && days > 0 ? days : 7;
+    // Only return articles WITH dates - hide "date unavailable" from dashboard
+    // This keeps the dashboard clean while still saving all articles for potential future use
     const result = await this.pool.query(`
       SELECT
         a.*,
@@ -543,17 +545,12 @@ class Database {
       LEFT JOIN sources s ON a.source_id = s.id
       LEFT JOIN seen_articles sa
         ON sa.canonical_key = REGEXP_REPLACE(LOWER(split_part(a.link, '?', 1)), '/+$', '')
-      WHERE (
-        (a.pub_date IS NOT NULL AND a.pub_date >= NOW() - ($1::text || ' days')::interval)
-        OR
-        (a.pub_date IS NULL AND COALESCE(sa.first_seen_at, a.created_at) >= NOW() - ($1::text || ' days')::interval)
-      )
-      ORDER BY COALESCE(a.pub_date, sa.first_seen_at, a.created_at) DESC, a.created_at DESC
+      WHERE a.pub_date IS NOT NULL
+        AND a.pub_date >= NOW() - ($1::text || ' days')::interval
+      ORDER BY a.pub_date DESC, a.created_at DESC
     `, [safeDays]);
 
-    const withDates = result.rows.filter(r => !!r.pub_date).length;
-    const withoutDates = result.rows.length - withDates;
-    console.log(`📊 Recent feed query: Found ${result.rows.length} articles within ${safeDays} days (with_date=${withDates}, no_date=${withoutDates})`);
+    console.log(`📊 Recent feed query: Found ${result.rows.length} articles within ${safeDays} days (all have dates)`);
     return result.rows;
   }
   
