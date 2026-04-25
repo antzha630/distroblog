@@ -32,10 +32,16 @@ async function tavilySearch(query, apiKey, numResults = 10) {
   }
   
   try {
+    // Use Tavily's date filtering features:
+    // - topic: "news" includes published_date in results
+    // - time_range: "month" pre-filters to last 30 days
+    // See: https://docs.tavily.com/documentation/best-practices/best-practices-search
     const response = await axios.post(TAVILY_API_URL, {
       api_key: apiKey,
       query: cleanQuery,
       search_depth: 'basic',
+      topic: 'news',           // Returns published_date metadata for news sources
+      time_range: 'month',     // Pre-filter to last 30 days
       include_answer: false,
       include_raw_content: false,
       max_results: Math.min(numResults, 10),
@@ -45,13 +51,15 @@ async function tavilySearch(query, apiKey, numResults = 10) {
     });
     
     const results = response.data.results || [];
-    console.log(`[TAVILY] Search "${cleanQuery.substring(0, 50)}..." returned ${results.length} results`);
+    const withDates = results.filter(r => r.published_date).length;
+    console.log(`[TAVILY] Search "${cleanQuery.substring(0, 50)}..." returned ${results.length} results (${withDates} with dates)`);
     
     return results.map(item => ({
       title: item.title || '',
       url: item.url || '',
       snippet: item.content || '',
       displayLink: item.url ? new URL(item.url).hostname : '',
+      published_date: item.published_date || null,  // Extract Tavily's published_date
     }));
   } catch (error) {
     if (error.response) {
@@ -559,7 +567,7 @@ class ADKScraper {
       const self = this;
       const webSearchTool = new adk.FunctionTool({
         name: 'web_search',
-        description: 'Search the web using Tavily Search API. Returns real search results with titles, URLs, and snippets. You MUST call this tool before answering. Use site:domain.com in the query to limit to a specific site.',
+        description: 'Search the web using Tavily Search API. Returns recent search results with titles, URLs, snippets, and published_date (when available). Results are pre-filtered to the last 30 days. You MUST call this tool before answering. Use site:domain.com to limit to a specific site. Check published_date to identify recent articles.',
         parameters: {
           type: 'object',
           properties: {
@@ -578,11 +586,13 @@ class ADKScraper {
             if (results.length === 0) {
               return { results: [], message: 'No results found for this query. Try a different search.' };
             }
+            // Include published_date from Tavily so Gemini can use it for filtering
             return {
               results: results.map(r => ({
                 title: r.title,
                 url: r.url,
-                snippet: r.snippet
+                snippet: r.snippet,
+                published_date: r.published_date || null  // Pass Tavily's date to Gemini
               }))
             };
           } catch (err) {
@@ -772,25 +782,32 @@ Prefer URL structures similar to these examples when selecting results.\n`;
         ? await this.buildSourceMemoryHint(source, 5)
         : '';
 
-      // SIMPLIFIED: Just search and return results as JSON
-      // No complex filtering - Gemini processes Tavily results into clean JSON
+      // Improved prompt with date filtering instructions
+      // Cutoff date is passed to help Gemini filter old articles
       const curatorPreamble = '';
 
-      const primarySearchQuery = `Find articles on ${baseDomain}.
+      const primarySearchQuery = `Find RECENT articles on ${baseDomain} published after ${cutoffDateStr}.
 
 1. Call web_search with: site:${baseDomain} blog OR news
-2. Return the results as JSON
+2. From the results, ONLY include articles that appear to be recent (published within the last 30 days)
+3. SKIP articles that are clearly old, undated documentation pages, glossary entries, or evergreen content
+4. Return the results as JSON
 
 Output format (JSON array only, no other text):
-[{"title": "Article Title", "url": "https://...", "description": "Brief description"}, ...]
+[{"title": "Article Title", "url": "https://...", "description": "Brief description", "datePublished": "YYYY-MM-DD or null"}, ...]
 
-If no results found, return: []`;
+IMPORTANT:
+- Only include actual news/blog articles, not homepage links, category pages, or docs
+- If an article has a visible date, include it in datePublished (format: YYYY-MM-DD)
+- If no date is visible, set datePublished to null
+- Prefer articles with dates over undated ones
+- If no recent articles found, return: []`;
 
-      const retrySearchQuery = `Search ${baseDomain} for articles.
+      const retrySearchQuery = `Search ${baseDomain} for RECENT articles (after ${cutoffDateStr}).
 
 Call web_search: site:${baseDomain}
-Return JSON: [{"title": "...", "url": "...", "description": "..."}, ...]
-If nothing: []`;
+Return JSON with datePublished: [{"title": "...", "url": "...", "description": "...", "datePublished": "YYYY-MM-DD or null"}, ...]
+Skip old/undated docs. If nothing recent: []`;
 
       const strictRetryQuery = retrySearchQuery;
 
