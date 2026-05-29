@@ -10,10 +10,20 @@ const enableAdkEnv = (process.env.SCOOPSTREAM_ENABLE_ADK || '').toLowerCase();
 // ADK runs only on v2. SCOOPSTREAM_ENABLE_ADK=false disables ADK on v2 (emergency kill-switch; no-RSS sources then yield nothing).
 const enableAdk = mode === 'v2' && enableAdkEnv !== 'false';
 
+// Web Search Provider Configuration
+// SEARCH_PROVIDER: "parallel", "tavily", or "parallel,tavily" (fallback chain)
+const searchProviderRaw = (process.env.SEARCH_PROVIDER || 'parallel,tavily').toLowerCase();
+const searchProviders = searchProviderRaw.split(',').map(s => s.trim()).filter(Boolean);
+
 module.exports = {
   mode,
   adk: {
     enabled: enableAdk,
+  },
+  search: {
+    providers: searchProviders,
+    parallelApiKey: process.env.PARALLEL_API_KEY || '',
+    tavilyApiKey: process.env.TAVILY_API_KEY || '',
   },
   distro: {
     // Distro API (staging by default – override with DISTRO_API_ENDPOINT / DISTRO_API_KEY for production)
