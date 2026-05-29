@@ -1,13 +1,23 @@
-// ADK (Agent Development Kit) implementation using Tavily Search API
+// ADK (Agent Development Kit) implementation using Parallel.ai / Tavily Search APIs
 // Required env: GOOGLE_GENAI_API_KEY or GEMINI_API_KEY
-// Optional env: TAVILY_API_KEY (for web search)
+// Optional env: PARALLEL_API_KEY (primary web search), TAVILY_API_KEY (fallback)
+// Optional env: SEARCH_PROVIDER (parallel, tavily, or parallel,tavily)
 // Optional env: ADK_MODEL | SCOOPSTREAM_ADK_MODEL (try this Gemini id first), ADK_VERBOSE
 const axios = require('axios');
 const config = require('../config');
 const articleEnrichment = require('./articleEnrichment');
 
-// Tavily Search API endpoint (replaces Google Custom Search which is closed to new customers)
+// API endpoints
+const PARALLEL_API_URL = 'https://api.parallel.ai/v1/search';
 const TAVILY_API_URL = 'https://api.tavily.com/search';
+
+// Circuit breaker: skip Parallel calls once quota is exhausted (resets on server restart)
+let parallelQuotaExhausted = false;
+let parallelQuotaErrorCount = 0;
+
+// Circuit breaker: skip Tavily calls once quota is exhausted (resets on server restart)
+let tavilyQuotaExhausted = false;
+let tavilyQuotaErrorCount = 0;
 
 /**
  * Call Tavily Search API to get real search results.
@@ -16,6 +26,15 @@ const TAVILY_API_URL = 'https://api.tavily.com/search';
 async function tavilySearch(query, apiKey, numResults = 10) {
   if (!apiKey) {
     console.warn('[TAVILY] Missing API key, cannot perform search');
+    return [];
+  }
+  
+  // Circuit breaker: skip if quota already exhausted this session
+  if (tavilyQuotaExhausted) {
+    if (tavilyQuotaErrorCount === 1) {
+      console.warn('[TAVILY] ⏸️ Quota exhausted — skipping all Tavily calls this session. Switch to SCOOPSTREAM_MODE=v1 for Playwright fallback, or enable Tavily PAYGO.');
+    }
+    tavilyQuotaErrorCount++;
     return [];
   }
   
@@ -63,14 +82,148 @@ async function tavilySearch(query, apiKey, numResults = 10) {
     }));
   } catch (error) {
     if (error.response) {
+      const status = error.response.status;
       const errData = error.response.data;
-      const errMsg = typeof errData === 'string' ? errData : (errData?.message || errData?.detail || JSON.stringify(errData));
-      console.error(`[TAVILY] API error ${error.response.status}: ${errMsg}`);
+      let errMsg;
+      try {
+        errMsg = typeof errData === 'string' ? errData : JSON.stringify(errData, null, 0);
+      } catch (e) {
+        errMsg = String(errData);
+      }
+      console.error(`[TAVILY] API error ${status}: ${errMsg}`);
+      // Provide actionable guidance for common Tavily errors
+      if (status === 432 || status === 429) {
+        tavilyQuotaExhausted = true;
+        tavilyQuotaErrorCount = 1;
+        console.error(`[TAVILY] 🚫 QUOTA EXHAUSTED (${status}). All further Tavily calls will be skipped.`);
+        console.error(`[TAVILY] ➡️ Options: (1) Set SCOOPSTREAM_MODE=v1 for Playwright fallback, (2) Enable Tavily PAYGO, (3) Wait for monthly quota reset`);
+      } else if (status === 401 || status === 403) {
+        console.error(`[TAVILY] ⚠️ Auth failed. Verify TAVILY_API_KEY is valid and active.`);
+      }
     } else {
       console.error(`[TAVILY] Request error: ${error.message}`);
     }
     return [];
   }
+}
+
+/**
+ * Call Parallel.ai Search API to get real search results.
+ * Parallel.ai offers competitive pricing ($4/1000 requests) and good coverage.
+ */
+async function parallelSearch(query, apiKey, numResults = 10) {
+  if (!apiKey) {
+    console.warn('[PARALLEL] Missing API key, cannot perform search');
+    return [];
+  }
+  
+  // Circuit breaker: skip if quota already exhausted this session
+  if (parallelQuotaExhausted) {
+    if (parallelQuotaErrorCount === 1) {
+      console.warn('[PARALLEL] ⏸️ Quota exhausted — skipping all Parallel calls this session.');
+    }
+    parallelQuotaErrorCount++;
+    return [];
+  }
+  
+  // Clean up Google-specific search operators that Parallel doesn't support
+  let cleanQuery = query
+    .replace(/\bafter:\d{4}-\d{2}-\d{2}\b/gi, '')
+    .replace(/\binurl:\w+/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  
+  // If query is just "site:domain.com" with nothing else, add a generic term
+  if (/^site:\S+\s*$/.test(cleanQuery)) {
+    cleanQuery += ' blog OR news OR article';
+  }
+  
+  try {
+    const response = await axios.post(PARALLEL_API_URL, {
+      query: cleanQuery,
+      max_results: Math.min(numResults, 10),
+      search_type: 'news',
+    }, {
+      timeout: 15000,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      }
+    });
+    
+    const results = response.data.results || response.data.organic_results || [];
+    const withDates = results.filter(r => r.published_date || r.date).length;
+    console.log(`[PARALLEL] Search "${cleanQuery.substring(0, 50)}..." returned ${results.length} results (${withDates} with dates)`);
+    
+    return results.map(item => ({
+      title: item.title || '',
+      url: item.url || item.link || '',
+      snippet: item.snippet || item.content || item.description || '',
+      displayLink: (item.url || item.link) ? new URL(item.url || item.link).hostname : '',
+      published_date: item.published_date || item.date || null,
+    }));
+  } catch (error) {
+    if (error.response) {
+      const status = error.response.status;
+      const errData = error.response.data;
+      let errMsg;
+      try {
+        errMsg = typeof errData === 'string' ? errData : JSON.stringify(errData, null, 0);
+      } catch (e) {
+        errMsg = String(errData);
+      }
+      console.error(`[PARALLEL] API error ${status}: ${errMsg}`);
+      if (status === 429 || status === 402 || status === 403) {
+        parallelQuotaExhausted = true;
+        parallelQuotaErrorCount = 1;
+        console.error(`[PARALLEL] 🚫 QUOTA/RATE LIMIT (${status}). All further Parallel calls will be skipped.`);
+      } else if (status === 401) {
+        console.error(`[PARALLEL] ⚠️ Auth failed. Verify PARALLEL_API_KEY is valid and active.`);
+      }
+    } else {
+      console.error(`[PARALLEL] Request error: ${error.message}`);
+    }
+    return [];
+  }
+}
+
+/**
+ * Unified web search function that tries providers in configured order.
+ * Returns { results: [], provider: 'parallel'|'tavily'|'none' }
+ */
+async function performWebSearch(query, numResults = 10) {
+  const providers = config.search?.providers || ['parallel', 'tavily'];
+  const parallelKey = config.search?.parallelApiKey || process.env.PARALLEL_API_KEY;
+  const tavilyKey = config.search?.tavilyApiKey || process.env.TAVILY_API_KEY;
+  
+  for (const provider of providers) {
+    if (provider === 'parallel' && parallelKey && !parallelQuotaExhausted) {
+      console.log(`[SEARCH] Attempting web search with Parallel.ai...`);
+      const results = await parallelSearch(query, parallelKey, numResults);
+      if (results && results.length > 0) {
+        return { results, provider: 'parallel' };
+      }
+      if (parallelQuotaExhausted) {
+        console.log(`[SEARCH] Parallel.ai quota exhausted, trying next provider...`);
+        continue;
+      }
+    }
+    
+    if (provider === 'tavily' && tavilyKey && !tavilyQuotaExhausted) {
+      console.log(`[SEARCH] Attempting web search with Tavily...`);
+      const results = await tavilySearch(query, tavilyKey, numResults);
+      if (results && results.length > 0) {
+        return { results, provider: 'tavily' };
+      }
+      if (tavilyQuotaExhausted) {
+        console.log(`[SEARCH] Tavily quota exhausted, trying next provider...`);
+        continue;
+      }
+    }
+  }
+  
+  console.warn(`[SEARCH] No search results from any provider`);
+  return { results: [], provider: 'none' };
 }
 
 /** ADK_VERBOSE=1 — full per-event / per-filter logs. Default: concise [ADK] start/done + preview (no extra env). */
@@ -498,8 +651,10 @@ class ADKScraper {
       process.env.GEMINI_API_KEY ||
       process.env.GOOGLE_API_KEY;
     
-    // Tavily API key for web search (replaces Google CSE which is closed to new customers)
-    this.tavilyApiKey = process.env.TAVILY_API_KEY;
+    // Web Search API keys (Parallel.ai primary, Tavily fallback)
+    this.parallelApiKey = config.search?.parallelApiKey || process.env.PARALLEL_API_KEY;
+    this.tavilyApiKey = config.search?.tavilyApiKey || process.env.TAVILY_API_KEY;
+    this.searchProviders = config.search?.providers || ['parallel', 'tavily'];
     
     if (!this.apiKey) {
       console.warn(
@@ -508,13 +663,23 @@ class ADKScraper {
       return;
     }
     
-    if (!this.tavilyApiKey) {
+    // Log search provider configuration
+    const hasParallel = !!this.parallelApiKey;
+    const hasTavily = !!this.tavilyApiKey;
+    
+    if (!hasParallel && !hasTavily) {
       console.warn(
-        '⚠️ Tavily API key not found. Set TAVILY_API_KEY in .env for web search results.'
+        '⚠️ No web search API keys found. Set PARALLEL_API_KEY and/or TAVILY_API_KEY in .env'
       );
-      console.warn('   Without TAVILY_API_KEY, ADK will use grounding only (less accurate).');
+      console.warn('   Without search API keys, ADK will use grounding only (less accurate).');
     } else {
-      console.log(`✅ [ADK] Tavily Search configured (key: ${this.tavilyApiKey.substring(0, 8)}...)`);
+      console.log(`✅ [ADK] Search providers configured: ${this.searchProviders.join(' → ')}`);
+      if (hasParallel) {
+        console.log(`   ├─ Parallel.ai (key: ${this.parallelApiKey.substring(0, 8)}...)`);
+      }
+      if (hasTavily) {
+        console.log(`   └─ Tavily (key: ${this.tavilyApiKey.substring(0, 8)}...)`);
+      }
     }
 
     try {
@@ -562,12 +727,10 @@ class ADKScraper {
       }
       this.modelName = modelName;
 
-      // Create a custom FunctionTool that calls Tavily Search API
-      // Tavily is designed for AI agents and provides clean, relevant results
-      const self = this;
+      // Create a custom FunctionTool that calls web search APIs (Parallel.ai primary, Tavily fallback)
       const webSearchTool = new adk.FunctionTool({
         name: 'web_search',
-        description: 'Search the web using Tavily Search API. Returns recent search results with titles, URLs, snippets, and published_date (when available). Results are pre-filtered to the last 30 days. You MUST call this tool before answering. Use site:domain.com to limit to a specific site. Check published_date to identify recent articles.',
+        description: 'Search the web for recent articles. Returns search results with titles, URLs, snippets, and published_date (when available). Results are pre-filtered to the last 30 days. You MUST call this tool before answering. Use site:domain.com to limit to a specific site. Check published_date to identify recent articles.',
         parameters: {
           type: 'object',
           properties: {
@@ -581,19 +744,19 @@ class ADKScraper {
         execute: async ({ query }) => {
           console.log(`[ADK] Tool EXECUTE: web_search("${query.substring(0, 80)}${query.length > 80 ? '...' : ''}")`);
           try {
-            const results = await tavilySearch(query, self.tavilyApiKey, 10);
-            console.log(`[ADK] Tool returned ${results.length} results from Tavily`);
+            const { results, provider } = await performWebSearch(query, 10);
+            console.log(`[ADK] Tool returned ${results.length} results from ${provider}`);
             if (results.length === 0) {
               return { results: [], message: 'No results found for this query. Try a different search.' };
             }
-            // Include published_date from Tavily so Gemini can use it for filtering
             return {
               results: results.map(r => ({
                 title: r.title,
                 url: r.url,
                 snippet: r.snippet,
-                published_date: r.published_date || null  // Pass Tavily's date to Gemini
-              }))
+                published_date: r.published_date || null
+              })),
+              provider: provider
             };
           } catch (err) {
             console.error(`[ADK] Tool ERROR: ${err.message}`);
@@ -630,7 +793,13 @@ class ADKScraper {
       }
 
       this.initialized = true;
-      const searchMode = this.tavilyApiKey ? 'web_search tool (Tavily API)' : 'Grounding only (fallback)';
+      const hasAnySearch = this.parallelApiKey || this.tavilyApiKey;
+      const searchMode = hasAnySearch 
+        ? `web_search tool (${this.searchProviders.filter(p => 
+            (p === 'parallel' && this.parallelApiKey) || 
+            (p === 'tavily' && this.tavilyApiKey)
+          ).join(' → ')})` 
+        : 'Grounding only (fallback)';
       console.log(`✅ ADK agent initialized successfully with ${searchMode}`);
     } catch (error) {
       console.error('❌ Error initializing ADK agent:', error.message);
