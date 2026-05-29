@@ -109,7 +109,8 @@ async function tavilySearch(query, apiKey, numResults = 10) {
 
 /**
  * Call Parallel.ai Search API to get real search results.
- * Parallel.ai offers competitive pricing ($4/1000 requests) and good coverage.
+ * Parallel.ai offers competitive pricing and LLM-optimized excerpts.
+ * API Docs: https://docs.parallel.ai/api-reference/search/search
  */
 async function parallelSearch(query, apiKey, numResults = 10) {
   if (!apiKey) {
@@ -126,41 +127,81 @@ async function parallelSearch(query, apiKey, numResults = 10) {
     return [];
   }
   
+  // Extract domain from site: operator if present
+  let domain = null;
+  const siteMatch = query.match(/site:(\S+)/i);
+  if (siteMatch) {
+    domain = siteMatch[1].replace(/^www\./, '');
+  }
+  
   // Clean up Google-specific search operators that Parallel doesn't support
   let cleanQuery = query
+    .replace(/\bsite:\S+/gi, '')
     .replace(/\bafter:\d{4}-\d{2}-\d{2}\b/gi, '')
     .replace(/\binurl:\w+/gi, '')
     .replace(/\s+/g, ' ')
     .trim();
   
-  // If query is just "site:domain.com" with nothing else, add a generic term
-  if (/^site:\S+\s*$/.test(cleanQuery)) {
-    cleanQuery += ' blog OR news OR article';
+  // Build natural language objective and keyword queries for Parallel API
+  const objective = domain 
+    ? `Find recent blog posts and news articles from ${domain}. Focus on announcements, updates, and news from the past 30 days.`
+    : `Find recent articles about: ${cleanQuery}`;
+  
+  // Generate 2-3 diverse keyword queries (Parallel best practice)
+  const searchQueries = [];
+  if (domain) {
+    searchQueries.push(`${domain} blog news`);
+    searchQueries.push(`${domain} announcements updates`);
+    if (cleanQuery && cleanQuery.length > 3) {
+      searchQueries.push(`${domain} ${cleanQuery.substring(0, 30)}`);
+    }
+  } else {
+    searchQueries.push(cleanQuery);
+    // Add variations
+    const words = cleanQuery.split(' ').filter(w => w.length > 2);
+    if (words.length > 2) {
+      searchQueries.push(words.slice(0, 3).join(' ') + ' news');
+    }
   }
   
   try {
-    const response = await axios.post(PARALLEL_API_URL, {
-      query: cleanQuery,
-      max_results: Math.min(numResults, 10),
-      search_type: 'news',
-    }, {
-      timeout: 15000,
+    const requestBody = {
+      objective: objective,
+      search_queries: searchQueries.slice(0, 3), // Max 3 queries
+      mode: 'basic', // Lower latency for real-time use
+      advanced_settings: {
+        max_results: Math.min(numResults, 10),
+      }
+    };
+    
+    // Add domain filter if we have one
+    if (domain) {
+      requestBody.advanced_settings.source_policy = {
+        include_domains: [domain]
+      };
+    }
+    
+    const response = await axios.post(PARALLEL_API_URL, requestBody, {
+      timeout: 20000,
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
+        'x-api-key': apiKey  // Parallel uses x-api-key header
       }
     });
     
-    const results = response.data.results || response.data.organic_results || [];
-    const withDates = results.filter(r => r.published_date || r.date).length;
-    console.log(`[PARALLEL] Search "${cleanQuery.substring(0, 50)}..." returned ${results.length} results (${withDates} with dates)`);
+    const results = response.data.results || [];
+    const withDates = results.filter(r => r.publish_date).length;
+    console.log(`[PARALLEL] Search for "${domain || cleanQuery.substring(0, 30)}..." returned ${results.length} results (${withDates} with dates)`);
     
+    // Map Parallel response format to our expected format
     return results.map(item => ({
       title: item.title || '',
-      url: item.url || item.link || '',
-      snippet: item.snippet || item.content || item.description || '',
-      displayLink: (item.url || item.link) ? new URL(item.url || item.link).hostname : '',
-      published_date: item.published_date || item.date || null,
+      url: item.url || '',
+      // Parallel returns excerpts as an array - join them for snippet
+      snippet: Array.isArray(item.excerpts) ? item.excerpts.join(' ') : (item.excerpts || ''),
+      displayLink: item.url ? new URL(item.url).hostname : '',
+      // Parallel uses publish_date (not published_date)
+      published_date: item.publish_date || null,
     }));
   } catch (error) {
     if (error.response) {
@@ -173,11 +214,11 @@ async function parallelSearch(query, apiKey, numResults = 10) {
         errMsg = String(errData);
       }
       console.error(`[PARALLEL] API error ${status}: ${errMsg}`);
-      if (status === 429 || status === 402 || status === 403) {
+      if (status === 429 || status === 402) {
         parallelQuotaExhausted = true;
         parallelQuotaErrorCount = 1;
         console.error(`[PARALLEL] 🚫 QUOTA/RATE LIMIT (${status}). All further Parallel calls will be skipped.`);
-      } else if (status === 401) {
+      } else if (status === 401 || status === 403) {
         console.error(`[PARALLEL] ⚠️ Auth failed. Verify PARALLEL_API_KEY is valid and active.`);
       }
     } else {
