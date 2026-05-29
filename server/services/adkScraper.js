@@ -8,7 +8,8 @@ const config = require('../config');
 const articleEnrichment = require('./articleEnrichment');
 
 // API endpoints
-const PARALLEL_API_URL = 'https://api.parallel.ai/v1/search';
+const PARALLEL_SEARCH_URL = 'https://api.parallel.ai/v1/search';
+const PARALLEL_EXTRACT_URL = 'https://api.parallel.ai/v1/extract';
 const TAVILY_API_URL = 'https://api.tavily.com/search';
 
 // Circuit breaker: skip Parallel calls once quota is exhausted (resets on server restart)
@@ -181,7 +182,7 @@ async function parallelSearch(query, apiKey, numResults = 10) {
       };
     }
     
-    const response = await axios.post(PARALLEL_API_URL, requestBody, {
+    const response = await axios.post(PARALLEL_SEARCH_URL, requestBody, {
       timeout: 20000,
       headers: {
         'Content-Type': 'application/json',
@@ -223,6 +224,79 @@ async function parallelSearch(query, apiKey, numResults = 10) {
       }
     } else {
       console.error(`[PARALLEL] Request error: ${error.message}`);
+    }
+    return [];
+  }
+}
+
+/**
+ * Call Parallel.ai Extract API to get full content from URLs.
+ * Useful for getting article content when search snippets are too short.
+ * API Docs: https://docs.parallel.ai/api-reference/extract/extract
+ */
+async function parallelExtract(urls, apiKey, objective = null) {
+  if (!apiKey) {
+    console.warn('[PARALLEL] Missing API key, cannot extract content');
+    return [];
+  }
+  
+  if (!urls || urls.length === 0) {
+    return [];
+  }
+  
+  // Circuit breaker check
+  if (parallelQuotaExhausted) {
+    return [];
+  }
+  
+  try {
+    const requestBody = {
+      urls: urls.slice(0, 20), // Max 20 URLs per request
+      advanced_settings: {
+        full_content: {
+          max_chars_per_result: 5000 // Limit content size
+        }
+      }
+    };
+    
+    if (objective) {
+      requestBody.objective = objective;
+    }
+    
+    const response = await axios.post(PARALLEL_EXTRACT_URL, requestBody, {
+      timeout: 30000, // Extract can take longer
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey
+      }
+    });
+    
+    const results = response.data.results || [];
+    const errors = response.data.errors || [];
+    
+    if (errors.length > 0) {
+      console.warn(`[PARALLEL] Extract had ${errors.length} errors: ${errors.map(e => e.error_type).join(', ')}`);
+    }
+    
+    console.log(`[PARALLEL] Extract returned content for ${results.length}/${urls.length} URLs`);
+    
+    return results.map(item => ({
+      url: item.url,
+      title: item.title || '',
+      publish_date: item.publish_date || null,
+      content: item.full_content || (Array.isArray(item.excerpts) ? item.excerpts.join('\n\n') : ''),
+      excerpts: item.excerpts || []
+    }));
+  } catch (error) {
+    if (error.response) {
+      const status = error.response.status;
+      console.error(`[PARALLEL] Extract API error ${status}`);
+      if (status === 429 || status === 402) {
+        parallelQuotaExhausted = true;
+        parallelQuotaErrorCount = 1;
+      }
+    } else {
+      console.error(`[PARALLEL] Extract error: ${error.message}`);
     }
     return [];
   }
@@ -2229,3 +2303,5 @@ module.exports.getAxiosFinalUrl = getAxiosFinalUrl;
 /** For scripts/eval-url-canonical-effectiveness.js — mirrors ADK quality pass HTTP behavior. */
 module.exports.fetchArticleForQuality = fetchArticleForQuality;
 module.exports.canonicalizeKnownBlogUrl = canonicalizeKnownBlogUrl;
+/** Parallel.ai Extract API for getting full article content */
+module.exports.parallelExtract = parallelExtract;
