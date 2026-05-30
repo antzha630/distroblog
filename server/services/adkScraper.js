@@ -218,15 +218,51 @@ async function parallelSearch(query, apiKey, numResults = 10) {
     console.log(`[PARALLEL] Search for "${domain || cleanQuery.substring(0, 30)}..." returned ${results.length} results (${withDates} with dates)`);
     
     // Map Parallel response format to our expected format
-    return results.map(item => ({
-      title: item.title || '',
-      url: item.url || '',
+    return results.map(item => {
       // Parallel returns excerpts as an array - join them for snippet
-      snippet: Array.isArray(item.excerpts) ? item.excerpts.join(' ') : (item.excerpts || ''),
-      displayLink: item.url ? new URL(item.url).hostname : '',
-      // Parallel uses publish_date (not published_date)
-      published_date: item.publish_date || null,
-    }));
+      const snippet = Array.isArray(item.excerpts) ? item.excerpts.join(' ') : (item.excerpts || '');
+      const title = item.title || '';
+      
+      // Try to extract date from publish_date field first
+      let publishedDate = item.publish_date || null;
+      
+      // If no date, try to extract from title/snippet metadata
+      // Parallel often includes dates like: published: "May 27, 2026, 10:03 AM UTC"
+      if (!publishedDate) {
+        const combined = title + ' ' + snippet;
+        // Match patterns like: published: "May 27, 2026" or published: "2026-05-27"
+        const publishedMatch = combined.match(/published[:\s]*["']?(\w+\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2})/i);
+        if (publishedMatch) {
+          try {
+            const parsed = new Date(publishedMatch[1]);
+            if (!isNaN(parsed.getTime())) {
+              publishedDate = parsed.toISOString().split('T')[0];
+            }
+          } catch (e) { /* ignore parse errors */ }
+        }
+        
+        // Also try: "Mar 12, 2026" or "May 19, 2026" patterns in content
+        if (!publishedDate) {
+          const dateMatch = combined.match(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},?\s+\d{4}\b/i);
+          if (dateMatch) {
+            try {
+              const parsed = new Date(dateMatch[0]);
+              if (!isNaN(parsed.getTime())) {
+                publishedDate = parsed.toISOString().split('T')[0];
+              }
+            } catch (e) { /* ignore parse errors */ }
+          }
+        }
+      }
+      
+      return {
+        title: title,
+        url: item.url || '',
+        snippet: snippet,
+        displayLink: item.url ? new URL(item.url).hostname : '',
+        published_date: publishedDate,
+      };
+    });
   } catch (error) {
     if (error.response) {
       const status = error.response.status;
