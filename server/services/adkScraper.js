@@ -179,12 +179,19 @@ async function parallelSearch(query, apiKey, numResults = 10) {
     const requestBody = {
       objective: objective,
       search_queries: searchQueries.slice(0, 3), // Max 3 queries per docs
-      mode: 'basic', // Lower latency; 'advanced' available for higher quality
+      mode: 'advanced', // Use advanced mode for better quality/recency
       advanced_settings: {
         max_results: Math.min(numResults, 10),
         // Source policy for domain and date filtering (per docs)
         source_policy: {
           after_date: afterDateStr // RFC 3339 date string (YYYY-MM-DD)
+        },
+        // Fetch policy - prefer fresher cached content (per docs)
+        // max_age_seconds: minimum 600 (10 min), we use 1 day to get reasonably fresh results
+        fetch_policy: {
+          max_age_seconds: 86400, // Prefer content cached within last 24 hours
+          timeout_seconds: 15,    // Timeout for any live fetches
+          disable_cache_fallback: false // Allow older cache if fresh unavailable
         },
         // Excerpt settings for search results
         excerpt_settings: {
@@ -434,6 +441,10 @@ async function performWebSearch(query, numResults = 10) {
   const parallelKey = config.search?.parallelApiKey || process.env.PARALLEL_API_KEY;
   const tavilyKey = config.search?.tavilyApiKey || process.env.TAVILY_API_KEY;
   
+  // Calculate cutoff for "recent" articles (30 days ago)
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - 30);
+  
   for (const provider of providers) {
     if (provider === 'parallel' && parallelKey && !parallelQuotaExhausted) {
       console.log(`[SEARCH] Attempting web search with Parallel.ai...`);
@@ -444,6 +455,37 @@ async function performWebSearch(query, numResults = 10) {
         if (withDates < results.length / 2) {
           results = await enrichWithDates(results, parallelKey);
         }
+        
+        // Check if Parallel returned mostly OLD articles (smart fallback)
+        const recentCount = results.filter(r => {
+          if (!r.published_date) return true; // No date = might be recent
+          try {
+            const d = new Date(r.published_date);
+            return d >= cutoffDate;
+          } catch { return true; }
+        }).length;
+        
+        // If <30% are recent and Tavily is available, try Tavily instead
+        if (recentCount < results.length * 0.3 && tavilyKey && !tavilyQuotaExhausted) {
+          console.log(`[SEARCH] Parallel returned ${recentCount}/${results.length} recent articles, trying Tavily for fresher results...`);
+          const tavilyResults = await tavilySearch(query, tavilyKey, numResults);
+          if (tavilyResults && tavilyResults.length > 0) {
+            // Check if Tavily has better recency
+            const tavilyRecent = tavilyResults.filter(r => {
+              if (!r.published_date) return true;
+              try {
+                const d = new Date(r.published_date);
+                return d >= cutoffDate;
+              } catch { return true; }
+            }).length;
+            
+            if (tavilyRecent > recentCount) {
+              console.log(`[SEARCH] Tavily has ${tavilyRecent} recent vs Parallel's ${recentCount}, using Tavily`);
+              return { results: tavilyResults, provider: 'tavily' };
+            }
+          }
+        }
+        
         return { results, provider: 'parallel' };
       }
       if (parallelQuotaExhausted) {
