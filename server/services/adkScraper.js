@@ -144,15 +144,20 @@ async function parallelSearch(query, apiKey, numResults = 10) {
     .trim();
   
   // Build natural language objective and keyword queries for Parallel API
+  // Include current year to bias toward recent content
+  const currentYear = new Date().getFullYear();
+  const currentMonth = new Date().toLocaleString('en-US', { month: 'long' });
+  
   const objective = domain 
-    ? `Find recent blog posts and news articles from ${domain}. Focus on announcements, updates, and news from the past 30 days.`
+    ? `Find the most recent blog posts and news articles from ${domain} published in ${currentYear}. Focus on announcements, updates, and news from the past 30 days.`
     : `Find recent articles about: ${cleanQuery}`;
   
   // Generate 2-3 diverse keyword queries (Parallel best practice)
+  // Include year to help filter out old cached results
   const searchQueries = [];
   if (domain) {
-    searchQueries.push(`${domain} blog news`);
-    searchQueries.push(`${domain} announcements updates`);
+    searchQueries.push(`${domain} blog news ${currentYear}`);
+    searchQueries.push(`${domain} announcements updates ${currentMonth} ${currentYear}`);
     if (cleanQuery && cleanQuery.length > 3) {
       searchQueries.push(`${domain} ${cleanQuery.substring(0, 30)}`);
     }
@@ -161,7 +166,7 @@ async function parallelSearch(query, apiKey, numResults = 10) {
     // Add variations
     const words = cleanQuery.split(' ').filter(w => w.length > 2);
     if (words.length > 2) {
-      searchQueries.push(words.slice(0, 3).join(' ') + ' news');
+      searchQueries.push(words.slice(0, 3).join(' ') + ' news ' + currentYear);
     }
   }
   
@@ -270,7 +275,7 @@ async function parallelExtract(urls, apiKey, objective = null) {
     }
     
     const response = await axios.post(PARALLEL_EXTRACT_URL, requestBody, {
-      timeout: 30000, // Extract can take longer
+      timeout: 60000, // Extract can take longer - increased from 30s to 60s
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': apiKey
@@ -328,28 +333,44 @@ async function enrichWithDates(results, apiKey) {
     return results;
   }
   
-  const urlsToExtract = needDates.map(r => r.url).slice(0, 10); // Max 10 at a time
+  const urlsToExtract = needDates.map(r => r.url).slice(0, 5); // Max 5 at a time (reduced from 10 to prevent timeouts)
+  
+  // Helper function to make extract request with retry
+  const makeExtractRequest = async (urls, attempt = 1) => {
+    try {
+      const response = await axios.post(PARALLEL_EXTRACT_URL, {
+        urls: urls,
+        objective: 'Find the publication date of this article',
+        advanced_settings: {
+          excerpt_settings: {
+            max_chars_per_result: 500 // Minimal excerpts, we just want dates
+          }
+        }
+      }, {
+        timeout: 45000, // 45s timeout per batch
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey
+        }
+      });
+      return response.data.results || [];
+    } catch (error) {
+      if (attempt < 2 && (error.code === 'ECONNABORTED' || error.message.includes('timeout'))) {
+        console.warn(`[PARALLEL] Extract timeout on attempt ${attempt}, retrying with smaller batch...`);
+        // Retry with half the URLs
+        const halfUrls = urls.slice(0, Math.ceil(urls.length / 2));
+        if (halfUrls.length > 0) {
+          return makeExtractRequest(halfUrls, attempt + 1);
+        }
+      }
+      throw error;
+    }
+  };
   
   try {
     console.log(`[PARALLEL] Enriching ${urlsToExtract.length} articles with dates via Extract API...`);
     
-    const response = await axios.post(PARALLEL_EXTRACT_URL, {
-      urls: urlsToExtract,
-      objective: 'Find the publication date of this article',
-      advanced_settings: {
-        excerpt_settings: {
-          max_chars_per_result: 500 // Minimal excerpts, we just want dates
-        }
-      }
-    }, {
-      timeout: 30000,
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey
-      }
-    });
-    
-    const extractResults = response.data.results || [];
+    const extractResults = await makeExtractRequest(urlsToExtract);
     const dateMap = new Map();
     
     for (const er of extractResults) {
@@ -360,6 +381,14 @@ async function enrichWithDates(results, apiKey) {
     
     const enrichedCount = dateMap.size;
     console.log(`[PARALLEL] Extract API returned dates for ${enrichedCount}/${urlsToExtract.length} articles`);
+    
+    // Log the dates found for debugging
+    if (enrichedCount > 0 && enrichedCount <= 5) {
+      const datesList = Array.from(dateMap.entries()).map(([url, date]) => 
+        `${date} (${url.split('/').pop().substring(0, 30)})`
+      ).join(', ');
+      console.log(`[PARALLEL] Dates found: ${datesList}`);
+    }
     
     // Merge dates back into results
     return results.map(r => {
