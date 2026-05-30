@@ -171,33 +171,38 @@ async function parallelSearch(query, apiKey, numResults = 10) {
   }
   
   try {
+    // Calculate date filter - 30 days ago in YYYY-MM-DD format (RFC 3339)
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const afterDateStr = thirtyDaysAgo.toISOString().split('T')[0];
+    
     const requestBody = {
       objective: objective,
-      search_queries: searchQueries.slice(0, 3), // Max 3 queries
-      mode: 'basic', // Lower latency for real-time use
+      search_queries: searchQueries.slice(0, 3), // Max 3 queries per docs
+      mode: 'basic', // Lower latency; 'advanced' available for higher quality
       advanced_settings: {
         max_results: Math.min(numResults, 10),
+        // Source policy for domain and date filtering (per docs)
+        source_policy: {
+          after_date: afterDateStr // RFC 3339 date string (YYYY-MM-DD)
+        },
+        // Excerpt settings for search results
+        excerpt_settings: {
+          max_chars_per_result: 2000 // Per docs, min is 1000
+        }
       }
     };
     
-    // Add domain filter and date filter
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const afterDateStr = thirtyDaysAgo.toISOString().split('T')[0]; // YYYY-MM-DD
-    
-    requestBody.advanced_settings.source_policy = {
-      after_date: afterDateStr // Only return content published after this date
-    };
-    
+    // Add domain filter if searching a specific site
     if (domain) {
       requestBody.advanced_settings.source_policy.include_domains = [domain];
     }
     
     const response = await axios.post(PARALLEL_SEARCH_URL, requestBody, {
-      timeout: 20000,
+      timeout: 25000, // 25s axios timeout
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': apiKey  // Parallel uses x-api-key header
+        'x-api-key': apiKey  // Parallel uses x-api-key header per docs
       }
     });
     
@@ -261,9 +266,16 @@ async function parallelExtract(urls, apiKey, objective = null) {
   }
   
   try {
+    // Per docs: https://docs.parallel.ai/api-reference/extract/extract
     const requestBody = {
-      urls: urls.slice(0, 20), // Max 20 URLs per request
+      urls: urls.slice(0, 20), // Max 20 URLs per request per docs
       advanced_settings: {
+        // Fetch policy per docs
+        fetch_policy: {
+          timeout_seconds: 45, // API-level timeout for live fetches
+          disable_cache_fallback: false // Allow cached content if live fetch fails
+        },
+        // Full content extraction per docs
         full_content: {
           max_chars_per_result: 5000 // Limit content size
         }
@@ -275,7 +287,7 @@ async function parallelExtract(urls, apiKey, objective = null) {
     }
     
     const response = await axios.post(PARALLEL_EXTRACT_URL, requestBody, {
-      timeout: 60000, // Extract can take longer - increased from 30s to 60s
+      timeout: 60000, // 60s axios timeout (should be > API timeout)
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': apiKey
@@ -336,18 +348,25 @@ async function enrichWithDates(results, apiKey) {
   const urlsToExtract = needDates.map(r => r.url).slice(0, 5); // Max 5 at a time (reduced from 10 to prevent timeouts)
   
   // Helper function to make extract request with retry
+  // Per docs: https://docs.parallel.ai/api-reference/extract/extract
   const makeExtractRequest = async (urls, attempt = 1) => {
     try {
       const response = await axios.post(PARALLEL_EXTRACT_URL, {
         urls: urls,
         objective: 'Find the publication date of this article',
         advanced_settings: {
+          // Fetch policy per docs - control live fetch behavior
+          fetch_policy: {
+            timeout_seconds: 30, // API-level timeout for live fetches
+            disable_cache_fallback: false // Allow cached content if live fetch fails
+          },
+          // Excerpt settings - min is 1000 per docs, will be auto-set
           excerpt_settings: {
-            max_chars_per_result: 500 // Minimal excerpts, we just want dates
+            max_chars_per_result: 1000 // Minimal excerpts, we just want dates
           }
         }
       }, {
-        timeout: 45000, // 45s timeout per batch
+        timeout: 45000, // 45s axios timeout (should be > API timeout)
         headers: {
           'Content-Type': 'application/json',
           'x-api-key': apiKey
