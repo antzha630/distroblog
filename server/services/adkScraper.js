@@ -230,27 +230,52 @@ async function parallelSearch(query, apiKey, numResults = 10) {
       // Parallel often includes dates like: published: "May 27, 2026, 10:03 AM UTC"
       if (!publishedDate) {
         const combined = title + ' ' + snippet;
-        // Match patterns like: published: "May 27, 2026" or published: "2026-05-27"
+        
+        // Helper to parse date and return ISO string or null
+        const tryParse = (dateStr) => {
+          try {
+            const parsed = new Date(dateStr);
+            if (!isNaN(parsed.getTime()) && parsed.getFullYear() >= 2020 && parsed.getFullYear() <= 2030) {
+              return parsed.toISOString().split('T')[0];
+            }
+          } catch (e) { /* ignore */ }
+          return null;
+        };
+        
+        // Pattern 1: published: "May 27, 2026" or published: "2026-05-27"
         const publishedMatch = combined.match(/published[:\s]*["']?(\w+\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2})/i);
         if (publishedMatch) {
-          try {
-            const parsed = new Date(publishedMatch[1]);
-            if (!isNaN(parsed.getTime())) {
-              publishedDate = parsed.toISOString().split('T')[0];
-            }
-          } catch (e) { /* ignore parse errors */ }
+          publishedDate = tryParse(publishedMatch[1]);
         }
         
-        // Also try: "Mar 12, 2026" or "May 19, 2026" patterns in content
+        // Pattern 2: "Mar 12, 2026" or "May 19, 2026" (Month DD, YYYY)
         if (!publishedDate) {
-          const dateMatch = combined.match(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},?\s+\d{4}\b/i);
-          if (dateMatch) {
-            try {
-              const parsed = new Date(dateMatch[0]);
-              if (!isNaN(parsed.getTime())) {
-                publishedDate = parsed.toISOString().split('T')[0];
-              }
-            } catch (e) { /* ignore parse errors */ }
+          const match = combined.match(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},?\s+\d{4}\b/i);
+          if (match) publishedDate = tryParse(match[0]);
+        }
+        
+        // Pattern 3: "14-May-26" or "14 May 26" (DD-Mon-YY) - common in UK/international
+        if (!publishedDate) {
+          const match = combined.match(/\b(\d{1,2})[-\s](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[-\s](\d{2})\b/i);
+          if (match) {
+            const year = parseInt(match[3]) < 50 ? 2000 + parseInt(match[3]) : 1900 + parseInt(match[3]);
+            publishedDate = tryParse(`${match[2]} ${match[1]}, ${year}`);
+          }
+        }
+        
+        // Pattern 4: "14 May 2026" (DD Mon YYYY)
+        if (!publishedDate) {
+          const match = combined.match(/\b(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})\b/i);
+          if (match) {
+            publishedDate = tryParse(`${match[2]} ${match[1]}, ${match[3]}`);
+          }
+        }
+        
+        // Pattern 5: ISO-like "2026-05-14" or "2026/05/14"
+        if (!publishedDate) {
+          const match = combined.match(/\b(20\d{2})[-/](\d{2})[-/](\d{2})\b/);
+          if (match) {
+            publishedDate = tryParse(`${match[1]}-${match[2]}-${match[3]}`);
           }
         }
       }
@@ -493,31 +518,39 @@ async function performWebSearch(query, numResults = 10) {
         }
         
         // Check if Parallel returned mostly OLD articles (smart fallback)
-        const recentCount = results.filter(r => {
-          if (!r.published_date) return true; // No date = might be recent
+        // Only count articles WITH dates - articles without dates are unknown, not "recent"
+        const withDatesResults = results.filter(r => r.published_date);
+        const recentCount = withDatesResults.filter(r => {
           try {
             const d = new Date(r.published_date);
             return d >= cutoffDate;
-          } catch { return true; }
+          } catch { return false; }
         }).length;
+        const undatedCount = results.length - withDatesResults.length;
         
-        // If <30% are recent and Tavily is available, try Tavily instead
-        if (recentCount < results.length * 0.3 && tavilyKey && !tavilyQuotaExhausted) {
-          console.log(`[SEARCH] Parallel returned ${recentCount}/${results.length} recent articles, trying Tavily for fresher results...`);
+        // If <30% of dated articles are recent OR most articles have no dates, try Tavily
+        const datedRecencyRatio = withDatesResults.length > 0 ? recentCount / withDatesResults.length : 0;
+        const shouldTryTavily = (datedRecencyRatio < 0.3 || undatedCount > results.length * 0.5) && tavilyKey && !tavilyQuotaExhausted;
+        
+        if (shouldTryTavily) {
+          console.log(`[SEARCH] Parallel: ${recentCount}/${withDatesResults.length} dated are recent, ${undatedCount} undated. Trying Tavily...`);
           const tavilyResults = await tavilySearch(query, tavilyKey, numResults);
           if (tavilyResults && tavilyResults.length > 0) {
-            // Check if Tavily has better recency
-            const tavilyRecent = tavilyResults.filter(r => {
-              if (!r.published_date) return true;
+            // Check if Tavily has better date coverage and recency
+            const tavilyWithDates = tavilyResults.filter(r => r.published_date);
+            const tavilyRecent = tavilyWithDates.filter(r => {
               try {
                 const d = new Date(r.published_date);
                 return d >= cutoffDate;
-              } catch { return true; }
+              } catch { return false; }
             }).length;
             
+            // Prefer Tavily if it has more recent dated articles
             if (tavilyRecent > recentCount) {
               console.log(`[SEARCH] Tavily has ${tavilyRecent} recent vs Parallel's ${recentCount}, using Tavily`);
               return { results: tavilyResults, provider: 'tavily' };
+            } else {
+              console.log(`[SEARCH] Parallel has ${recentCount} recent vs Tavily's ${tavilyRecent}, keeping Parallel`);
             }
           }
         }
