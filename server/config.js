@@ -11,8 +11,8 @@ const enableAdkEnv = (process.env.SCOOPSTREAM_ENABLE_ADK || '').toLowerCase();
 const enableAdk = mode === 'v2' && enableAdkEnv !== 'false';
 
 // Web Search Provider Configuration
-// SEARCH_PROVIDER: "parallel", "tavily", or "parallel,tavily" (fallback chain)
-const searchProviderRaw = (process.env.SEARCH_PROVIDER || 'parallel,tavily').toLowerCase();
+// SEARCH_PROVIDER: "tavily" (default) or "parallel,tavily" if re-enabling Parallel
+const searchProviderRaw = (process.env.SEARCH_PROVIDER || 'tavily').toLowerCase();
 const searchProviders = searchProviderRaw.split(',').map(s => s.trim()).filter(Boolean);
 
 module.exports = {

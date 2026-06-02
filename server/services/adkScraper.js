@@ -1,7 +1,7 @@
-// ADK (Agent Development Kit) implementation using Parallel.ai / Tavily Search APIs
-// Required env: GOOGLE_GENAI_API_KEY or GEMINI_API_KEY
-// Optional env: PARALLEL_API_KEY (primary web search), TAVILY_API_KEY (fallback)
-// Optional env: SEARCH_PROVIDER (parallel, tavily, or parallel,tavily)
+// ADK (Agent Development Kit) implementation using Tavily Search API
+// Required env: GOOGLE_GENAI_API_KEY or GEMINI_API_KEY, TAVILY_API_KEY
+// Optional env: TAVILY_TIME_RANGE (day|week|month|year, default month)
+// Optional env: SEARCH_PROVIDER (default tavily; parallel code retained but unused unless set)
 // Optional env: ADK_MODEL | SCOOPSTREAM_ADK_MODEL (try this Gemini id first), ADK_VERBOSE
 const axios = require('axios');
 const config = require('../config');
@@ -51,17 +51,21 @@ async function tavilySearch(query, apiKey, numResults = 10) {
     cleanQuery += ' blog OR news OR article';
   }
   
+  const allowedTimeRanges = new Set(['day', 'd', 'week', 'w', 'month', 'm', 'year', 'y']);
+  const timeRange = (process.env.TAVILY_TIME_RANGE || 'month').toLowerCase();
+  const tavilyTimeRange = allowedTimeRanges.has(timeRange) ? timeRange : 'month';
+
   try {
     // Use Tavily's date filtering features:
-    // - topic: "news" includes published_date in results
-    // - time_range: "month" pre-filters to last 30 days
+    // - topic: "news" includes published_date in results (required for dates)
+    // - time_range: API param — NOT inferred from natural language in the query
     // See: https://docs.tavily.com/documentation/best-practices/best-practices-search
     const response = await axios.post(TAVILY_API_URL, {
       api_key: apiKey,
       query: cleanQuery,
       search_depth: 'basic',
       topic: 'news',           // Returns published_date metadata for news sources
-      time_range: 'month',     // Pre-filter to last 30 days
+      time_range: tavilyTimeRange,
       include_answer: false,
       include_raw_content: false,
       max_results: Math.min(numResults, 10),
@@ -72,7 +76,7 @@ async function tavilySearch(query, apiKey, numResults = 10) {
     
     const results = response.data.results || [];
     const withDates = results.filter(r => r.published_date).length;
-    console.log(`[TAVILY] Search "${cleanQuery.substring(0, 50)}..." returned ${results.length} results (${withDates} with dates)`);
+    console.log(`[TAVILY] Search "${cleanQuery.substring(0, 50)}..." (${tavilyTimeRange}) returned ${results.length} results (${withDates} with dates)`);
     
     return results.map(item => ({
       title: item.title || '',
@@ -491,92 +495,33 @@ async function enrichWithDates(results, apiKey) {
 }
 
 /**
- * Unified web search function that tries providers in configured order.
- * Returns { results: [], provider: 'parallel'|'tavily'|'none' }
- * 
- * For Parallel.ai, automatically enriches results with dates using Extract API
- * when search results don't include publish_date.
+ * Web search via Tavily (default provider for Scoopstream ADK).
+ * Returns { results: [], provider: 'tavily'|'none' }
  */
 async function performWebSearch(query, numResults = 10) {
-  const providers = config.search?.providers || ['parallel', 'tavily'];
-  const parallelKey = config.search?.parallelApiKey || process.env.PARALLEL_API_KEY;
+  const providers = config.search?.providers || ['tavily'];
   const tavilyKey = config.search?.tavilyApiKey || process.env.TAVILY_API_KEY;
-  
-  // Calculate cutoff for "recent" articles (30 days ago)
-  const cutoffDate = new Date();
-  cutoffDate.setDate(cutoffDate.getDate() - 30);
-  
-  for (const provider of providers) {
-    if (provider === 'parallel' && parallelKey && !parallelQuotaExhausted) {
-      console.log(`[SEARCH] Attempting web search with Parallel.ai...`);
-      let results = await parallelSearch(query, parallelKey, numResults);
-      if (results && results.length > 0) {
-        // Enrich results with dates using Extract API if many are missing dates
-        const withDates = results.filter(r => r.published_date).length;
-        if (withDates < results.length / 2) {
-          results = await enrichWithDates(results, parallelKey);
-        }
-        
-        // Check if Parallel returned mostly OLD articles (smart fallback)
-        // Only count articles WITH dates - articles without dates are unknown, not "recent"
-        const withDatesResults = results.filter(r => r.published_date);
-        const recentCount = withDatesResults.filter(r => {
-          try {
-            const d = new Date(r.published_date);
-            return d >= cutoffDate;
-          } catch { return false; }
-        }).length;
-        const undatedCount = results.length - withDatesResults.length;
-        
-        // If <30% of dated articles are recent OR most articles have no dates, try Tavily
-        const datedRecencyRatio = withDatesResults.length > 0 ? recentCount / withDatesResults.length : 0;
-        const shouldTryTavily = (datedRecencyRatio < 0.3 || undatedCount > results.length * 0.5) && tavilyKey && !tavilyQuotaExhausted;
-        
-        if (shouldTryTavily) {
-          console.log(`[SEARCH] Parallel: ${recentCount}/${withDatesResults.length} dated are recent, ${undatedCount} undated. Trying Tavily...`);
-          const tavilyResults = await tavilySearch(query, tavilyKey, numResults);
-          if (tavilyResults && tavilyResults.length > 0) {
-            // Check if Tavily has better date coverage and recency
-            const tavilyWithDates = tavilyResults.filter(r => r.published_date);
-            const tavilyRecent = tavilyWithDates.filter(r => {
-              try {
-                const d = new Date(r.published_date);
-                return d >= cutoffDate;
-              } catch { return false; }
-            }).length;
-            
-            // Prefer Tavily if it has more recent dated articles
-            if (tavilyRecent > recentCount) {
-              console.log(`[SEARCH] Tavily has ${tavilyRecent} recent vs Parallel's ${recentCount}, using Tavily`);
-              return { results: tavilyResults, provider: 'tavily' };
-            } else {
-              console.log(`[SEARCH] Parallel has ${recentCount} recent vs Tavily's ${tavilyRecent}, keeping Parallel`);
-            }
-          }
-        }
-        
-        return { results, provider: 'parallel' };
-      }
-      if (parallelQuotaExhausted) {
-        console.log(`[SEARCH] Parallel.ai quota exhausted, trying next provider...`);
-        continue;
-      }
-    }
-    
-    if (provider === 'tavily' && tavilyKey && !tavilyQuotaExhausted) {
-      console.log(`[SEARCH] Attempting web search with Tavily...`);
-      const results = await tavilySearch(query, tavilyKey, numResults);
-      if (results && results.length > 0) {
-        return { results, provider: 'tavily' };
-      }
-      if (tavilyQuotaExhausted) {
-        console.log(`[SEARCH] Tavily quota exhausted, trying next provider...`);
-        continue;
-      }
-    }
+
+  if (!providers.includes('tavily')) {
+    console.warn(`[SEARCH] SEARCH_PROVIDER=${providers.join(',')} — Tavily not enabled; set SEARCH_PROVIDER=tavily`);
+    return { results: [], provider: 'none' };
   }
-  
-  console.warn(`[SEARCH] No search results from any provider`);
+
+  if (!tavilyKey) {
+    console.warn('[SEARCH] TAVILY_API_KEY not set');
+    return { results: [], provider: 'none' };
+  }
+
+  if (tavilyQuotaExhausted) {
+    console.warn('[SEARCH] Tavily quota exhausted this session');
+    return { results: [], provider: 'none' };
+  }
+
+  console.log('[SEARCH] Web search with Tavily...');
+  const results = await tavilySearch(query, tavilyKey, numResults);
+  if (results && results.length > 0) {
+    return { results, provider: 'tavily' };
+  }
   return { results: [], provider: 'none' };
 }
 
@@ -1005,10 +950,9 @@ class ADKScraper {
       process.env.GEMINI_API_KEY ||
       process.env.GOOGLE_API_KEY;
     
-    // Web Search API keys (Parallel.ai primary, Tavily fallback)
-    this.parallelApiKey = config.search?.parallelApiKey || process.env.PARALLEL_API_KEY;
+    // Web Search API (Tavily)
     this.tavilyApiKey = config.search?.tavilyApiKey || process.env.TAVILY_API_KEY;
-    this.searchProviders = config.search?.providers || ['parallel', 'tavily'];
+    this.searchProviders = config.search?.providers || ['tavily'];
     
     if (!this.apiKey) {
       console.warn(
@@ -1017,23 +961,13 @@ class ADKScraper {
       return;
     }
     
-    // Log search provider configuration
-    const hasParallel = !!this.parallelApiKey;
-    const hasTavily = !!this.tavilyApiKey;
-    
-    if (!hasParallel && !hasTavily) {
-      console.warn(
-        '⚠️ No web search API keys found. Set PARALLEL_API_KEY and/or TAVILY_API_KEY in .env'
-      );
-      console.warn('   Without search API keys, ADK will use grounding only (less accurate).');
+    if (!this.tavilyApiKey) {
+      console.warn('⚠️ TAVILY_API_KEY not set. ADK web_search will not work without it.');
+      console.warn('   Without Tavily, ADK will use grounding only (less accurate).');
     } else {
-      console.log(`✅ [ADK] Search providers configured: ${this.searchProviders.join(' → ')}`);
-      if (hasParallel) {
-        console.log(`   ├─ Parallel.ai (key: ${this.parallelApiKey.substring(0, 8)}...)`);
-      }
-      if (hasTavily) {
-        console.log(`   └─ Tavily (key: ${this.tavilyApiKey.substring(0, 8)}...)`);
-      }
+      const tr = process.env.TAVILY_TIME_RANGE || 'month';
+      console.log(`✅ [ADK] Search provider: Tavily (time_range=${tr}, topic=news)`);
+      console.log(`   └─ key: ${this.tavilyApiKey.substring(0, 8)}...`);
     }
 
     try {
@@ -1147,12 +1081,8 @@ class ADKScraper {
       }
 
       this.initialized = true;
-      const hasAnySearch = this.parallelApiKey || this.tavilyApiKey;
-      const searchMode = hasAnySearch 
-        ? `web_search tool (${this.searchProviders.filter(p => 
-            (p === 'parallel' && this.parallelApiKey) || 
-            (p === 'tavily' && this.tavilyApiKey)
-          ).join(' → ')})` 
+      const searchMode = this.tavilyApiKey
+        ? 'web_search tool (Tavily API)'
         : 'Grounding only (fallback)';
       console.log(`✅ ADK agent initialized successfully with ${searchMode}`);
     } catch (error) {
